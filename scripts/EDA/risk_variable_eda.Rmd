@@ -1,0 +1,46 @@
+---
+title: "Mood Disorder & Suicidality Risk Variable EDA"
+author: "Sam Sievertsen"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    self_contained: true
+---
+
+
+```{r global, include = FALSE}
+
+# Set global env variables
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, comment = "")
+
+# Set the root directory for writing output
+knitr::opts_knit$set(root.dir = normalizePath("."))
+
+# Alter yaml to write output html to desired results directory
+knit <- function(inputFile, encoding) {
+  rmarkdown::render(inputFile,
+    encoding = encoding,
+    output_file = "./results/risk_variable_eda.html")
+}
+
+```
+
+
+```{r environment, echo = FALSE, include = FALSE, warning = FALSE}
+
+# Load necessary packages + environmental variables
+library(knitr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(skimr)
+options(scipen = 999, digits = 8)
+
+# Read in cbcl data
+cbcl_data <- read.csv("")
+
+# Read in 
+
+```
+
+
