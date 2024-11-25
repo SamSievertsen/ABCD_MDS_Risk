@@ -8,22 +8,14 @@ output:
 ---
 
 
+
 ```{r global, include = FALSE}
 
 # Set global env variables
 knitr::opts_chunk$set(warning = FALSE, message = FALSE, comment = "")
 
-# Set the root directory for writing output
-knitr::opts_knit$set(root.dir = normalizePath("."))
-
-# Alter yaml to write output html to desired results directory
-knit <- function(inputFile, encoding) {
-  rmarkdown::render(inputFile,
-    encoding = encoding,
-    output_file = "./results/risk_variable_eda.html")
-}
-
 ```
+
 
 
 ```{r environment, echo = FALSE, include = FALSE, warning = FALSE}
@@ -37,10 +29,153 @@ library(skimr)
 options(scipen = 999, digits = 8)
 
 # Read in cbcl data
-cbcl_data <- read.csv("")
+cbcl_data <- read.csv("../../data/data_raw/mh_p_cbcl.csv")
 
-# Read in 
+# Read in 7-up mania data
+sevenup_data <- read.csv("../../data/data_raw/mh_y_7up.csv")
+
+# Read in general behavior inventory data
+gbi_data <- read.csv("../../data/data_raw/mh_p_gbi.csv")
+
+# Read in upps-p data
+uppsp_data <- read.csv("../../data/data_raw/mh_y_upps.csv")
+
+# Read in sleep disturbance scale data
+sleep_disturbance_data <- read.csv("../../data/data_raw/ph_p_sds.csv")
+
+# Read in family history data
+family_hx_data <- read.csv("../../data/data_raw/mh_p_fhx.csv")
+
+# Childhood opportunity index data
+coi_data <- read.csv("../../data/data_raw/led_l_coi.csv")
+
+# Read in discrimination data
+discrimination_data <- read.csv("../../data/data_raw/ce_y_dm.csv")
+
+# Read in neighborhood safety data
+neighborhood_safety_data <- read.csv("../../data/data_raw/ce_p_nsc.csv")
+
+# Read in peer experiences data
+peer_experience_data <- read.csv("../../data/data_raw/mh_y_peq.csv")
+
+# Read in NIH-toolbox data
+nihtb_data <- read.csv("../../data/data_raw/nc_y_nihtb.csv")
+
+# Read in RAVLT data
+ravlt_data <- read.csv("../../data/data_raw/nc_y_ravlt.csv")
 
 ```
+
+
+
+```{r data wrangling, echo = FALSE, include = FALSE, warning = FALSE}
+
+## Data Wrangling ##
+
+#1. Merge the data
+#1.1 Collapse the data frames containing risk variables of interest
+risk_data_merged <- Reduce(
+  function(x, y)
+    merge(x, y,
+      by = c("src_subject_id", "eventname"),
+      all = TRUE),
+  list(cbcl_data, sevenup_data, gbi_data, uppsp_data, sleep_disturbance_data, family_hx_data, coi_data, discrimination_data, neighborhood_safety_data, peer_experience_data, nihtb_data, ravlt_data))
+
+#1.2 Verify the merge did not duplicate any columns and resulted in an expected 
+#1.21 Check for duplicate columns
+duplicate_columns <- grep("\\.x$|\\.y$", colnames(risk_data_merged), value = TRUE)
+if (length(duplicate_columns) > 0) {
+  message("Duplicate columns found: ", paste(duplicate_columns, collapse = ", "))
+} else {
+  message("No duplicate columns ending found.")
+}
+
+#1.22 Check the number of unique subjects to ensure no data was lost/erroneously created during merging
+unique_count <- length(unique(risk_data_merged$src_subject_id))
+if (unique_count >= 11800 && unique_count <= 12000) {
+  message("The number of unique src_subject_id (", unique_count, ") is within the acceptable range.")
+} else {
+  message("The number of unique src_subject_id (", unique_count, ") is outside the acceptable range!")
+}
+
+#2. Clean the merged data 
+#2.1 Retain only columns of interest
+risk_data_merged_trimmed <- risk_data_merged %>% 
+  dplyr::select(c(src_subject_id, eventname, cbcl_scr_dsm5_depress_t, cbcl_scr_dsm5_anxdisord_t,	cbcl_scr_dsm5_adhd_t, sup_y_ss_sum, pgbi_p_ss_score, upps_y_ss_positive_urgency, sds_p_ss_total, fam_history_6_yes_no, famhx_ss_momdad_ma_p, dim_y_ss_mean, peq_ss_overt_victim,  peq_ss_relational_victim, peq_ss_reputation_victim, reshist_addr1_coi_z_coi_nat, nsc_p_ss_mean_3_items, nihtbx_list_agecorrected, nihtbx_flanker_agecorrected, nihtbx_pattern_agecorrected, pea_ravlt_sd_trial_vi_tc, pea_ravlt_sd_trial_v_tc, pea_ravlt_sd_trial_iv_tc, pea_ravlt_sd_trial_iii_tc, pea_ravlt_sd_trial_ii_tc, pea_ravlt_sd_trial_i_tc, pea_ravlt_sd_listb_tc, pea_ravlt_ld_trial_vii_tc))
+
+#2.2 Filter the trimmed data to only contain rows at the baseline assessment timepoint
+risk_data_merged_trimmed <- risk_data_merged_trimmed %>% 
+  filter(eventname == "baseline_year_1_arm_1")
+
+```
+
+
+
+```{r EDA, echo = FALSE, warning = FALSE}
+
+## Exploratory Data Analysis ##
+
+#1. Define the N, percent, and range of risk variables of interest at the baseline assessment timepoint
+#1.1 Define the columns to analyze
+columns_to_check <- c(
+  "cbcl_scr_dsm5_depress_t", "cbcl_scr_dsm5_anxdisord_t", "cbcl_scr_dsm5_adhd_t", 
+  "sup_y_ss_sum", "pgbi_p_ss_score", "upps_y_ss_positive_urgency", "sds_p_ss_total", 
+  "fam_history_6_yes_no", "famhx_ss_momdad_ma_p", "dim_y_ss_mean", 
+  "peq_ss_overt_victim", "peq_ss_relational_victim", "peq_ss_reputation_victim", 
+  "reshist_addr1_coi_z_coi_nat", "nsc_p_ss_mean_3_items", "nihtbx_list_agecorrected", 
+  "nihtbx_flanker_agecorrected", "nihtbx_pattern_agecorrected", "pea_ravlt_sd_trial_vi_tc", 
+  "pea_ravlt_sd_trial_v_tc", "pea_ravlt_sd_trial_iv_tc", "pea_ravlt_sd_trial_iii_tc", 
+  "pea_ravlt_sd_trial_ii_tc", "pea_ravlt_sd_trial_i_tc", "pea_ravlt_sd_listb_tc", 
+  "pea_ravlt_ld_trial_vii_tc"
+)
+
+#1.2 Create a function to compute the required metrics for each column
+get_column_metrics <- function(column_name, data, total_subjects = 11868) {
+  
+  #1.21 Extract each column
+  column_data <- data[[column_name]]
+  
+  #1.22 Filter non-NA, non-empty, and invalid values
+  valid_values <- column_data[!is.na(column_data) & 
+                              column_data != "" & 
+                              !column_data %in% c(999, 555, 888, -999)]
+  
+  #1.23 Compute metrics
+  n_non_na <- length(valid_values)
+  percent_non_na <- (n_non_na / total_subjects) * 100
+  if (is.numeric(valid_values)) {
+    range_or_unique <- range(valid_values, na.rm = TRUE)
+  } else {
+    range_or_unique <- unique(valid_values)
+  }
+  
+  #1.24 Return the metrics as a list
+  list(
+    column = column_name,
+    n_non_na = n_non_na,
+    percent_non_na = percent_non_na,
+    range_or_unique = range_or_unique
+  )
+}
+
+#1.3 Apply the function to all columns and store risk_data_missingness_ in a list
+risk_data_missingness_list <- lapply(columns_to_check, get_column_metrics, data = risk_data_merged_trimmed)
+
+#1.4 Convert the risk_data_missingness_ into a dataframe for easier viewing
+risk_data_missingness_df <- do.call(rbind, lapply(risk_data_missingness_list, function(x) {
+  data.frame(
+    column = x$column,
+    n_non_na = x$n_non_na,
+    percent_non_na = x$percent_non_na,
+    range_or_unique = I(list(x$range_or_unique))  # Use I() to preserve list structure for unique/range
+  )
+}))
+
+#1.5 Print the final dataframe of risk_data_missingness_
+risk_data_missingness_df
+
+
+```
+
 
 
