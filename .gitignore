@@ -14,6 +14,8 @@ data_processed/*
 results/*
 *.docx
 *.pptx
+update_interview_age
+update_interview_age.R
 
 # Example code in package build process
 *-Ex.R

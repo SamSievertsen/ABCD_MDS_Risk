@@ -171,6 +171,7 @@ risk_data_merged_trimmed <- risk_data_merged_trimmed %>%
 #3.2 Sum ACE Score Index
 risk_data_merged_trimmed <- risk_data_merged_trimmed %>%
   mutate(
+    
     #3.211 Calculate each ACE component
     ACE_1 = if_else(fam_history_9_yes_no == 1, 1, 0, missing = 0),
     ACE_2 = if_else(crpbi_parent4_y %in% c(1, 2), 1, 0, missing = 0),
