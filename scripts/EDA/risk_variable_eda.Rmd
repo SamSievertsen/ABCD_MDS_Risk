@@ -131,7 +131,7 @@ if (unique_count >= 11800 && unique_count <= 12000) {
 #2. Clean the merged data 
 #2.1 Retain only columns of interest
 risk_data_merged_trimmed <- risk_data_merged %>% 
-  dplyr::select(c(src_subject_id, eventname, cbcl_scr_dsm5_depress_t, cbcl_scr_dsm5_anxdisord_t,	cbcl_scr_syn_attention_t, cbcl_scr_syn_aggressive_t, pgbi_p_ss_score, upps_y_ss_negative_urgency, upps_y_ss_positive_urgency, sds_p_ss_total, fam_history_6_yes_no, fam_history_q6a_depression, fam_history_q6d_depression, q6k_full_sib_young1_depression, q6k_full_sib_young2_depression, q6k_full_sib_young3_depression, q6k_full_sib_young4_depression, q6k_full_sib_young5_depression, q6l_full_sib_old1_depression, q6l_full_sib_old2_depression, q6l_full_sib_old3_depression, q6l_full_sib_old4_depression, q6l_full_sib_old5_depression, famhx_ss_momdad_ma_p, reshist_addr1_coi_z_coi_nat, kbi_p_c_bully, ksads_bully_raw_26, nsc_p_ss_mean_3_items, nihtbx_list_agecorrected, nihtbx_flanker_agecorrected, nihtbx_pattern_agecorrected, ksads_ptsd_raw_762_p, ksads_ptsd_raw_763_p,  ksads_ptsd_raw_767_p, ksads_ptsd_raw_768_p, ksads_ptsd_raw_766_p, fam_enviro6_p, fam_enviro3_p, fes_youth_q6, fes_youth_q3, famhx_4_p, fam_history_13_yes_no, fam_history_5_yes_no, fam_history_6_yes_no, demo_prnt_marital_v2, fam_history_9_yes_no, crpbi_parent4_y, parent_monitor_q1_y, parent_monitor_q3_y))
+  dplyr::select(c(src_subject_id, eventname, cbcl_scr_dsm5_depress_t, cbcl_scr_dsm5_anxdisord_t,	cbcl_scr_syn_attention_t, cbcl_scr_syn_aggressive_t, pgbi_p_ss_score, upps_y_ss_negative_urgency, upps_y_ss_positive_urgency, sds_p_ss_total, fam_history_6_yes_no, fam_history_q6a_depression, fam_history_q6d_depression, q6k_full_sib_young1_depression, q6k_full_sib_young2_depression, q6k_full_sib_young3_depression, q6k_full_sib_young4_depression, q6k_full_sib_young5_depression, q6l_full_sib_old1_depression, q6l_full_sib_old2_depression, q6l_full_sib_old3_depression, q6l_full_sib_old4_depression, q6l_full_sib_old5_depression, famhx_ss_momdad_ma_p, reshist_addr1_coi_z_coi_nat, kbi_p_c_bully, ksads_bully_raw_26, nsc_p_ss_mean_3_items, nihtbx_list_agecorrected, nihtbx_list_uncorrected, nihtbx_flanker_agecorrected, nihtbx_flanker_uncorrected, nihtbx_pattern_uncorrected, nihtbx_pattern_agecorrected, ksads_ptsd_raw_762_p, ksads_ptsd_raw_763_p,  ksads_ptsd_raw_767_p, ksads_ptsd_raw_768_p, ksads_ptsd_raw_766_p, fam_enviro6_p, fam_enviro3_p, fes_youth_q6, fes_youth_q3, famhx_4_p, fam_history_13_yes_no, fam_history_5_yes_no, fam_history_6_yes_no, demo_prnt_marital_v2, fam_history_9_yes_no, crpbi_parent4_y, parent_monitor_q1_y, parent_monitor_q3_y))
 
 #2.2 Filter the trimmed data to only contain rows at the baseline assessment timepoint
 risk_data_merged_trimmed <- risk_data_merged_trimmed %>% 
@@ -235,8 +235,11 @@ columns_to_check <- c(
   "ksads_bully_raw_26",
   "nsc_p_ss_mean_3_items",
   "nihtbx_list_agecorrected",
+  "nihtbx_list_uncorrected",
   "nihtbx_flanker_agecorrected",
+  "nihtbx_flanker_uncorrected",
   "nihtbx_pattern_agecorrected",
+  "nihtbx_pattern_uncorrected",
   "ksads_ptsd_raw_762_p",
   "ksads_ptsd_raw_763_p",
   "ksads_ptsd_raw_767_p",
@@ -331,7 +334,7 @@ kable(risk_data_missingness_df, col.names = c("Risk Variable", "N True Values", 
 #2.1 Create boxplots with outlier indicators for continuous variables in the dataset
 #2.11 Filter only continuous variables (excluding ID and gender)
 risk_data_continuous_variables <- risk_data_merged_trimmed %>%
-  dplyr::select(cbcl_scr_dsm5_depress_t, cbcl_scr_dsm5_anxdisord_t, cbcl_scr_syn_attention_t, cbcl_scr_syn_aggressive_t, pgbi_p_ss_score, upps_y_ss_negative_urgency, upps_y_ss_positive_urgency, sds_p_ss_total, reshist_addr1_coi_z_coi_nat, nsc_p_ss_mean_3_items, nihtbx_list_agecorrected, nihtbx_flanker_agecorrected, nihtbx_pattern_agecorrected, ACE_index_sum_score) %>%
+  dplyr::select(cbcl_scr_dsm5_depress_t, cbcl_scr_dsm5_anxdisord_t, cbcl_scr_syn_attention_t, cbcl_scr_syn_aggressive_t, pgbi_p_ss_score, upps_y_ss_negative_urgency, upps_y_ss_positive_urgency, sds_p_ss_total, reshist_addr1_coi_z_coi_nat, nsc_p_ss_mean_3_items, nihtbx_list_agecorrected, nihtbx_list_uncorrected, nihtbx_flanker_agecorrected, nihtbx_flanker_uncorrected, nihtbx_pattern_agecorrected, nihtbx_pattern_uncorrected, ACE_index_sum_score) %>%
   gather(key = "Variable", value = "Value")
 
 #2.12 Create boxplot with facets for continuous variables
@@ -350,7 +353,9 @@ print(risk_data_continuous_variables_boxplot)
 
 ```
 
-From the boxplots for continuous variables, it is evident that some of the NIHTB scores are likely out of the expected range. While no guidelines within the [overview of the ABCD baseline neurocognition battery](https://www.sciencedirect.com/science/article/pii/S1878929317302384?via%3Dihub#tbl0005) or mention of the extraneously high/low scores within [current release notes](https://wiki.abcdstudy.org/release-notes/non-imaging/neurocognition.html#nih-toolbox-cognition) could be located, it is likely that winsorization or other outlier removal methods will be applied to handle values beyond the expected range. This topic to be re-visited ASAP during initial stages of clustering. 
+From the boxplots for continuous variables, it is evident that some of the NIHTB scores are likely out of the expected range. While no guidelines within the [overview of the ABCD baseline neurocognition battery](https://www.sciencedirect.com/science/article/pii/S1878929317302384?via%3Dihub#tbl0005) or mention of the extraneously high/low scores within [current release notes](https://wiki.abcdstudy.org/release-notes/non-imaging/neurocognition.html#nih-toolbox-cognition) could be located, it is likely that winsorization or other outlier removal methods will need to be applied to handle values beyond the expected range. 
+
+Following review of the [NIH Toolbox (Cognition) Instrument Description](https://wiki.abcdstudy.org/release-notes/non-imaging/neurocognition.html#nih-toolbox-cognition) (see **"Notes and Special Considerations"**), it is noted by the neurocognitive working group that "For longitudinal analyses, we recommend using either uncorrected Scaled Scores or raw scores." Following review of the distributions below, a tentative decision regarding which strategy to use will be chosen.
 
 No other anomalous or outlier values are noteworthy. 
 
@@ -376,8 +381,11 @@ risk_data_continuous_variables_skewness_table <- risk_data_merged_trimmed %>%
     reshist_addr1_coi_z_coi_nat,
     nsc_p_ss_mean_3_items,
     nihtbx_list_agecorrected,
+    nihtbx_list_uncorrected,
     nihtbx_flanker_agecorrected,
+    nihtbx_flanker_uncorrected,
     nihtbx_pattern_agecorrected,
+    nihtbx_pattern_uncorrected,
     ACE_index_sum_score) %>%
   summarise(across(everything(), ~ skewness(.x, na.rm = TRUE))) %>%
   pivot_longer(cols = everything(), names_to = "Variable", values_to = "Skewness")
@@ -408,8 +416,10 @@ continuous_columns <- c(
   "pgbi_p_ss_score", "upps_y_ss_negative_urgency", 
   "upps_y_ss_positive_urgency", "sds_p_ss_total", 
   "reshist_addr1_coi_z_coi_nat", "nsc_p_ss_mean_3_items", 
-  "nihtbx_list_agecorrected", "nihtbx_flanker_agecorrected", 
-  "nihtbx_pattern_agecorrected", "ACE_index_sum_score")
+  "nihtbx_list_agecorrected", "nihtbx_list_uncorrected",
+  "nihtbx_flanker_agecorrected", "nihtbx_flanker_uncorrected", 
+  "nihtbx_pattern_agecorrected", "nihtbx_pattern_uncorrected", 
+  "ACE_index_sum_score")
 
 #4.12 Define all columns to check
 columns_to_check <- colnames(risk_data_merged_trimmed)
@@ -551,7 +561,15 @@ print(categorical_plot)
 
 ```
 
-Distributions of continuous variables and rates of categorical variables (including the individual ACEs comprising the sum ACE index score) are shown above. While some previously mentioned variables exhibit noticeable skew, no problematic distributions or outlier values are notable here. 
+Distributions of continuous variables and rates of categorical variables (including the individual ACEs comprising the sum ACE index score) are shown above. While some previously mentioned variables exhibit noticeable skew, no problematic distributions are notable here. 
+
+Per previous mention in section 2 (assessing outliers in the data), following review of the distributions above, I make the tentative choice of utilizing the uncorrected standard scores (as opposed to winsorizing the age corrected standard scores). This choice is for two key reasons: 
+
+  1. This selection aligns with the [NIH Toolbox (Cognition) Instrument Description](https://wiki.abcdstudy.org/release-notes/non-imaging/neurocognition.html#nih-toolbox-cognition) (see **"Notes and Special Considerations"**)
+  
+  2. The means, standard deviations, and full ranges of the uncorrected standard scores align more closely with the expected descriptive statistics of a measure of IQ (i.e., μ = 100; σ = 15), and contain less outliers than the age corrected standard scores of interest
+  
+This decision is tentative, however, and subject to future review/change in the event new information comes to light. 
 
 ## 5. Overall Availability of Risk Model Variables for Clustering
 
@@ -571,4 +589,4 @@ complete_cases_count <- risk_data_merged_trimmed %>%
 
 ```
 
-When looking across all relevant risk variables in the dataset, `r paste0(complete_cases_count)` (`r paste0(round((complete_cases_count / unique_subject_count) * 100, 2), "%")`) subjects have complete (i.e., fully reported, non-missing) data. 
+When looking across all relevant risk variables in the dataset, 9,153 (77.12%) subjects have complete (i.e., fully reported, non-missing) data. 

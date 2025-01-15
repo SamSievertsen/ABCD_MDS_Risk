@@ -1,0 +1,113 @@
+---
+title: "Mood Disorder & Suicidality Risk Group Clustering"
+author: "Sam A. Sievertsen"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    self_contained: true
+---
+
+```{r global, include = FALSE}
+
+# Set global env variables
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, comment = "")
+
+```
+
+```{r environment, echo = FALSE, include = FALSE, warning = FALSE}
+
+# Load necessary packages + environmental variables
+library(knitr)
+library(dplyr)
+library(tidyr)
+library(DescTools)
+library(skimr)
+library(easystats)
+library(cluster)
+library(clustMixType)
+library(tidymodels)
+library(tidyclust)
+library(tidyquant)
+library(ggplot2)
+library(plotly)
+options(scipen = 999, digits = 8)
+
+# Read in risk variable data to be used in clustering
+risk_variable_data <- read.csv("../../data/data_processed/risk_variable_data.csv")
+
+```
+
+## Data Prep for Analysis 
+
+```{r data prep, warning = FALSE}
+
+## Data Prep ## 
+
+#1. Address NIHTB outliers
+#1.1 Create a function to winsorize values > 3 SD from the mean to the nearest non-outlier value
+winsorize_to_next_value <- function(x, threshold = 3) {
+  mean_x <- mean(x, na.rm = TRUE)
+  sd_x <- sd(x, na.rm = TRUE)
+  lower_limit <- mean_x - (threshold * sd_x)
+  upper_limit <- mean_x + (threshold * sd_x)
+  
+  #1.11 Identify non-outlier values
+  valid_values <- x[x >= lower_limit & x <= upper_limit]
+  
+  #1.12 Replace outliers with the nearest non-outlier value
+  x <- ifelse(x < lower_limit, min(valid_values, na.rm = TRUE), x)
+  x <- ifelse(x > upper_limit, max(valid_values, na.rm = TRUE), x)
+  return(x)
+}
+
+#1.2 Apply the function to winsorize outlier values
+risk_variable_data <- risk_variable_data %>%
+  mutate(
+    nihtbx_list_uncorrected_winsorized = winsorize_to_next_value(nihtbx_list_uncorrected),
+    nihtbx_flanker_uncorrected_winsorized = winsorize_to_next_value(nihtbx_flanker_uncorrected),
+    nihtbx_pattern_uncorrected_winsorized = winsorize_to_next_value(nihtbx_pattern_uncorrected))
+
+
+#2. Z-score continuous data for clustering
+#2.1 Create a list of continuous variables to z-score
+variables_to_scale <- c(
+  "cbcl_scr_dsm5_depress_t",
+  "cbcl_scr_dsm5_anxdisord_t",
+  "cbcl_scr_syn_attention_t",
+  "cbcl_scr_syn_aggressive_t",
+  "pgbi_p_ss_score",
+  "upps_y_ss_negative_urgency",
+  "upps_y_ss_positive_urgency",
+  "sds_p_ss_total",
+  "nsc_p_ss_mean_3_items",
+  "nihtbx_list_uncorrected_winsorized",
+  "nihtbx_flanker_uncorrected_winsorized",
+  "nihtbx_pattern_uncorrected_winsorized",
+  "ACE_index_sum_score")
+
+#2.2 Z-score all continuous variables to be used in clustering
+risk_variable_data <- risk_variable_data %>%
+  mutate(across(
+    all_of(variables_to_scale),
+    ~ as.numeric(scale(.)),
+    .names = "{.col}_scaled"))
+
+
+#3. Ensure dichotimization of categorical data for clustering
+risk_variable_data <- risk_variable_data %>% 
+  mutate(across(c("family_history_depression", "famhx_ss_momdad_ma_p", "bullying"), as.factor))
+
+#4. Retain only columns of interest for clustering
+risk_variable_clustering_data <- risk_variable_data %>% 
+  dplyr::select(c(src_subject_id, eventname, family_id, site_name, sex, age_in_years, race_ethnicity, family_history_depression, famhx_ss_momdad_ma_p, bullying, cbcl_scr_dsm5_depress_t_scaled, cbcl_scr_dsm5_anxdisord_t_scaled, cbcl_scr_syn_attention_t_scaled, cbcl_scr_syn_aggressive_t_scaled, pgbi_p_ss_score_scaled, upps_y_ss_negative_urgency_scaled, upps_y_ss_positive_urgency_scaled, sds_p_ss_total_scaled, nsc_p_ss_mean_3_items_scaled, nihtbx_list_uncorrected_winsorized_scaled, nihtbx_flanker_uncorrected_winsorized_scaled, nihtbx_pattern_uncorrected_winsorized_scaled, ACE_index_sum_score_scaled))
+
+```
+
+## Determining Optimal Number of Clusters
+
+```{r}
+
+
+
+```
+

@@ -11,7 +11,7 @@
 
 <meta name="author" content="Sam A. Sievertsen" />
 
-<meta name="date" content="2025-01-13" />
+<meta name="date" content="2025-01-14" />
 
 <title>Mood Disorder &amp; Suicidality Risk Variable Data Wrangling</title>
 
@@ -353,7 +353,7 @@ display: none;
 <h1 class="title toc-ignore">Mood Disorder &amp; Suicidality Risk
 Variable Data Wrangling</h1>
 <h4 class="author">Sam A. Sievertsen</h4>
-<h4 class="date">2025-01-13</h4>
+<h4 class="date">2025-01-14</h4>
 
 </div>
 
@@ -391,7 +391,7 @@ if (unique_count &gt;= 11800 &amp;&amp; unique_count &lt;= 12000) {
 #2. Clean the merged data 
 #2.1 Retain only columns of interest
 risk_data_merged_trimmed &lt;- risk_data_merged %&gt;% 
-  dplyr::select(c(src_subject_id, eventname, cbcl_scr_dsm5_depress_t, cbcl_scr_dsm5_depress_nm, cbcl_scr_dsm5_anxdisord_t, cbcl_scr_dsm5_anxdisord_nm,  cbcl_scr_syn_attention_t, cbcl_scr_syn_attention_nm, cbcl_scr_syn_aggressive_t, cbcl_scr_syn_aggressive_nm, pgbi_p_ss_score, upps_y_ss_negative_urgency, upps_y_ss_negative_urgency_nm, upps_y_ss_positive_urgency, upps_y_ss_positive_urgency_nm, sds_p_ss_total, fam_history_6_yes_no, fam_history_q6a_depression, fam_history_q6d_depression, q6k_full_sib_young1_depression, q6k_full_sib_young2_depression, q6k_full_sib_young3_depression, q6k_full_sib_young4_depression, q6k_full_sib_young5_depression, q6l_full_sib_old1_depression, q6l_full_sib_old2_depression, q6l_full_sib_old3_depression, q6l_full_sib_old4_depression, q6l_full_sib_old5_depression, famhx_ss_momdad_ma_p, reshist_addr1_coi_z_coi_nat, kbi_p_c_bully, ksads_bully_raw_26, nsc_p_ss_mean_3_items, nsc_p_ss_mean_3_items_nm, nihtbx_list_agecorrected, nihtbx_flanker_agecorrected, nihtbx_pattern_agecorrected, ksads_ptsd_raw_762_p, ksads_ptsd_raw_763_p,  ksads_ptsd_raw_767_p, ksads_ptsd_raw_768_p, ksads_ptsd_raw_766_p, fam_enviro6_p, fam_enviro3_p, fes_youth_q6, fes_youth_q3, famhx_4_p, fam_history_13_yes_no, fam_history_5_yes_no, fam_history_6_yes_no, demo_prnt_marital_v2, fam_history_9_yes_no, crpbi_parent4_y, parent_monitor_q1_y, parent_monitor_q3_y))
+  dplyr::select(c(src_subject_id, eventname, cbcl_scr_dsm5_depress_t, cbcl_scr_dsm5_depress_nm, cbcl_scr_dsm5_anxdisord_t, cbcl_scr_dsm5_anxdisord_nm,  cbcl_scr_syn_attention_t, cbcl_scr_syn_attention_nm, cbcl_scr_syn_aggressive_t, cbcl_scr_syn_aggressive_nm, pgbi_p_ss_score, upps_y_ss_negative_urgency, upps_y_ss_negative_urgency_nm, upps_y_ss_positive_urgency, upps_y_ss_positive_urgency_nm, sds_p_ss_total, fam_history_6_yes_no, fam_history_q6a_depression, fam_history_q6d_depression, q6k_full_sib_young1_depression, q6k_full_sib_young2_depression, q6k_full_sib_young3_depression, q6k_full_sib_young4_depression, q6k_full_sib_young5_depression, q6l_full_sib_old1_depression, q6l_full_sib_old2_depression, q6l_full_sib_old3_depression, q6l_full_sib_old4_depression, q6l_full_sib_old5_depression, famhx_ss_momdad_ma_p, reshist_addr1_coi_z_coi_nat, kbi_p_c_bully, ksads_bully_raw_26, nsc_p_ss_mean_3_items, nsc_p_ss_mean_3_items_nm, nihtbx_list_uncorrected, nihtbx_flanker_uncorrected, nihtbx_pattern_uncorrected, ksads_ptsd_raw_762_p, ksads_ptsd_raw_763_p,  ksads_ptsd_raw_767_p, ksads_ptsd_raw_768_p, ksads_ptsd_raw_766_p, fam_enviro6_p, fam_enviro3_p, fes_youth_q6, fes_youth_q3, famhx_4_p, fam_history_13_yes_no, fam_history_5_yes_no, fam_history_6_yes_no, demo_prnt_marital_v2, fam_history_9_yes_no, crpbi_parent4_y, parent_monitor_q1_y, parent_monitor_q3_y))
 
 #2.2 Filter the trimmed data to only contain rows at the baseline assessment timepoint
 risk_data_merged_trimmed &lt;- risk_data_merged_trimmed %&gt;% 
@@ -615,16 +615,16 @@ risk_data_merged_trimmed %&gt;%
          starts_with(&quot;ACE_&quot;) &amp; 
          !matches(&quot;ACE_index_sum_score|ACE_index_sum_score_n_missing&quot;))</code></pre>
 <pre><code>  ACE_index_sum_score calculated_sum ACE_1 ACE_2 ACE_3 ACE_4 ACE_5 ACE_6 ACE_7
-1                   3              3     0     0     1     1     1     0     0
-2                   2              2     1     0     0     1     0     0     0
-3                   2              2     0     0     1     1     0     0     0
-4                   2              2     0     0     1     0     0     0     0
-5                   1              1     0     0     0     0     1     0     0
+1                   1              1     0     0     1     0     0     0     0
+2                   4              4     1     0     1     1     1     0     0
+3                   1              1     0     0     0     0     1     0     0
+4                   4              4     1     0     1     1     0     1     0
+5                   3              3     1     0     1     1     0     0     0
   ACE_8 ACE_9
 1     0     0
 2     0     0
 3     0     0
-4     1     0
+4     0     0
 5     0     0</code></pre>
 <pre class="r"><code>#2.23 Check rows with missing ACE components (exclude derived columns in selection)
 risk_data_merged_trimmed %&gt;%
@@ -721,7 +721,9 @@ colnames(family_id_site_age_data)[colnames(family_id_site_age_data) == &quot;rel
 colnames(family_id_site_age_data)[colnames(family_id_site_age_data) == &quot;site_id_l&quot;] &lt;- &quot;site_name&quot;</code></pre>
 <p>… Manually adding in interview_age values that were excluded from the
 data …</p>
-<pre class="r"><code>#3.133 Compute the age in years column
+<pre class="r"><code>## Data Wrangling Continued ## 
+
+#3.133 Compute the age in years column
 family_id_site_age_data$age_in_years &lt;- ((family_id_site_age_data$interview_age) / 12)
 
 #3.134 Retain only columns of interest
@@ -741,9 +743,11 @@ risk_demographic_data_merged_trimmed &lt;- left_join(risk_data_merged_trimmed, d
 </div>
 <div id="data-cleaning-summation" class="section level2">
 <h2>Data Cleaning + Summation</h2>
-<pre class="r"><code>#1. Create a dataframe containing only ordered variables of interest to risk group clustering
+<pre class="r"><code>## Data Cleaning ##
+
+#1. Create a dataframe containing only ordered variables of interest to risk group clustering
 risk_variable_data &lt;- risk_demographic_data_merged_trimmed %&gt;% 
-  dplyr::select(c(src_subject_id, eventname, family_id, site_name, sex, interview_age, age_in_years, race_ethnicity, cbcl_scr_dsm5_depress_t, cbcl_scr_dsm5_depress_nm, cbcl_scr_dsm5_anxdisord_t, cbcl_scr_dsm5_anxdisord_nm, cbcl_scr_syn_attention_t, cbcl_scr_syn_attention_nm, cbcl_scr_syn_aggressive_t, cbcl_scr_syn_aggressive_nm, pgbi_p_ss_score, upps_y_ss_negative_urgency, upps_y_ss_negative_urgency_nm, upps_y_ss_positive_urgency, upps_y_ss_positive_urgency_nm, sds_p_ss_total, family_history_depression, famhx_ss_momdad_ma_p, reshist_addr1_coi_z_coi_nat, nsc_p_ss_mean_3_items, nsc_p_ss_mean_3_items_nm, nihtbx_list_agecorrected, nihtbx_flanker_agecorrected, nihtbx_pattern_agecorrected, ACE_index_sum_score, ACE_index_sum_score_n_missing))
+  dplyr::select(c(src_subject_id, eventname, family_id, site_name, sex, interview_age, age_in_years, race_ethnicity, cbcl_scr_dsm5_depress_t, cbcl_scr_dsm5_depress_nm, cbcl_scr_dsm5_anxdisord_t, cbcl_scr_dsm5_anxdisord_nm, cbcl_scr_syn_attention_t, cbcl_scr_syn_attention_nm, cbcl_scr_syn_aggressive_t, cbcl_scr_syn_aggressive_nm, pgbi_p_ss_score, upps_y_ss_negative_urgency, upps_y_ss_negative_urgency_nm, upps_y_ss_positive_urgency, upps_y_ss_positive_urgency_nm, sds_p_ss_total, family_history_depression, famhx_ss_momdad_ma_p, reshist_addr1_coi_z_coi_nat, nsc_p_ss_mean_3_items, nsc_p_ss_mean_3_items_nm, bullying, nihtbx_list_uncorrected, nihtbx_flanker_uncorrected, nihtbx_pattern_uncorrected, ACE_index_sum_score, ACE_index_sum_score_n_missing))
 
 #2. Retain only subjects with complete data in columns of interest
 #2.1 Transform any scores that were created with missing questions/data into NA values
@@ -781,7 +785,7 @@ risk_variable_data &lt;- risk_variable_data %&gt;%
 
 #2.2 Further subset the data to contain only columns of interest to clustering
 risk_variable_data &lt;- risk_variable_data %&gt;% 
-  dplyr::select(c(src_subject_id, eventname, family_id, site_name, sex, interview_age, age_in_years, race_ethnicity, cbcl_scr_dsm5_depress_t, cbcl_scr_dsm5_anxdisord_t, cbcl_scr_syn_attention_t, cbcl_scr_syn_aggressive_t, pgbi_p_ss_score, upps_y_ss_negative_urgency, upps_y_ss_positive_urgency, sds_p_ss_total, family_history_depression, famhx_ss_momdad_ma_p, reshist_addr1_coi_z_coi_nat, nsc_p_ss_mean_3_items, nihtbx_list_agecorrected, nihtbx_flanker_agecorrected, nihtbx_pattern_agecorrected, ACE_index_sum_score))
+  dplyr::select(c(src_subject_id, eventname, family_id, site_name, sex, interview_age, age_in_years, race_ethnicity, cbcl_scr_dsm5_depress_t, cbcl_scr_dsm5_anxdisord_t, cbcl_scr_syn_attention_t, cbcl_scr_syn_aggressive_t, pgbi_p_ss_score, upps_y_ss_negative_urgency, upps_y_ss_positive_urgency, sds_p_ss_total, family_history_depression, famhx_ss_momdad_ma_p, reshist_addr1_coi_z_coi_nat, nsc_p_ss_mean_3_items, bullying, nihtbx_list_uncorrected, nihtbx_flanker_uncorrected, nihtbx_pattern_uncorrected, ACE_index_sum_score))
 
 #2.3 Remove rows with missing data
 risk_variable_data_clean &lt;- risk_variable_data %&gt;% 
@@ -802,7 +806,7 @@ skimr::skim(risk_variable_data_clean)</code></pre>
 </tr>
 <tr class="odd">
 <td align="left">Number of columns</td>
-<td align="left">24</td>
+<td align="left">25</td>
 </tr>
 <tr class="even">
 <td align="left">_______________________</td>
@@ -818,7 +822,7 @@ skimr::skim(risk_variable_data_clean)</code></pre>
 </tr>
 <tr class="odd">
 <td align="left">numeric</td>
-<td align="left">19</td>
+<td align="left">20</td>
 </tr>
 <tr class="even">
 <td align="left">________________________</td>
@@ -1134,45 +1138,58 @@ skimr::skim(risk_variable_data_clean)</code></pre>
 <td align="left">▁▁▃▅▇</td>
 </tr>
 <tr class="even">
-<td align="left">nihtbx_list_agecorrected</td>
+<td align="left">bullying</td>
 <td align="right">0</td>
 <td align="right">1</td>
-<td align="right">101.04</td>
-<td align="right">14.74</td>
-<td align="right">39.00</td>
-<td align="right">89.00</td>
-<td align="right">103.00</td>
-<td align="right">110.00</td>
-<td align="right">194.00</td>
-<td align="left">▁▇▇▁▁</td>
+<td align="right">0.25</td>
+<td align="right">0.43</td>
+<td align="right">0.00</td>
+<td align="right">0.00</td>
+<td align="right">0.00</td>
+<td align="right">1.00</td>
+<td align="right">1.00</td>
+<td align="left">▇▁▁▁▃</td>
 </tr>
 <tr class="odd">
-<td align="left">nihtbx_flanker_agecorrected</td>
+<td align="left">nihtbx_list_uncorrected</td>
 <td align="right">0</td>
 <td align="right">1</td>
-<td align="right">95.67</td>
-<td align="right">13.68</td>
-<td align="right">62.00</td>
-<td align="right">88.00</td>
+<td align="right">97.06</td>
+<td align="right">11.94</td>
+<td align="right">36.00</td>
+<td align="right">90.00</td>
 <td align="right">97.00</td>
-<td align="right">107.00</td>
-<td align="right">171.00</td>
-<td align="left">▃▇▃▁▁</td>
+<td align="right">105.00</td>
+<td align="right">136.00</td>
+<td align="left">▁▁▅▇▁</td>
 </tr>
 <tr class="even">
-<td align="left">nihtbx_pattern_agecorrected</td>
+<td align="left">nihtbx_flanker_uncorrected</td>
 <td align="right">0</td>
 <td align="right">1</td>
 <td align="right">94.18</td>
-<td align="right">21.88</td>
-<td align="right">20.00</td>
-<td align="right">82.00</td>
-<td align="right">95.00</td>
-<td align="right">108.00</td>
-<td align="right">185.00</td>
-<td align="left">▁▅▇▁▁</td>
+<td align="right">9.02</td>
+<td align="right">51.00</td>
+<td align="right">90.00</td>
+<td align="right">96.00</td>
+<td align="right">100.00</td>
+<td align="right">116.00</td>
+<td align="left">▁▁▃▇▂</td>
 </tr>
 <tr class="odd">
+<td align="left">nihtbx_pattern_uncorrected</td>
+<td align="right">0</td>
+<td align="right">1</td>
+<td align="right">88.34</td>
+<td align="right">14.48</td>
+<td align="right">30.00</td>
+<td align="right">80.00</td>
+<td align="right">88.00</td>
+<td align="right">99.00</td>
+<td align="right">140.00</td>
+<td align="left">▁▂▇▅▁</td>
+</tr>
+<tr class="even">
 <td align="left">ACE_index_sum_score</td>
 <td align="right">0</td>
 <td align="right">1</td>
@@ -1190,7 +1207,9 @@ skimr::skim(risk_variable_data_clean)</code></pre>
 </div>
 <div id="writing-output-to-processed-data-directory" class="section level2">
 <h2>Writing Output to Processed Data Directory</h2>
-<pre class="r"><code>#1. Write the cleaned risk variable data as a csv file to be used in clustering
+<pre class="r"><code>## Output ##
+
+#1. Write the cleaned risk variable data as a csv file to be used in clustering
 write.csv(risk_variable_data_clean, &quot;../../data/data_processed/risk_variable_data.csv&quot;, row.names = FALSE)</code></pre>
 </div>
 
