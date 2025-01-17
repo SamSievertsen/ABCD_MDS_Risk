@@ -1,0 +1,418 @@
+---
+title: "Mood Disorder & Suicidality Risk Group Clustering k Validation + Optimization"
+author: "Sam A. Sievertsen"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    self_contained: true
+---
+
+```{r global, include = FALSE}
+
+# Set global env variables
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, comment = "")
+
+```
+
+```{r environment, echo = FALSE, include = FALSE, warning = FALSE}
+
+# Load necessary packages + environmental variables
+library(knitr)
+library(dplyr)
+library(tidyr)
+library(DescTools)
+library(skimr)
+library(easystats)
+library(cluster)
+library(clustMixType)
+library(factoextra)
+library(NbClust)
+library(clValid) 
+library(ClusterR) 
+library(clusterSim)
+library(clustertend)
+library(hopkins)
+library(tidymodels)
+library(tidyclust)
+library(tidyquant)
+library(ggplot2)
+options(scipen = 999, digits = 8)
+
+# Read in risk variable data to be used in clustering
+risk_variable_data <- read.csv("../../data/data_processed/risk_variable_data.csv")
+
+```
+
+## Data Prep for Analysis 
+
+```{r data prep, warning = FALSE}
+
+## Data Prep ## 
+
+#1. Z-score continuous data for clustering
+#1.1 Create a list of continuous variables to z-score
+variables_to_scale <- c(
+  "cbcl_scr_dsm5_depress_t",
+  "cbcl_scr_dsm5_anxdisord_t",
+  "cbcl_scr_syn_attention_t",
+  "cbcl_scr_syn_aggressive_t",
+  "pgbi_p_ss_score",
+  "upps_y_ss_negative_urgency",
+  "upps_y_ss_positive_urgency",
+  "sds_p_ss_total",
+  "nsc_p_ss_mean_3_items",
+  "nihtbx_list_uncorrected",
+  "nihtbx_flanker_uncorrected",
+  "nihtbx_pattern_uncorrected",
+  "ACE_index_sum_score")
+
+#1.2 Z-score all continuous variables to be used in clustering
+risk_variable_data <- risk_variable_data %>%
+  mutate(across(
+    all_of(variables_to_scale),
+    ~ as.numeric(scale(.)),
+    .names = "{.col}_scaled"))
+
+
+#2. Ensure dichotimization of categorical data for clustering
+risk_variable_data <- risk_variable_data %>% 
+  mutate(across(c("family_history_depression", "famhx_ss_momdad_ma_p", "bullying"), as.factor))
+
+#3. Retain only columns of interest for clustering
+risk_variable_data <- risk_variable_data %>% 
+  dplyr::select(c(src_subject_id, eventname, family_id, site_name, sex, age_in_years, race_ethnicity, family_history_depression, famhx_ss_momdad_ma_p, bullying, cbcl_scr_dsm5_depress_t_scaled, cbcl_scr_dsm5_anxdisord_t_scaled, cbcl_scr_syn_attention_t_scaled, cbcl_scr_syn_aggressive_t_scaled, pgbi_p_ss_score_scaled, upps_y_ss_negative_urgency_scaled, upps_y_ss_positive_urgency_scaled, sds_p_ss_total_scaled, nsc_p_ss_mean_3_items_scaled, nihtbx_list_uncorrected_scaled, nihtbx_flanker_uncorrected_scaled, nihtbx_pattern_uncorrected_scaled, ACE_index_sum_score_scaled))
+
+#4. Retain subject IDs as row names while removing variables that will not be clustered 
+#4.1 Remove all variables except subject ID from the dataframe for clustering
+risk_variable_clustering_data <- risk_variable_data %>%
+  dplyr::select(-eventname, -family_id, -site_name, -sex, -age_in_years, -race_ethnicity)
+
+#4.2 Set subject IDs as row names
+row.names(risk_variable_clustering_data) <- risk_variable_clustering_data$src_subject_id
+
+#4.3 Remove 'src_subject_id' column from data
+risk_variable_clustering_data <- risk_variable_clustering_data %>%
+  dplyr::select(-src_subject_id)
+
+```
+
+## Determining Optimal Number of Clusters
+
+### Generating Cluster Validation Indices
+
+Based on initial benchmarking, parallelization of CPU cores (on local machine "Dell Latitude 5550"; HPC benchmarking not completed) actually results in decreased performance and 63.73% longer runtime. As such, iterative generation of validation metrics below will not be parallelized. 
+
+Based on test data (*n* = 100), estimated local machine runtime for this procedure is ~ 7.52 hours. 
+
+```{r k validation indices, echo = FALSE, warning = FALSE}
+
+## Generate Validation Indices to be Used in Determining Optimal k ##
+
+#1. Define parameters for validation indices
+#1.1 Define k range of clusters to test
+k_range <- 3:12
+
+#1.2 Define validation indices to generate during optimization
+validation_methods <- c("cindex", "dunn", "gamma", "gplus", "mcclain", "ptbiserial", "silhouette", "tau")
+
+#1.3 Define distance methods to be used during optimization
+distance_types <- c("huang", "gower")
+
+#1.4 Create a placeholder for results
+k_optimization_indices <- list()
+
+#1.5 Create a dataframe to track individual validation index runtimes
+runtime_log <- data.frame(
+  method = character(),
+  distance = character(),
+  RuntimeSeconds = numeric(),
+  stringsAsFactors = FALSE)
+
+#2. Perform k optimization
+#2.1 Create a function to iteratively generate all validation indices
+#2.11 Loop through each distance type
+for (distance in distance_types) {
+  
+  #2.111 Loop through each validation method
+  for (method in validation_methods) {
+    
+    #2.1111 Print index progress
+    cat("Running validation for method:", method, "and distance:", distance, "\n")
+    
+    #2.1112 Start timing
+    start_time <- Sys.time()
+    
+    #2.1113 Run validation_kproto
+    validation_results <- validation_kproto(
+      method = method,
+      data = risk_variable_clustering_data,
+      type = distance,
+      k = k_range,
+      kp_obj = "all",
+      verbose = TRUE
+    )
+    
+    #2.1114 End timing
+    end_time <- Sys.time()
+    
+    #2.1115 Calculate runtime in seconds
+    runtime_seconds <- as.numeric(difftime(end_time, start_time, units = "secs"))
+    
+    #2.1116 Print index runtime
+    cat("Validation index generation for", method, "statistic using", distance, "distance =", runtime_seconds, "seconds", "\n")
+    
+    #2.1117 Create a descriptive name for each index result
+    result_name <- paste0(method, "_", distance, "_validation_results")
+    
+    #2.1118 Store the results in the list
+    k_optimization_indices[[result_name]] <- validation_results
+    
+    #2.1119 Log the runtime
+    runtime_log <- runtime_log %>%
+      add_row(method = method, distance = distance, RuntimeSeconds = runtime_seconds)
+  }
+}
+
+#2.2 Save the optimization results to an RDS file
+saveRDS(k_optimization_indices, file = "../../results/main_analysis/k_optimization_indices.rds")
+cat("RDS file containing validation/optimization indices written successfully\n")
+
+#2.3 Save the run times for each validation index as a csv file
+write.csv("../../results/main_analysis/k_optimization_runtime_log.csv", row.names = FALSE)
+cat("csv file containing run times for each validation index written successfully\n")
+
+```
+
+### Using Cluster Validation Indices to Select a distance method and k Value
+
+```{r k selection, echo = FALSE, warning = FALSE}
+
+## Determine the Optimal Number of Clusters (k) to Group Risk Variables ##
+
+#1. Generate validation indices for each desired index
+#1.1 Establish parameters for creating the validation indices
+#1.11 Initialize placeholders for summary results
+optimal_k_validation_index_results <- data.frame(method = character(),
+                                distance = character(),
+                                optimal_k = integer(),
+                                optimal_index_value = numeric(),
+                                stringsAsFactors = FALSE)
+
+#1.12 Initialize a data frame to store all index values
+all_indices_results <- data.frame(method = character(),
+                                   distance = character(),
+                                   index_Name = character(),
+                                   k = integer(),
+                                   index_Value = numeric(),
+                                   stringsAsFactors = FALSE)
+
+#1.2 Create a function to process each validation result
+for (result_name in names(k_optimization_indices)) {
+  validation_result <- k_optimization_indices[[result_name]]
+  
+  #1.21 Extract details from the result name
+  parts <- strsplit(result_name, "_")[[1]]
+  method <- parts[1]
+  distance <- parts[2]
+  
+  #1.22 Store optimal k and corresponding index value(s)
+  optimal_k <- validation_result$k_opt
+  optimal_index_value <- validation_result$index_opt
+  
+  #1.23 Record the optimal results as a dataframe
+  optimal_k_validation_index_results <- rbind(optimal_k_validation_index_results, 
+                              data.frame(method = method, 
+                                         distance = distance, 
+                                         optimal_k = optimal_k, 
+                                         optimal_index_value = optimal_index_value))
+  
+  #1.24 Store all index values for each k
+  indices <- validation_result$indices
+  for (k in names(indices)) {
+    all_indices_results <- rbind(all_indices_results, 
+                                 data.frame(method = method,
+                                            distance = distance,
+                                            index_Name = result_name,
+                                            k = as.integer(k),
+                                            index_Value = indices[[k]]))
+  }
+}
+
+#2. Compare the performance of each validation index to determine the optimal k value
+#2.1 Determine the superior distance method to use in generating clusters 
+#2.11 Define index evaluation rules
+index_rules <- c(
+  "cindex" = "min",
+  "dunn" = "max",
+  "gamma" = "max",
+  "gplus" = "min",
+  "mcclain" = "min",
+  "ptbiserial" = "max",
+  "silhouette" = "max",
+  "tau" = "max")
+
+#2.12 Initialize a data frame to store distance method comparisons
+distance_comparison <- data.frame(index = character(),
+                                   better_distance = character(),
+                                   stringsAsFactors = FALSE)
+
+#2.13 Create a function to compare the performance of distance methods for each metric
+for (index in names(index_rules)) {
+  
+  #2.131 Filter for the relevant index
+  index_data <- optimal_k_validation_index_results[grepl(index, optimal_k_validation_index_results$method), ]
+  
+  #2.132 If both distances are present, compare their optimal index values
+  if (nrow(index_data) == 2) {
+    gower_value <- index_data$optimal_index_value[index_data$distance == "gower"]
+    huang_value <- index_data$optimal_index_value[index_data$distance == "huang"]
+    
+    #2.1321 Determine superiority based on the rule
+    if (index_rules[index] == "max") {
+      better_distance <- ifelse(gower_value > huang_value, "gower", "huang")
+    } else if (index_rules[index] == "min") {
+      better_distance <- ifelse(gower_value < huang_value, "gower", "huang")
+    }
+    
+    #2.1322 Record the result of the distance comparison
+    distance_comparison <- rbind(distance_comparison, 
+                                  data.frame(index = index, 
+                                             better_distance = better_distance))
+  }
+}
+
+#2.14 Count the occurrences of each distance method in the better_distance column
+superior_distance_counts <- table(distance_comparison$better_distance)
+
+#2.15 Identify the superior distance method (method with the highest count)
+superior_distance <- names(superior_distance_counts)[which.max(superior_distance_counts)]
+
+#2.16 Filter the optimal_k_validation_index_results dataframe for the superior distance method
+superior_distance_results <- optimal_k_validation_index_results[optimal_k_validation_index_results$distance == superior_distance, ]
+
+#2.171 Calculate mean, median, and mode of the optimal_k for the superior distance method
+superior_distance_mean_k <- mean(superior_distance_results$optimal_k)
+superior_distance_median_k <- median(superior_distance_results$optimal_k)
+superior_distance_mode_k <- as.numeric(names(sort(table(superior_distance_results$optimal_k), decreasing = TRUE))[1])
+
+#2.172 Create a dataframe to summarize the distance comparison results
+summary_results <- data.frame(
+  distance_method = superior_distance,
+  mean_optimal_k = superior_distance_mean_k,
+  median_optimal_k = superior_distance_median_k,
+  mode_optimal_k = superior_distance_mode_k,
+  stringsAsFactors = FALSE)
+
+#2.2 Visually compare the results of the validation indices
+#2.21 Create a faceted elbow plot based on the results of each clustering process conducted as part of the validation index generation
+#2.211 Initialize a data frame to store WSS values for each k
+cluster_validation_wss <- data.frame(method = character(),
+                          distance = character(),
+                          k = integer(),
+                          Tot_WithinSS = numeric(),
+                          stringsAsFactors = FALSE)
+
+#2.212 Loop through the relevant validation results for the superior distance method
+for (result_name in names(k_optimization_indices)) {
+  if (grepl(superior_distance, result_name)) {
+    
+    #2.2121 Extract validation result
+    validation_result <- k_optimization_indices[[result_name]]
+    
+    #2.2122 Extract details from the result name
+    parts <- strsplit(result_name, "_")[[1]]
+    method <- parts[1]
+    distance <- parts[2]
+    
+    #2.2123 Check if this result corresponds to the superior distance method
+    if (distance == superior_distance) {
+      
+      #2.21231 Extract WSS values for each k
+      kp_objects <- validation_result$kp_obj
+      for (k_idx in seq_along(kp_objects)) {
+        k <- k_idx + 1
+        wss <- kp_objects[[k_idx]]$object$tot.withinss
+        cluster_validation_wss <- rbind(cluster_validation_wss, 
+                             data.frame(method = method, 
+                                        distance = distance, 
+                                        k = k, 
+                                        Tot_WithinSS = wss))
+      }
+    }
+  }
+}
+
+#2.213 Create the facet elbow plot
+cluster_validation_elbow_plot <- ggplot(cluster_validation_wss, aes(x = k, y = Tot_WithinSS)) +
+  geom_line(aes(color = method), size = 1) +
+  geom_point(aes(color = method), size = 2) +
+  facet_wrap(~ method, scales = "free_y", ncol = 2) +
+  labs(title = "Facet Elbow Plot for Within-Cluster Sum of Squares (WSS)",
+       x = "Number of Clusters (k)",
+       y = "Total Within-Cluster Sum of Squares",
+       color = "Clustering method") +
+  theme_minimal(base_size = 12) +
+  theme(strip.text = element_text(size = 10, face = "bold"))
+
+#2.22 Create a silhouette plot derived using the (determined via data) superior distance method
+#2.221 Extract the silhouette indices for the superior distance method
+superior_distance_silhouette_data <- k_optimization_indices[[paste0("silhouette_", superior_distance, "_validation_results")]][["indices"]]
+
+#2.222 Prepare the data for plotting
+superior_distance_silhouette_plot_data <- data.frame(
+  k = as.integer(names(superior_distance_silhouette_data)), 
+  Silhouette_index = as.numeric(superior_distance_silhouette_data)
+)
+
+#2.223 Create the silhouette plot
+cluster_validation_silhouette_plot <- ggplot(superior_distance_silhouette_plot_data, aes(x = k, y = Silhouette_index)) +
+  geom_line(color = "blue", size = 1) +
+  geom_point(color = "blue", size = 2) +
+  labs(
+    title = paste("Silhouette Plot for Superior Distance (", superior_distance, ")", sep = ""),
+    x = "Number of Clusters (k)",
+    y = "Silhouette index") +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 12)
+  )
+
+```
+
+1. **Optimal k and Validation Indices:**
+   - The code evaluates multiple clustering validation indices (`cindex`, `dunn`, `gamma`, `gplus`, `mcclain`, `ptbiserial`, `silhouette`, `tau`) to identify the optimal number of clusters (`k`) for each combination of clustering method and distance metric.
+   - A summary of the **optimal k** values and corresponding **index scores** is generated for both Gower and Huang distance metrics.
+
+2. **Comparison of Distance Metrics:**
+   - Each index is analyzed to determine which distance metric (Gower or Huang) performs better based on predefined optimization rules (`min` or `max`).
+   - The superior distance metric is identified based on its frequency of outperforming the other metric across all validation indices.
+   - **Superior Distance Metric:** `r summary_results$distance_method`
+     - To note, this is according to both the `kproto_validation` function and the subjective, arbitrary determination that the most optimal distance method can be defined by the one with the larger number of superior (lower or higher; index dependent) validation indices
+   - **Summary of Optimal k Values (Superior Distance):**
+     - Mean: `r round(summary_results$mean_optimal_k, 2)`
+     - Median: `r summary_results$median_optimal_k`
+     - Mode: `r summary_results$mode_optimal_k`
+
+3. **Elbow Plot for Clustering Evaluation:**
+   - A **facet elbow plot** visualizes the Total Within-Cluster Sum of Squares (WSS) for each clustering method under the superior distance metric.
+   - This plot helps identify the elbow point, suggesting an appropriate value for `k`.
+
+```{r facet elbow plot, echo = FALSE, warning = FALSE}
+
+# Print the facet elbow plot
+print(cluster_validation_elbow_plot)
+
+```
+   
+
+4. **Silhouette Analysis:**
+   - A **silhouette plot** is created for the superior distance metric, displaying the silhouette index values across different `k` values.
+   - This visualization aids in confirming the clustering structure and provides additional insight into the quality of the proposed clustering.
+
+```{r silhouette plot, echo = FALSE, warning = FALSE}
+
+# Print the silhouette plot
+print(cluster_validation_silhouette_plot)
+
+```
