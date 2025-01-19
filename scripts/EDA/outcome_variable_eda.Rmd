@@ -16,3 +16,93 @@ knitr::opts_chunk$set(warning = FALSE, message = FALSE, comment = "")
 
 # Exploratory Data Analysis (EDA) of variables to be used as outcome metrics related to mood disorders and suicidality in the ABCD dataset
 
+The most up to date list of variables to used as outcomes in the current study, including their role, domain, details of each variable as it relates to the ABCD dataset, etc., can be [found here](https://ohsuitg-my.sharepoint.com/:x:/r/personal/sievertsen_ohsu_edu/Documents/Huber_Lab/FYP/Project_Planning/ABCD_Mood_Disorder_Risk_Model_Variables_010624_SS.xlsx?d=w286583f8914b4ab5a402e36ce8c36291&csf=1&web=1&e=ieCAKt&nav=MTVfezIxMDEwOEMxLTFFMjktNERDMi1CQTE4LTM0QTE2NzA0MEQ2RX0). 
+
+The following report contains information regarding the: 
+
+  1. Integrity of the data
+  
+  2. Assessment of outliers in the data
+  
+  3. Skewness + appropriateness of the mean as the measure of central tendency for continuous variables
+  
+  4. Shape of each variables' distribution
+  
+  5. A summary of the overall availability of variables of interest to the current study
+
+```{r environment, echo = FALSE, include = FALSE, warning = FALSE}
+
+# Load necessary packages + environmental variables
+library(knitr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(skimr)
+options(scipen = 999, digits = 8)
+
+# Read in parent report ksads-comp data
+parent_ksads_data <- read.csv("../../data/data_raw/mh_p_ksads_ss.csv")
+
+# Read in youth report ksads-comp data
+youth_ksads_data <- read.csv("../../data/data_raw/mh_y_ksads_ss.csv")
+
+# Read in cbcl data
+cbcl_data <- read.csv("../../data/data_raw/mh_p_cbcl.csv")
+
+```
+
+```{r data wrangling, echo = FALSE, include = FALSE, warning = FALSE}
+
+## Data Wrangling ##
+
+#1. Merge the data
+#1.1 Collapse the data frames containing outcome variables of interest
+outcome_data_merged <- Reduce(
+  function(x, y)
+    merge(x, y,
+      by = c("src_subject_id", "eventname"),
+      all = TRUE),
+  list(parent_ksads_data, youth_ksads_data, cbcl_data))
+
+#1.2 Verify the merge did not duplicate any columns and resulted in an expected subject N
+#1.21 Check for duplicate columns
+duplicate_columns <- grep("\\.x$|\\.y$", colnames(outcome_data_merged), value = TRUE)
+if (length(duplicate_columns) > 0) {
+  message("Duplicate columns found: ", paste(duplicate_columns, collapse = ", "))
+} else {
+  message("No duplicate columns ending found.")
+}
+
+#1.22 Check the number of unique subjects to ensure no data was lost/erroneously created during merging
+unique_count <- length(unique(outcome_data_merged$src_subject_id))
+if (unique_count >= 11800 && unique_count <= 12000) {
+  message("The number of unique src_subject_id (", unique_count, ") is within the acceptable range.")
+} else {
+  message("The number of unique src_subject_id (", unique_count, ") is outside the acceptable range!")
+}
+
+#2. Clean the merged data 
+#2.1 Retain only columns of interest
+outcome_data_merged_trimmed <- outcome_data_merged %>% 
+  dplyr::select(c(src_subject_id, eventname, cbcl_scr_dsm5_depress_t, cbcl_scr_dsm5_anxdisord_t, ksads2_2_937_p, ksads2_2_800_p, ksads2_2_798_p, ksads2_2_799_p, ksads2_2_798_t, ksads2_2_799_t, ksads2_2_800_t, ksads2_2_937_t, ksads2_2_801_p, ksads2_2_802_p, ksads2_2_931_p,ksads2_2_936_p, ksads2_2_931_t, ksads2_2_936_t,ksads2_2_802_t, ksads2_2_801_t, ksads2_2_803_p, ksads2_2_933_p, ksads2_2_803_t, ksads2_2_933_t, ksads2_23_917_p, ksads2_23_918_p, ksads2_23_919_p, ksads2_23_920_p, ksads2_23_921_p, ksads2_23_906_p, ksads2_23_907_p, ksads2_23_908_p, ksads2_23_909_p, ksads2_23_910_p, ksads2_23_917_t, ksads2_23_918_t, ksads2_23_919_t, ksads2_23_920_t, ksads2_23_921_t, ksads2_23_906_t, ksads2_23_907_t, ksads2_23_908_t, ksads2_23_909_t, ksads2_23_910_t, ksads2_23_923_p, ksads2_23_924_p, ksads2_23_925_p, ksads2_23_912_p, ksads2_23_913_p, ksads2_23_914_p, ksads2_23_923_t, ksads2_23_924_t, ksads2_23_925_t, ksads2_23_912_t, ksads2_23_913_t, ksads2_23_914_t, ksads2_23_905_p, ksads2_23_916_p, ksads2_23_905_t, ksads2_23_916_t, cbcl_scr_syn_attention_t, cbcl_scr_syn_aggressive_t))
+
+#2.2 Turn all instances of empty, missing, 555, and 999 to NA; and 888 to 0 in KSADS columns
+outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>%
+  mutate(across(starts_with("ksads"), ~ na_if(replace(., . %in% c(555, 999, ""), NA), 888) %>% replace_na(0)))
+
+#2.3 Filter the trimmed data to only contain rows at the baseline assessment timepoint
+outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>% 
+  filter(eventname == "4_year_follow_up_y_arm_1")
+
+#3. Preliminarily create relevant outcome variables of interest
+#3.1 Suicidal Thinking
+outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>%
+  mutate(suicidal_thinking = case_when(
+    if_any(starts_with("ksads"), ~ . == 1) ~ 1,   
+    if_all(starts_with("ksads"), ~ . == 0) ~ 0,  
+    TRUE ~ NA_real_                              
+  ))
+
+#3.2 
+
+```

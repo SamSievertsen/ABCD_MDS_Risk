@@ -10,7 +10,7 @@ output:
 ```{r global, include = FALSE}
 
 # Set global env variables
-knitr::opts_chunk$set(warning = FALSE, message = FALSE, comment = "")
+knitr::opts_chunk$set(warning = FALSE, message = NA, comment = "")
 
 ```
 
@@ -113,7 +113,7 @@ Based on test data (*n* = 100), estimated local machine runtime for this procedu
 k_range <- 3:12
 
 #1.2 Define validation indices to generate during optimization
-validation_methods <- c("cindex", "dunn", "gamma", "gplus", "mcclain", "ptbiserial", "silhouette", "tau")
+validation_methods <- c("cindex", "gamma", "ptbiserial", "silhouette", "tau")
 
 #1.3 Define distance methods to be used during optimization
 distance_types <- c("huang", "gower")
@@ -137,7 +137,7 @@ for (distance in distance_types) {
   for (method in validation_methods) {
     
     #2.1111 Print index progress
-    cat("Running validation for method:", method, "and distance:", distance, "\n")
+    message("[", paste0(Sys.time()), "] Running validation for method: ", method, "and distance:", distance, "\n")
     
     #2.1112 Start timing
     start_time <- Sys.time()
@@ -149,6 +149,7 @@ for (distance in distance_types) {
       type = distance,
       k = k_range,
       kp_obj = "all",
+      nstart = 8,
       verbose = TRUE
     )
     
@@ -175,11 +176,11 @@ for (distance in distance_types) {
 
 #2.2 Save the optimization results to an RDS file
 saveRDS(k_optimization_indices, file = "../../results/main_analysis/k_optimization_indices.rds")
-cat("RDS file containing validation/optimization indices written successfully\n")
+message("RDS file containing validation/optimization indices written successfully\n")
 
 #2.3 Save the run times for each validation index as a csv file
 write.csv("../../results/main_analysis/k_optimization_runtime_log.csv", row.names = FALSE)
-cat("csv file containing run times for each validation index written successfully\n")
+message("csv file containing run times for each validation index written successfully\n")
 
 ```
 
@@ -243,10 +244,7 @@ for (result_name in names(k_optimization_indices)) {
 #2.11 Define index evaluation rules
 index_rules <- c(
   "cindex" = "min",
-  "dunn" = "max",
   "gamma" = "max",
-  "gplus" = "min",
-  "mcclain" = "min",
   "ptbiserial" = "max",
   "silhouette" = "max",
   "tau" = "max")
@@ -404,7 +402,6 @@ cluster_validation_silhouette_plot <- ggplot(superior_distance_silhouette_plot_d
 print(cluster_validation_elbow_plot)
 
 ```
-   
 
 4. **Silhouette Analysis:**
    - A **silhouette plot** is created for the superior distance metric, displaying the silhouette index values across different `k` values.
