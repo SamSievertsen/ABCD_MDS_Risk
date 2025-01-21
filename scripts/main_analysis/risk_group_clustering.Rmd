@@ -219,8 +219,8 @@ for (k in k_range) {
   knitr::kable(silhouette_scores, label = "Daisy + cluster::silhouette derived silhouette scores")
 
 #3. Save silhouette results for comparison
-write.csv(silhouette_data, "../../results/kproto_individual_silhouette_scores.csv", row.names = FALSE)
-write.csv(silhouette_scores, "../../results/kproto_silhouette_means.csv", row.names = FALSE)
+write.csv(silhouette_data, "../../results/main_analysis/kproto_individual_silhouette_scores.csv", row.names = FALSE)
+write.csv(silhouette_scores, "../../results/main_analysis/kproto_silhouette_means.csv", row.names = FALSE)
 cat("Silhouette comparison saved successfully.\n")
 
 #4. Generate Silhouette and Elbow Plots
@@ -264,13 +264,13 @@ print(elbow_plot)
 
 #5. Save Results for Future Use
 #5.1 k prototypes clusters
-saveRDS(kproto_results, file = "../../results/kproto_clustering_results.rds")
+saveRDS(kproto_results, file = "../../results/main_analysis/kproto_clustering_results.rds")
 
 #5.2 Silhouette score comparison data
-write.csv(silhouette_scores, "../../results/kproto_silhouette_comparison.csv", row.names = FALSE)
+write.csv(silhouette_scores, "../../results/main_analysis/kproto_silhouette_comparison.csv", row.names = FALSE)
 
 #5.3 Elbow plot data (total within sum of squares values)
-write.csv(elbow_plot_data, "../../results/kproto_elbow_plot_data.csv", row.names = FALSE)
+write.csv(elbow_plot_data, "../../results/main_analysis/kproto_elbow_plot_data.csv", row.names = FALSE)
 
 #5.4 Print that results were saved successfully
 cat("All results saved successfully.\n")
