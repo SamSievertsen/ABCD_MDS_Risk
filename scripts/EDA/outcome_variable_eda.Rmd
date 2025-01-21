@@ -103,6 +103,11 @@ outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>%
     TRUE ~ NA_real_                              
   ))
 
-#3.2 
+#3.2 Suicidal Behavior
+
+
+#3.3 Non-Suicidal Self Injury
+
 
 ```
+

@@ -10,7 +10,7 @@ output:
 ```{r global, include = FALSE}
 
 # Set global env variables
-knitr::opts_chunk$set(warning = FALSE, message = FALSE, comment = "")
+knitr::opts_chunk$set(warning = FALSE, message = NA, comment = "")
 
 ```
 
@@ -42,8 +42,241 @@ options(scipen = 999, digits = 8)
 # Read in risk variable data to be used in clustering
 risk_variable_data <- read.csv("../../data/data_processed/risk_variable_data.csv")
 
-# 
+# Read in the results of the k validation / optimization procedure
+k_optimization_indices <- readRDS(file = "../../results/main_analysis/k_optimization_indices.rds")
 
 ```
+
+## Review of Cluster Validation Indices: Selecting a Distance Method and k Value
+
+**1. Distance Method**
+
+In the "risk_group_k_optimization" script, the silhouette index was calculated for k values 3:12 using both the `huang` and `gower` distance methods. From these calculations, it was determined that the `gower` distance performs better on this dataset, as the silhouette coefficient maximum was > 67% higher using the gower distance than when using the huang distance method. Additionally, total within sum of squares values for optimal k (k = 3) and secondary optimal k (k = 5) were 6.82 times lower using gower distance, and total run time was ~ 17.9% faster. These results align with emerging evidence outlining the [strength of this method when clustering with k prototypes on mixed data](https://doi.org/10.1007/s11634-024-00595-5).
+
+As such, `gower` distance will be utilized here to generate clusters. 
+
+**2. Optimal k**
+
+While both the `huang` and `gower` derived silhouette scores point to a value of `k = 3` being optimal (i.e., the highest silhouette score), results from the elbow plot created during k optimization also point to `k = 5` and `k = 6` being potential options given the significant reduction in within sum of squares at those k values (and the silhouette score also being the 2nd and 3rd highest values at those k values, respectively). 
+
+As such, clustering will be done here with all values 2:12, with results again assessed for elbow plot performance and silhouette score. To note, `k = 2` was removed as a clustering solution from validation due to its previous poor performance and likelihood of not being the optimal k to capture sufficient variance patterns in all risk variables (17 of them in total) of interest, but is included here as a) processing speed is not as much of an issue with clustering as it is during validation, and b) to assess whether the previously determined optimal k of `k = 3` may have been due to small k values causing there to be fewer clusters that are farther apart (assuming spread in the data). This theoretically would increase the inter-cluster distance, leading to artificially higher silhouette scores, even though within-cluster cohesion may not be ideal in said smaller k values. TBD! 
+
+**3. Other Considerations**
+
+`nstart` value of 8 chosen as this has been identified as [leading to stable results in terms of a small standard deviation](https://link.springer.com/article/10.1007/s11634-024-00595-5#Sec12)
+
+## Data Wrangling for Clustering 
+
+```{r data wrangling, warning = FALSE}
+
+## Data Wrangling ## 
+
+#1. Z-score continuous data for clustering
+#1.1 Create a list of continuous variables to z-score
+variables_to_scale <- c(
+  "cbcl_scr_dsm5_depress_t",
+  "cbcl_scr_dsm5_anxdisord_t",
+  "cbcl_scr_syn_attention_t",
+  "cbcl_scr_syn_aggressive_t",
+  "pgbi_p_ss_score",
+  "upps_y_ss_negative_urgency",
+  "upps_y_ss_positive_urgency",
+  "sds_p_ss_total",
+  "nsc_p_ss_mean_3_items",
+  "nihtbx_list_uncorrected",
+  "nihtbx_flanker_uncorrected",
+  "nihtbx_pattern_uncorrected",
+  "ACE_index_sum_score")
+
+#1.2 Z-score all continuous variables to be used in clustering
+risk_variable_data <- risk_variable_data %>%
+  mutate(across(
+    all_of(variables_to_scale),
+    ~ as.numeric(scale(.)),
+    .names = "{.col}_scaled"))
+
+#2. Ensure dichotimization of categorical data for clustering
+risk_variable_data <- risk_variable_data %>% 
+  mutate(across(c("family_history_depression", "famhx_ss_momdad_ma_p", "bullying"), as.factor))
+
+#3. Retain only columns of interest for clustering
+risk_variable_data <- risk_variable_data %>% 
+  dplyr::select(c(src_subject_id, eventname, family_id, site_name, sex, age_in_years, race_ethnicity, family_history_depression, famhx_ss_momdad_ma_p, bullying, cbcl_scr_dsm5_depress_t_scaled, cbcl_scr_dsm5_anxdisord_t_scaled, cbcl_scr_syn_attention_t_scaled, cbcl_scr_syn_aggressive_t_scaled, pgbi_p_ss_score_scaled, upps_y_ss_negative_urgency_scaled, upps_y_ss_positive_urgency_scaled, sds_p_ss_total_scaled, reshist_addr1_coi_z_coi_nat, nsc_p_ss_mean_3_items_scaled, nihtbx_list_uncorrected_scaled, nihtbx_flanker_uncorrected_scaled, nihtbx_pattern_uncorrected_scaled, ACE_index_sum_score_scaled))
+
+#4. Retain subject IDs as row names while removing variables that will not be clustered 
+#4.1 Remove all variables except subject ID from the dataframe for clustering
+risk_variable_clustering_data <- risk_variable_data %>%
+  dplyr::select(-eventname, -family_id, -site_name, -sex, -age_in_years, -race_ethnicity)
+
+#4.2 Set subject IDs as row names
+row.names(risk_variable_clustering_data) <- risk_variable_clustering_data$src_subject_id
+
+#4.3 Remove 'src_subject_id' column from data
+risk_variable_clustering_data <- risk_variable_clustering_data %>%
+  dplyr::select(-src_subject_id)
+
+```
+
+## Risk Group Clustering
+
+```{r clustering, warning = FALSE, fig.width = 10, fig.height = 6}
+
+## Perform k-prototypes Clustering and Generate / Compare Silhouette Methods ##
+
+#1. Define parameters for kproto clustering
+#1.1 Set seed for reproducibility
+set.seed(123)
+
+#1.2 Define k range of clusters to test
+k_range <- 2:12
+
+#1.3 Define distance type for kproto clustering
+distance_type <- "gower"
+
+#1.4 Create placeholders for clustering results, silhouette scores, and WSS
+#1.41 k prototypes results
+kproto_results <- list()
+
+#1.42 Silhouette scores
+silhouette_scores <- data.frame(k = integer(), 
+                                 cluster_silhouette = numeric(), 
+                                 validation_silhouette = numeric(), 
+                                 stringsAsFactors = FALSE)
+
+#1.43 Elbow Plot Data
+elbow_plot_data <- data.frame(k = integer(), Tot_WithinSS = numeric(), stringsAsFactors = FALSE)
+
+#1.5 Placeholder to store silhouette data for plotting
+silhouette_data <- data.frame(
+  cluster = integer(),
+  silhouette_width = numeric(),
+  k = integer(),
+  stringsAsFactors = FALSE
+)
+
+#2. Perform kproto Clustering and Calculate Silhouette Scores
+for (k in k_range) {
+  
+  #2.1 Print clustering progress
+  cat("[", paste0(Sys.time()), "] Running kproto clustering for k = ", k, "\n")
+  
+  #2.2 Start timing
+  start_time <- Sys.time()
+  
+  #2.3 Run kproto clustering
+  kproto_model <- clustMixType::kproto(
+    x = risk_variable_clustering_data,
+    k = k,
+    kp_obj = "all",
+    type = distance_type,
+    nstart = 8,
+    verbose = FALSE
+  )
+  
+  #2.4 End timing
+  end_time <- Sys.time()
+  
+  #2.5 Store clustering results
+  kproto_results[[paste0("k_", k)]] <- list(
+    model = kproto_model,
+    runtime = as.numeric(difftime(end_time, start_time, units = "secs"))
+  )
+  
+  #2.6 Calculate silhouette scores using cluster::silhouette
+  #2.61 Calculate the current silhouette value
+  silhouette_score <- cluster::silhouette(
+    x = kproto_model$cluster,
+    dist = cluster::daisy(risk_variable_clustering_data, metric = distance_type)
+  )
+  #2.62 Calculate average silhouette values
+  average_cluster_silhouette <- mean(silhouette_score[, "sil_width"])
+  
+  #2.7 Log silhouette scores
+  silhouette_scores <- rbind(silhouette_scores, 
+                             data.frame(
+                               k = k, 
+                               cluster_silhouette = average_cluster_silhouette
+                             ))
+  
+  #2.8 Store silhouette values for plotting
+  silhouette_data <- rbind(silhouette_data, 
+                           data.frame(
+                             cluster = silhouette_score[, "cluster"],
+                             silhouette_width = silhouette_score[, "sil_width"],
+                             k = k
+                           ))
+  
+  #2.9 Log total within sum of squares (WSS)
+  elbow_plot_data <- rbind(elbow_plot_data, 
+                           data.frame(k = k, Tot_WithinSS = kproto_model$tot.withinss))
+  
+  #2.10 Print progress update
+  cat("Clustering for k = ", k, " completed in ", 
+      round(as.numeric(difftime(end_time, start_time, units = "secs")), 2), " seconds\n")
+}
+
+  #2.11 Print the silhouette scores for reference in output
+  knitr::kable(silhouette_scores, label = "Daisy + cluster::silhouette derived silhouette scores")
+
+#3. Save silhouette results for comparison
+write.csv(silhouette_data, "../../results/kproto_individual_silhouette_scores.csv", row.names = FALSE)
+write.csv(silhouette_scores, "../../results/kproto_silhouette_means.csv", row.names = FALSE)
+cat("Silhouette comparison saved successfully.\n")
+
+#4. Generate Silhouette and Elbow Plots
+#4.1 Silhouette width plot
+#4.11 Calculate mean silhouette widths for each cluster and k
+mean_silhouette <- silhouette_data %>%
+  group_by(k, cluster) %>%
+  summarize(mean_width = mean(silhouette_width), .groups = "drop")
+
+#4.12 Create the silhouette density/mean plot
+silhouette_plot <- ggplot(silhouette_data, aes(x = silhouette_width, fill = factor(cluster))) +
+  geom_density(alpha = 0.6, color = NA) + 
+  geom_vline(data = mean_silhouette, aes(xintercept = mean_width, color = factor(cluster)), 
+             linetype = "dashed", size = 0.8) + 
+  facet_wrap(~k, ncol = 3, scales = "free", labeller = labeller(k = function(k) paste("k =", k))) + 
+  labs(
+    title = "Silhouette Plot with Density and Mean Widths",
+    x = "Silhouette Width",
+    y = "Density",
+    fill = "Cluster",
+    color = "Cluster"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom", 
+    strip.text = element_text(size = 12)
+  )
+
+#4.13 Display the silhouette density/mean plot
+print(silhouette_plot)
+
+#4.21 Generate and print the Elbow Plot
+elbow_plot <- ggplot(elbow_plot_data, aes(x = k, y = Tot_WithinSS)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Elbow Plot", x = "Number of Clusters (k)", y = "Total Within Sum of Squares") +
+  theme_minimal()
+
+#4.22 Print the Elbow Plot
+print(elbow_plot)
+
+#5. Save Results for Future Use
+#5.1 k prototypes clusters
+saveRDS(kproto_results, file = "../../results/kproto_clustering_results.rds")
+
+#5.2 Silhouette score comparison data
+write.csv(silhouette_scores, "../../results/kproto_silhouette_comparison.csv", row.names = FALSE)
+
+#5.3 Elbow plot data (total within sum of squares values)
+write.csv(elbow_plot_data, "../../results/kproto_elbow_plot_data.csv", row.names = FALSE)
+
+#5.4 Print that results were saved successfully
+cat("All results saved successfully.\n")
+
+```
+
+The results from this clustering procedure will be evaluated and utilized to make the final selection of the optimal k to utilize in the current study, and `kproto_results` data resulting from this procedure subsequently pulled into additional scripts to both assign subjects to clusters and profile the clusters for optimal k prior to statistical modeling of outcome metrics. 
 
 

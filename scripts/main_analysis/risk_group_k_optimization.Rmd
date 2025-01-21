@@ -80,7 +80,7 @@ risk_variable_data <- risk_variable_data %>%
 
 #3. Retain only columns of interest for clustering
 risk_variable_data <- risk_variable_data %>% 
-  dplyr::select(c(src_subject_id, eventname, family_id, site_name, sex, age_in_years, race_ethnicity, family_history_depression, famhx_ss_momdad_ma_p, bullying, cbcl_scr_dsm5_depress_t_scaled, cbcl_scr_dsm5_anxdisord_t_scaled, cbcl_scr_syn_attention_t_scaled, cbcl_scr_syn_aggressive_t_scaled, pgbi_p_ss_score_scaled, upps_y_ss_negative_urgency_scaled, upps_y_ss_positive_urgency_scaled, sds_p_ss_total_scaled, nsc_p_ss_mean_3_items_scaled, nihtbx_list_uncorrected_scaled, nihtbx_flanker_uncorrected_scaled, nihtbx_pattern_uncorrected_scaled, ACE_index_sum_score_scaled))
+  dplyr::select(c(src_subject_id, eventname, family_id, site_name, sex, age_in_years, race_ethnicity, family_history_depression, famhx_ss_momdad_ma_p, bullying, cbcl_scr_dsm5_depress_t_scaled, cbcl_scr_dsm5_anxdisord_t_scaled, cbcl_scr_syn_attention_t_scaled, cbcl_scr_syn_aggressive_t_scaled, pgbi_p_ss_score_scaled, upps_y_ss_negative_urgency_scaled, upps_y_ss_positive_urgency_scaled, sds_p_ss_total_scaled, reshist_addr1_coi_z_coi_nat, nsc_p_ss_mean_3_items_scaled, nihtbx_list_uncorrected_scaled, nihtbx_flanker_uncorrected_scaled, nihtbx_pattern_uncorrected_scaled, ACE_index_sum_score_scaled))
 
 #4. Retain subject IDs as row names while removing variables that will not be clustered 
 #4.1 Remove all variables except subject ID from the dataframe for clustering
@@ -100,11 +100,28 @@ risk_variable_clustering_data <- risk_variable_clustering_data %>%
 
 ### Generating Cluster Validation Indices
 
+In order to minimize run time, the following validation indices will be used to determine the optimal k (as opposed to utilizing all available metrics): 
+
+- **C Index**: a normalized sum of the distances between all the pairs of objects that belong to the same cluster; the normalization scheme, which is based on the minimum *Smin* and maximum *Smax* [distance sums in the dataset](https://www.sciencedirect.com/science/article/pii/S0169743924000571)
+    - is easy to compute and interpret, fast and efficient in terms of computational time, does not require any prior knowledge about the data or the number of clusters, works well with datasets of various shapes and sizes, and [can handle outliers well](https://www.sciencedirect.com/science/article/pii/S092523122400969X)
+- **Point-biserial**: represents the point-biserial [correlation coefficient](https://www.sciencedirect.com/topics/physics-and-astronomy/correlation-coefficient) between the pairwise distance matrix and a binary matrix consisting of 0/1 entries that indicate whether or not two objects are in the [same cluster](https://www.sciencedirect.com/science/article/pii/S0169743924000571#bib10), [has good sensitivity](https://www.sciencedirect.com/science/article/pii/S0169743924000571#sec4), and tends to both run quickly and [estimate the correct number of clusters in k-prototypes](https://doi.org/10.5445/KSP/1000098011/02)
+- **Silhouette Index**: defines a cluster membership score for each object. The membership score is calculated by comparing the distance of each object from the centroid of its cluster and its [minimum distance from the other cluster centroids](https://www.sciencedirect.com/science/article/pii/S0169743924000571)
+    - is [“an unambiguous optimal point determination”](https://www.sciencedirect.com/science/article/pii/S0169743924000571)
+- **Tau**: Kendall's rank [correlation coefficient](https://www.sciencedirect.com/topics/earth-and-planetary-sciences/correlation-coefficient) between the ranks, which are corrected for ties, assigned to the object pairs on the basis of their proximity, where similar object pairs are assigned the lower ranks, and the [binary vector in which a value of 0 is assigned to a pair of objects that belong to the same cluster and a value of 1 to a pair of objects that belong to different clusters](https://www.sciencedirect.com/science/article/pii/S0169743924000571#sec4)
+    - The computational formula of Tau index is where the term *t* in the denominator indicates the number of comparisons of two pairs of objects such that both pairs represent within cluster comparisons (i.e., within-cluster distances) or both pairs [arc between cluster comparisons (i.e., between-cluster distances)](https://www.sciencedirect.com/science/article/pii/S0169743924000571#sec4)
+    - also performs very well on k-prototypes [(but has highest run time)](https://doi.org/10.5445/KSP/1000098011/02)
+- **Gamma**: an adaptation of [Goodman and Kruskal's Gamma correlation index](https://www.tandfonline.com/doi/abs/10.1080/01621459.1975.10480256) to be used for [clustering applications](https://link.springer.com/article/10.1007/bf02294245); this is another measure of rank correlation whose maximum value 1 is obtained if there is no pair of objects in the same cluster, which is less similar than a pair of objects in different clusters
+    - [Also performs well](https://www.sciencedirect.com/science/article/pii/S0169743924000571#sec4)
+
 Based on initial benchmarking, parallelization of CPU cores (on local machine "Dell Latitude 5550"; HPC benchmarking not completed) actually results in decreased performance and 63.73% longer runtime. As such, iterative generation of validation metrics below will not be parallelized. 
 
-Based on test data (*n* = 100), estimated local machine runtime for this procedure is ~ 7.52 hours. 
+Moreover, based on test data (*n* = 100; same distributions as actual dataset), initial estimated local machine runtime for this procedure was ~ 7.52 hours. However, something that I did not account for is that most of the index calculations for clustering involves pairwise distances between each datapoint, requiring over 41.9 million computations for a dataset of 9,153 subjects, significantly more than for smaller datasets (e.g.,only ~4,950 pairs for \(n = 100\)). Testing multiple \(k\)-values (3:12) as we are also multiplies this cost, as each index is recomputed for each \(k\). Additionally, setting `nstart = 8` increases demands by running the clustering algorithm 8 times per \(k\) for robust results. As such, run time for increasing dataset n becomes lengthier by orders of magnitude, and not linearly. 
 
-```{r k validation indices, echo = FALSE, warning = FALSE}
+Because of this, just the first validation index in the list of indices to assess (C Index) using the first distance method (Huang) alone took 26 hrs 30 mins to complete. Though the computational power of HPC may be able to drastically reduce this runtime and eliminate the burden of having to keep my local machine on and running for > 265 hours for all 10 combinations of distance metric + validation index, it will not be feasible for initial clustering to generate all of these validation indices. 
+
+As such, given that the silhouette index is [“an unambiguous optimal point determination”](https://www.sciencedirect.com/science/article/pii/S0169743924000571) method, performance of each distance method + optimal k will be assessed using primarily the silhouette method for now (and potentially the point-biserial index [given its relatively quicker run time than other indices](https://doi.org/10.5445/KSP/1000098011/02)), followed by elbow plot examination and evaluation of additional k cluster performance. 
+
+```{r k validation indices, warning = FALSE}
 
 ## Generate Validation Indices to be Used in Determining Optimal k ##
 
@@ -113,7 +130,7 @@ Based on test data (*n* = 100), estimated local machine runtime for this procedu
 k_range <- 3:12
 
 #1.2 Define validation indices to generate during optimization
-validation_methods <- c("cindex", "gamma", "ptbiserial", "silhouette", "tau")
+validation_methods <- c("silhouette")
 
 #1.3 Define distance methods to be used during optimization
 distance_types <- c("huang", "gower")
@@ -160,7 +177,7 @@ for (distance in distance_types) {
     runtime_seconds <- as.numeric(difftime(end_time, start_time, units = "secs"))
     
     #2.1116 Print index runtime
-    cat("Validation index generation for", method, "statistic using", distance, "distance =", runtime_seconds, "seconds", "\n")
+    message("Validation index generation for ", method, "statistic using ", distance, "distance = ", round(runtime_seconds, 2), " seconds", "\n")
     
     #2.1117 Create a descriptive name for each index result
     result_name <- paste0(method, "_", distance, "_validation_results")
@@ -179,7 +196,7 @@ saveRDS(k_optimization_indices, file = "../../results/main_analysis/k_optimizati
 message("RDS file containing validation/optimization indices written successfully\n")
 
 #2.3 Save the run times for each validation index as a csv file
-write.csv("../../results/main_analysis/k_optimization_runtime_log.csv", row.names = FALSE)
+write.csv(runtime_log, "../../results/main_analysis/k_optimization_runtime_log.csv", row.names = FALSE)
 message("csv file containing run times for each validation index written successfully\n")
 
 ```
@@ -242,12 +259,7 @@ for (result_name in names(k_optimization_indices)) {
 #2. Compare the performance of each validation index to determine the optimal k value
 #2.1 Determine the superior distance method to use in generating clusters 
 #2.11 Define index evaluation rules
-index_rules <- c(
-  "cindex" = "min",
-  "gamma" = "max",
-  "ptbiserial" = "max",
-  "silhouette" = "max",
-  "tau" = "max")
+index_rules <- c("silhouette" = "max")
 
 #2.12 Initialize a data frame to store distance method comparisons
 distance_comparison <- data.frame(index = character(),
@@ -328,7 +340,7 @@ for (result_name in names(k_optimization_indices)) {
       #2.21231 Extract WSS values for each k
       kp_objects <- validation_result$kp_obj
       for (k_idx in seq_along(kp_objects)) {
-        k <- k_idx + 1
+        k <- kp_objects[[k_idx]][["k"]]
         wss <- kp_objects[[k_idx]]$object$tot.withinss
         cluster_validation_wss <- rbind(cluster_validation_wss, 
                              data.frame(method = method, 
@@ -345,7 +357,7 @@ cluster_validation_elbow_plot <- ggplot(cluster_validation_wss, aes(x = k, y = T
   geom_line(aes(color = method), size = 1) +
   geom_point(aes(color = method), size = 2) +
   facet_wrap(~ method, scales = "free_y", ncol = 2) +
-  labs(title = "Facet Elbow Plot for Within-Cluster Sum of Squares (WSS)",
+  labs(title = "Elbow Plot for Within-Cluster Sum of Squares (WSS)",
        x = "Number of Clusters (k)",
        y = "Total Within-Cluster Sum of Squares",
        color = "Clustering method") +
@@ -379,12 +391,12 @@ cluster_validation_silhouette_plot <- ggplot(superior_distance_silhouette_plot_d
 ```
 
 1. **Optimal k and Validation Indices:**
-   - The code evaluates multiple clustering validation indices (`cindex`, `dunn`, `gamma`, `gplus`, `mcclain`, `ptbiserial`, `silhouette`, `tau`) to identify the optimal number of clusters (`k`) for each combination of clustering method and distance metric.
+   - The code evaluates the `silhouette` validation index to identify the optimal number of clusters (`k`) for each combination of clustering method and distance metric.
    - A summary of the **optimal k** values and corresponding **index scores** is generated for both Gower and Huang distance metrics.
 
 2. **Comparison of Distance Metrics:**
-   - Each index is analyzed to determine which distance metric (Gower or Huang) performs better based on predefined optimization rules (`min` or `max`).
-   - The superior distance metric is identified based on its frequency of outperforming the other metric across all validation indices.
+   - Each  index is analyzed to determine which distance metric (Gower or Huang) performs better based on predefined optimization rules (`max` value).
+   - The superior distance metric is identified based on its frequency of outperforming the other on the indices.
    - **Superior Distance Metric:** `r summary_results$distance_method`
      - To note, this is according to both the `kproto_validation` function and the subjective, arbitrary determination that the most optimal distance method can be defined by the one with the larger number of superior (lower or higher; index dependent) validation indices
    - **Summary of Optimal k Values (Superior Distance):**
