@@ -27,8 +27,6 @@ The following report contains information regarding the:
   3. Skewness + appropriateness of the mean as the measure of central tendency for continuous variables
   
   4. Shape of each variables' distribution
-  
-  5. A summary of the overall availability of variables of interest to the current study
 
 ```{r environment, echo = FALSE, include = FALSE, warning = FALSE}
 
@@ -37,7 +35,7 @@ library(knitr)
 library(dplyr)
 library(tidyr)
 library(ggplot2)
-library(skimr)
+library(moments)
 options(scipen = 999, digits = 8)
 
 # Read in parent report ksads-comp data
@@ -84,7 +82,7 @@ if (unique_count >= 11800 && unique_count <= 12000) {
 #2. Clean the merged data 
 #2.1 Retain only columns of interest
 outcome_data_merged_trimmed <- outcome_data_merged %>% 
-  dplyr::select(c(src_subject_id, eventname, cbcl_scr_dsm5_depress_t, cbcl_scr_dsm5_anxdisord_t, ksads2_2_937_p, ksads2_2_800_p, ksads2_2_798_p, ksads2_2_799_p, ksads2_2_798_t, ksads2_2_799_t, ksads2_2_800_t, ksads2_2_937_t, ksads2_2_801_p, ksads2_2_802_p, ksads2_2_931_p,ksads2_2_936_p, ksads2_2_931_t, ksads2_2_936_t,ksads2_2_802_t, ksads2_2_801_t, ksads2_2_803_p, ksads2_2_933_p, ksads2_2_803_t, ksads2_2_933_t, ksads2_23_917_p, ksads2_23_918_p, ksads2_23_919_p, ksads2_23_920_p, ksads2_23_921_p, ksads2_23_906_p, ksads2_23_907_p, ksads2_23_908_p, ksads2_23_909_p, ksads2_23_910_p, ksads2_23_917_t, ksads2_23_918_t, ksads2_23_919_t, ksads2_23_920_t, ksads2_23_921_t, ksads2_23_906_t, ksads2_23_907_t, ksads2_23_908_t, ksads2_23_909_t, ksads2_23_910_t, ksads2_23_923_p, ksads2_23_924_p, ksads2_23_925_p, ksads2_23_912_p, ksads2_23_913_p, ksads2_23_914_p, ksads2_23_923_t, ksads2_23_924_t, ksads2_23_925_t, ksads2_23_912_t, ksads2_23_913_t, ksads2_23_914_t, ksads2_23_905_p, ksads2_23_916_p, ksads2_23_905_t, ksads2_23_916_t, cbcl_scr_syn_attention_t, cbcl_scr_syn_aggressive_t))
+  dplyr::select(c(src_subject_id, eventname, cbcl_scr_dsm5_depress_t, cbcl_scr_dsm5_anxdisord_t, cbcl_scr_syn_attention_t, cbcl_scr_syn_aggressive_t, cbcl_scr_dsm5_depress_nm, cbcl_scr_dsm5_anxdisord_nm, cbcl_scr_syn_attention_nm, cbcl_scr_syn_aggressive_nm, ksads2_2_937_p, ksads2_2_800_p, ksads2_2_798_p, ksads2_2_799_p, ksads2_2_798_t, ksads2_2_799_t, ksads2_2_800_t, ksads2_2_937_t, ksads2_2_801_p, ksads2_2_802_p, ksads2_2_931_p,ksads2_2_936_p, ksads2_2_931_t, ksads2_2_936_t,ksads2_2_802_t, ksads2_2_801_t, ksads2_2_803_p, ksads2_2_933_p, ksads2_2_803_t, ksads2_2_933_t, ksads2_23_917_p, ksads2_23_918_p, ksads2_23_919_p, ksads2_23_920_p, ksads2_23_921_p, ksads2_23_906_p, ksads2_23_907_p, ksads2_23_908_p, ksads2_23_909_p, ksads2_23_910_p, ksads2_23_917_t, ksads2_23_918_t, ksads2_23_919_t, ksads2_23_920_t, ksads2_23_921_t, ksads2_23_906_t, ksads2_23_907_t, ksads2_23_908_t, ksads2_23_909_t, ksads2_23_910_t, ksads2_23_923_p, ksads2_23_924_p, ksads2_23_925_p, ksads2_23_912_p, ksads2_23_913_p, ksads2_23_914_p, ksads2_23_923_t, ksads2_23_924_t, ksads2_23_925_t, ksads2_23_912_t, ksads2_23_913_t, ksads2_23_914_t, ksads2_23_905_p, ksads2_23_916_p, ksads2_23_905_t, ksads2_23_916_t))
 
 #2.2 Turn all instances of empty, missing, 555, and 999 to NA; and 888 to 0 in KSADS columns
 outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>%
@@ -95,19 +93,397 @@ outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>%
   filter(eventname == "4_year_follow_up_y_arm_1")
 
 #3. Preliminarily create relevant outcome variables of interest
-#3.1 Suicidal Thinking
+#3.1 Disorder Variables 
+#3.11 Bipolar I Disorder
+# Create the bipolar_I_dx variable
 outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>%
-  mutate(suicidal_thinking = case_when(
-    if_any(starts_with("ksads"), ~ . == 1) ~ 1,   
-    if_all(starts_with("ksads"), ~ . == 0) ~ 0,  
-    TRUE ~ NA_real_                              
-  ))
+  mutate(
+    bipolar_I_dx = case_when(
+      rowSums(select(., c(
+        "ksads2_2_937_p", "ksads2_2_800_p", "ksads2_2_798_p", 
+        "ksads2_2_799_p", "ksads2_2_798_t", "ksads2_2_799_t", 
+        "ksads2_2_800_t", "ksads2_2_937_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1, # Any variable == 1
+      rowSums(!is.na(select(., c(
+        "ksads2_2_937_p", "ksads2_2_800_p", "ksads2_2_798_p", 
+        "ksads2_2_799_p", "ksads2_2_798_t", "ksads2_2_799_t", 
+        "ksads2_2_800_t", "ksads2_2_937_t"
+      )))) == 0 ~ NA_real_, # All variables are NA
+      TRUE ~ 0               # All variables == 0
+    )
+  )
 
-#3.2 Suicidal Behavior
+#3.12 Bipolar II Disorder
+outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>%
+  mutate(
+    bipolar_II_dx = case_when(
+      rowSums(select(., c(
+        "ksads2_2_801_p", "ksads2_2_802_p", "ksads2_2_931_p",
+        "ksads2_2_936_p", "ksads2_2_931_t", "ksads2_2_936_t",
+        "ksads2_2_802_t", "ksads2_2_801_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1, # Any variable == 1
+      rowSums(!is.na(select(., c(
+        "ksads2_2_801_p", "ksads2_2_802_p", "ksads2_2_931_p",
+        "ksads2_2_936_p", "ksads2_2_931_t", "ksads2_2_936_t",
+        "ksads2_2_802_t", "ksads2_2_801_t"
+      )))) == 0 ~ NA_real_, # All variables are NA
+      TRUE ~ 0               # All variables == 0
+    )
+  )
 
+#3.13 Any Bipolar Disorder
+outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>%
+  mutate(
+    any_bipolar_dx = case_when(
+      rowSums(select(., c(
+        "bipolar_I_dx", "bipolar_II_dx", "ksads2_2_803_p",
+        "ksads2_2_933_p", "ksads2_2_803_t", "ksads2_2_933_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1, # Any variable == 1
+      rowSums(!is.na(select(., c(
+        "bipolar_I_dx", "bipolar_II_dx", "ksads2_2_803_p",
+        "ksads2_2_933_p", "ksads2_2_803_t", "ksads2_2_933_t"
+      )))) == 0 ~ NA_real_, # All variables are NA
+      TRUE ~ 0               # All variables == 0
+    )
+  )
 
-#3.3 Non-Suicidal Self Injury
+#3.2 Suicide & self-harm related variables
+#3.21 Suicidal Thinking
+outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>%
+  mutate(
+    suicidal_thinking = case_when(
+      rowSums(select(., c(
+        "ksads2_23_917_p", "ksads2_23_918_p", "ksads2_23_919_p", 
+        "ksads2_23_920_p", "ksads2_23_921_p", "ksads2_23_906_p", 
+        "ksads2_23_907_p", "ksads2_23_908_p", "ksads2_23_909_p", 
+        "ksads2_23_910_p", "ksads2_23_917_t", "ksads2_23_918_t", 
+        "ksads2_23_919_t", "ksads2_23_920_t", "ksads2_23_921_t", 
+        "ksads2_23_906_t", "ksads2_23_907_t", "ksads2_23_908_t", 
+        "ksads2_23_909_t", "ksads2_23_910_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1, # Any variable == 1
+      rowSums(!is.na(select(., c(
+        "ksads2_23_917_p", "ksads2_23_918_p", "ksads2_23_919_p", 
+        "ksads2_23_920_p", "ksads2_23_921_p", "ksads2_23_906_p", 
+        "ksads2_23_907_p", "ksads2_23_908_p", "ksads2_23_909_p", 
+        "ksads2_23_910_p", "ksads2_23_917_t", "ksads2_23_918_t", 
+        "ksads2_23_919_t", "ksads2_23_920_t", "ksads2_23_921_t", 
+        "ksads2_23_906_t", "ksads2_23_907_t", "ksads2_23_908_t", 
+        "ksads2_23_909_t", "ksads2_23_910_t"
+      )))) == 0 ~ NA_real_, # All variables are NA
+      TRUE ~ 0               # All variables == 0
+    )
+  )
 
+#3.22 Suicide Attempt (i.e., Suicidal Behavior)
+# Create the suicide_attempt variable
+outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>%
+  mutate(
+    suicide_attempt = case_when(
+      rowSums(select(., c(
+        "ksads2_23_923_p", "ksads2_23_924_p", "ksads2_23_925_p", 
+        "ksads2_23_912_p", "ksads2_23_913_p", "ksads2_23_914_p", 
+        "ksads2_23_923_t", "ksads2_23_924_t", "ksads2_23_925_t", 
+        "ksads2_23_912_t", "ksads2_23_913_t", "ksads2_23_914_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1, # Any variable == 1
+      rowSums(!is.na(select(., c(
+        "ksads2_23_923_p", "ksads2_23_924_p", "ksads2_23_925_p", 
+        "ksads2_23_912_p", "ksads2_23_913_p", "ksads2_23_914_p", 
+        "ksads2_23_923_t", "ksads2_23_924_t", "ksads2_23_925_t", 
+        "ksads2_23_912_t", "ksads2_23_913_t", "ksads2_23_914_t"
+      )))) == 0 ~ NA_real_, # All variables are NA
+      TRUE ~ 0               # All variables == 0
+    )
+  )
+
+#3.23 Non-Suicidal Self Injury
+outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>%
+  mutate(
+    nssi = case_when(
+      rowSums(select(., c(
+        "ksads2_23_905_p", "ksads2_23_916_p", "ksads2_23_905_t",
+        "ksads2_23_916_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1, # Any variable == 1
+      rowSums(!is.na(select(., c(
+        "ksads2_23_905_p", "ksads2_23_916_p", "ksads2_23_905_t",
+        "ksads2_23_916_t"
+      )))) == 0 ~ NA_real_, # All variables are NA
+      TRUE ~ 0               # All variables == 0
+    )
+  )
 
 ```
 
+## 1. Integrity of the Data
+
+## 1. Define the N, percent, and range of outcome variables of interest at the 4Y assessment timepoint
+
+```{r EDA 1, echo = FALSE, warning = FALSE}
+
+## Exploratory Data Analysis ##
+
+#1. Define the N, percent, and range of outcome variables of interest at the 4Y assessment timepoint
+#1.1 Define the columns to analyze
+#1.11 Categorical columns to analyze
+categorical_columns <- c("bipolar_I_dx", "bipolar_II_dx", "any_bipolar_dx", "suicidal_thinking", "suicide_attempt", "nssi")
+
+#1.12 Continuous columns to analyze
+continuous_columns <- c("cbcl_scr_dsm5_depress_t", "cbcl_scr_dsm5_anxdisord_t", "cbcl_scr_syn_attention_t", "cbcl_scr_syn_aggressive_t")
+
+#1.13 Continuous missing variable columns to analyze
+missing_columns <- c("cbcl_scr_dsm5_depress_nm", "cbcl_scr_dsm5_anxdisord_nm", "cbcl_scr_syn_attention_nm", "cbcl_scr_syn_aggressive_nm")
+
+#1.2 Create a function to compute EDA metrics for both categorical and continuous columns
+get_missingness_metrics <- function(data, categorical_columns, continuous_columns, missing_columns) {
+  
+  #1.21 Helper function for categorical columns
+  get_categorical_metrics <- function(column_name) {
+    column_data <- data[[column_name]]
+    n_non_na <- sum(!is.na(column_data) & column_data != "")
+    percent_non_na <- (n_non_na / nrow(data)) * 100
+    unique_values <- unique(column_data[!is.na(column_data) & column_data != ""])
+    list(
+      column = column_name,
+      n_non_na = n_non_na,
+      percent_non_na = percent_non_na,
+      range_or_unique = unique_values
+    )
+  }
+  
+  #1.22 Helper function for continuous columns
+  get_continuous_metrics <- function(column_name, missing_column_name) {
+    column_data <- data[[column_name]]
+    missing_data <- data[[missing_column_name]]
+    n_non_na <- sum(!is.na(column_data) & column_data != "")
+    percent_non_na <- (n_non_na / nrow(data)) * 100
+    value_range <- range(column_data, na.rm = TRUE)
+    n_missing_scores <- sum(missing_data > 1, na.rm = TRUE)
+    list(
+      column = column_name,
+      n_non_na = n_non_na,
+      percent_non_na = percent_non_na,
+      range_or_unique = value_range,
+      n_missing_scores = n_missing_scores
+    )
+  }
+  
+  #1.23 Process categorical columns
+  categorical_metrics <- lapply(categorical_columns, get_categorical_metrics)
+  
+  #1.24 Process continuous columns with missing value checks
+  continuous_metrics <- mapply(
+    get_continuous_metrics,
+    continuous_columns,
+    missing_columns,
+    SIMPLIFY = FALSE
+  )
+  
+  #1.25 Combine results into a single list
+  metrics <- c(categorical_metrics, continuous_metrics)
+  
+  #1.26 Convert to a dataframe for printing in output
+  outcome_integrity_metrics <- do.call(rbind, lapply(metrics, function(x) {
+    data.frame(
+      column = x$column,
+      n_non_na = x$n_non_na,
+      percent_non_na = x$percent_non_na,
+      range_or_unique = I(list(x$range_or_unique)),
+      n_missing_scores = ifelse(is.null(x$n_missing_scores), NA, x$n_missing_scores)
+    )
+  }))
+  
+  return(outcome_integrity_metrics)
+}
+
+#1.3 Apply the function to compute EDA metrics for both categorical and continuous columns to the outcome variable data
+outcome_variable_integrity <- get_missingness_metrics(outcome_data_merged_trimmed, categorical_columns, continuous_columns, missing_columns)
+
+# Print the results
+kable(outcome_variable_integrity, col.names = c("Variable", "N Non-Missing", "Percent Non-Missing", "Range/Unique Values", "Missing Scores > 1"), digits = 2, row.names = FALSE)
+
+```
+
+## 2. Visually and Quantitatively Assess for any Outliers in the Data
+
+```{r EDA 2, echo = FALSE, warning = FALSE}
+
+## Exploratory Data Analysis ##
+
+#2. Visually and Quantitatively Assess for any Outliers in the Data
+#2.1 Create boxplots with outlier indicators for continuous variables in the dataset
+#2.11 Filter only continuous variables
+continuous_outcome_variables <- outcome_data_merged_trimmed %>%
+  dplyr::select(cbcl_scr_dsm5_depress_t, cbcl_scr_dsm5_anxdisord_t, cbcl_scr_syn_attention_t, cbcl_scr_syn_aggressive_t) %>%
+  gather(key = "Variable", value = "Value")
+
+#2.12 Create boxplot with facets for continuous variables
+continuous_outcome_variables_boxplot <- ggplot(continuous_outcome_variables, aes(x = Variable, y = Value)) + 
+  geom_boxplot(fill = "lightblue", color = "darkblue") + 
+  facet_wrap(~ Variable, scales = "free") + 
+  theme_minimal() + 
+  theme(axis.text.x = element_blank(),
+        strip.text = element_text(size = 6, face = "bold")) +
+  labs(title = "Boxplots of Continuous Outcome Variables",
+       y = "Values",
+       x = "")
+
+#2.13 Print the plot
+print(continuous_outcome_variables_boxplot)
+
+```
+
+Based on the boxplots of the continuous (secondary) outcome variables, it does not appear as though any values are out of range or otherwise unexpected/impactful outliers.
+
+## 3. Appropriateness of the Mean as a Measure of Central Tendency
+
+While clustering methods used in this study do not require parametric assumptions, the secondary continuous outcome measures - `cbcl_scr_dsm5_depress_t`, `cbcl_scr_dsm5_anxdisord_t`, `cbcl_scr_syn_attention_t`, and `cbcl_scr_syn_aggressive_t` - will serve as dependent variables in statistical models that do. Therefore, examining their skewness is essential to assess their symmetry and appropriateness for said analyses.
+
+Below, skewness values for the four secondary outcome measures are presented.
+
+```{r EDA 3, echo = FALSE, warning = FALSE}
+
+## Exploratory Data Analysis ##
+
+#3.1 Calculate skewness for secondary continuous outcome measures
+outcome_measures_skewness_table <- outcome_data_merged_trimmed %>%
+  dplyr::select(
+    cbcl_scr_dsm5_depress_t,
+    cbcl_scr_dsm5_anxdisord_t,
+    cbcl_scr_syn_attention_t,
+    cbcl_scr_syn_aggressive_t
+  ) %>%
+  summarise(across(everything(), ~ moments::skewness(.x, na.rm = TRUE))) %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Skewness")
+
+#3.2 Display the skewness table
+kable(outcome_measures_skewness_table, caption = "Skewness Values for Secondary Continuous Outcome Measures", digits = 2)
+
+```
+
+Evidenced by the table above, the CBCL aggression problems scale score (`cbcl_scr_syn_aggressive_t`) may exhibit problematic skew (i.e., > 3). When assessing results of the linear mixed effects models, this will need to be taken into account, and applicability of transformation of variable (e.g., through box-cox or log transform) should be evaluated.
+
+## 4. Shape of Each Variables' Distribution
+
+The shape of the distribution for each continuous variable and frequency distribution of each categorical variable is outlined below, both in terms of summary statistics derived from and a graphical histogram with density overlay of relevant data:
+
+```{r EDA 4, echo = FALSE, warning = FALSE, fig.height=10, fig.width=10}
+
+## Exploratory Data Analysis ##
+
+#4. Create summary tables and visualizations for the distributions of categorical and continuous variables included as outcomes
+#4.1 Create a summary table for continuous and categorical variables
+summarize_data <- function(data, continuous_cols, categorical_cols) {
+  summary_list <- list()
+  
+  #4.11 Continuous variables summary
+  for (col in continuous_cols) {
+    column_data <- data[[col]]
+    valid_values <- column_data[!is.na(column_data)]
+    summary_list[[col]] <- data.frame(
+      Variable = col,
+      Type = "Continuous",
+      Mean = mean(valid_values, na.rm = TRUE),
+      Median = median(valid_values, na.rm = TRUE),
+      SD = sd(valid_values, na.rm = TRUE),
+      Min = min(valid_values, na.rm = TRUE),
+      Max = max(valid_values, na.rm = TRUE),
+      Levels = NA,
+      Frequencies = NA,
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  #4.12 Categorical variables summary
+  for (col in categorical_cols) {
+    column_data <- data[[col]]
+    freq_table <- table(column_data, useNA = "no")
+    summary_list[[col]] <- data.frame(
+      Variable = col,
+      Type = "Categorical",
+      Mean = NA,
+      Median = NA,
+      SD = NA,
+      Min = NA,
+      Max = NA,
+      Levels = paste(names(freq_table), collapse = ", "),
+      Frequencies = paste(freq_table, collapse = ", "),
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  do.call(rbind, summary_list)
+}
+
+#4.2 Generate the summary table
+summary_table <- summarize_data(outcome_data_merged_trimmed, continuous_columns, categorical_columns)
+
+#4.3 Print the summary table in the RMD
+kable(summary_table, caption = "Summary Statistics for Risk Model Variables", row.names = FALSE)
+
+#4.4 Create plots visualizing distributions of risk variables
+#4.41 Generate a combined dataset with an indicator for variable type
+plot_data <- list()
+
+#4.42 Add continuous variables
+for (col in continuous_columns) {
+  plot_data[[col]] <- outcome_data_merged_trimmed %>%
+    select(Value = !!sym(col)) %>%
+    mutate(Type = "Continuous", Variable = col)
+}
+
+#4.43 Add categorical variables
+for (col in categorical_columns) {
+  plot_data[[col]] <- outcome_data_merged_trimmed %>%
+    select(Value = !!sym(col)) %>%
+    mutate(Type = "Categorical", Variable = col)
+}
+
+#4.44 Combine all into a single data frame
+plot_data_combined <- bind_rows(plot_data)
+
+#4.441 Generate facet plot for continuous variables
+continuous_plot <- ggplot(
+  plot_data_combined %>% filter(Type == "Continuous"),
+  aes(x = Value)) +
+  geom_histogram(aes(y = ..density..), binwidth = 1, fill = "blue", alpha = 0.6, color = "black") +
+  geom_density(color = "red", size = 1, adjust = 1.5) +
+  facet_wrap(~Variable, ncol = 3, scales = "free") +
+  theme_minimal() +
+  labs(title = "Distributions of Continuous Variables",
+       x = "Value",
+       y = "Density") +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    strip.text = element_text(size = 8),
+    panel.spacing = unit(1, "lines"))
+
+#4.442 Print the continuous variable plot
+print(continuous_plot)
+
+#4.451 Generate facet plot for categorical variables
+categorical_plot <- ggplot(
+  plot_data_combined %>% filter(Type == "Categorical"),
+  aes(x = as.factor(Value))) +  
+  geom_bar(fill = "skyblue", color = "black", alpha = 0.8) +
+  geom_text(
+    stat = "count", 
+    aes(label = ..count..),  
+    vjust = -0.5,            
+    size = 3                
+  ) +
+  facet_wrap(~Variable, ncol = 3, scales = "free") +
+  theme_minimal() +
+  labs(title = "Distributions of Categorical Variables",
+       x = "Categories",
+       y = "Count") +
+  scale_x_discrete(limits = c("0", "1"), labels = c("No", "Yes")) + 
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    strip.text = element_text(size = 8),
+    panel.spacing = unit(1, "lines"))
+
+#4.452 Print the categorical variable plot
+print(categorical_plot)
+
+```
+
+Distributions of continuous variables and rates of categorical variables are shown above. While continuous variables exhibit noticeable skew, and the CBCL aggression problem scale results will need to be interpreted with caution/re-evaluated during modeling, no other problematic distributions are not noted herein. 
