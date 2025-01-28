@@ -1,0 +1,228 @@
+---
+title: "Mood Disorder & Suicidality ~ Clustered Risk Group Modeling"
+author: "Sam A. Sievertsen"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    self_contained: true
+---
+
+```{r global, include = FALSE}
+
+# Set global env variables
+knitr::opts_chunk$set(warning = FALSE, message = NA, comment = "")
+
+```
+
+```{r environment, echo = FALSE, include = FALSE, warning = FALSE}
+
+# Load necessary packages + environmental variables
+library(knitr)
+library(kableExtra)
+library(dplyr)
+library(tidyr)
+library(easystats)
+library(cluster)
+library(clustMixType)
+library(ggplot2)
+library(plotly)
+library(lme4)
+library(lmerTest)
+library(car)
+options(scipen = 999, digits = 8)
+
+# Read in clustered risk variable data
+clustered_risk_variable_data <- read.csv("../../data/data_processed/clustered_risk_variable_data.csv") %>%
+  dplyr::select(-ends_with("_scaled"), -eventname) %>%
+  rename_with(~ sub("^cbcl_", "baseline_cbcl_", .), starts_with("cbcl_"))
+
+# Read in outcome variable data
+# Parent report ksads-comp data
+parent_ksads_data <- read.csv("../../data/data_raw/mh_p_ksads_ss.csv")
+
+# Youth report ksads-comp data
+youth_ksads_data <- read.csv("../../data/data_raw/mh_y_ksads_ss.csv")
+
+# cbcl data
+cbcl_data <- read.csv("../../data/data_raw/mh_p_cbcl.csv")
+
+```
+
+## Data Wrangling for Analysis
+
+```{r data wrangling, warning = FALSE}
+
+## Data Wrangling ##
+
+#1. Clean + merge the outcome data
+#1.1 Collapse the data frames containing outcome variables of interest
+outcome_data_merged <- Reduce(
+  function(x, y)
+    merge(x, y,
+      by = c("src_subject_id", "eventname"),
+      all = TRUE),
+  list(parent_ksads_data, youth_ksads_data, cbcl_data))
+
+#1.2 Clean the merged data 
+#1.21 Retain only columns of interest
+outcome_data_merged_trimmed <- outcome_data_merged %>% 
+  dplyr::select(c(src_subject_id, eventname, cbcl_scr_dsm5_depress_t, cbcl_scr_dsm5_anxdisord_t, cbcl_scr_syn_attention_t, cbcl_scr_syn_aggressive_t, ksads2_2_937_p, ksads2_2_800_p, ksads2_2_798_p, ksads2_2_799_p, ksads2_2_798_t, ksads2_2_799_t, ksads2_2_800_t, ksads2_2_937_t, ksads2_2_801_p, ksads2_2_802_p, ksads2_2_931_p,ksads2_2_936_p, ksads2_2_931_t, ksads2_2_936_t,ksads2_2_802_t, ksads2_2_801_t, ksads2_2_803_p, ksads2_2_933_p, ksads2_2_803_t, ksads2_2_933_t, ksads2_23_917_p, ksads2_23_918_p, ksads2_23_919_p, ksads2_23_920_p, ksads2_23_921_p, ksads2_23_906_p, ksads2_23_907_p, ksads2_23_908_p, ksads2_23_909_p, ksads2_23_910_p, ksads2_23_917_t, ksads2_23_918_t, ksads2_23_919_t, ksads2_23_920_t, ksads2_23_921_t, ksads2_23_906_t, ksads2_23_907_t, ksads2_23_908_t, ksads2_23_909_t, ksads2_23_910_t, ksads2_23_923_p, ksads2_23_924_p, ksads2_23_925_p, ksads2_23_912_p, ksads2_23_913_p, ksads2_23_914_p, ksads2_23_923_t, ksads2_23_924_t, ksads2_23_925_t, ksads2_23_912_t, ksads2_23_913_t, ksads2_23_914_t, ksads2_23_905_p, ksads2_23_916_p, ksads2_23_905_t, ksads2_23_916_t))
+
+#1.22 Turn all instances of empty, missing, 555, and 999 to NA; and 888 to 0 in KSADS columns
+outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>%
+  mutate(across(starts_with("ksads"), ~ na_if(replace(., . %in% c(555, 999, ""), NA), 888) %>% replace_na(0)))
+
+#1.23 Filter the trimmed data to only contain rows at the baseline assessment timepoint
+outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>% 
+  filter(eventname == "4_year_follow_up_y_arm_1")
+
+#1.3 Create relevant outcome variables of interest
+#1.31 Disorder Variables 
+#1.311 Bipolar I Disorder
+# Create the bipolar_I_dx variable
+outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>%
+  mutate(
+    bipolar_I_dx = case_when(
+      rowSums(select(., c(
+        "ksads2_2_937_p", "ksads2_2_800_p", "ksads2_2_798_p", 
+        "ksads2_2_799_p", "ksads2_2_798_t", "ksads2_2_799_t", 
+        "ksads2_2_800_t", "ksads2_2_937_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1, # Any variable == 1
+      rowSums(!is.na(select(., c(
+        "ksads2_2_937_p", "ksads2_2_800_p", "ksads2_2_798_p", 
+        "ksads2_2_799_p", "ksads2_2_798_t", "ksads2_2_799_t", 
+        "ksads2_2_800_t", "ksads2_2_937_t"
+      )))) == 0 ~ NA_real_, # All variables are NA
+      TRUE ~ 0               # All variables == 0
+    )
+  )
+
+#1.312 Bipolar II Disorder
+outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>%
+  mutate(
+    bipolar_II_dx = case_when(
+      rowSums(select(., c(
+        "ksads2_2_801_p", "ksads2_2_802_p", "ksads2_2_931_p",
+        "ksads2_2_936_p", "ksads2_2_931_t", "ksads2_2_936_t",
+        "ksads2_2_802_t", "ksads2_2_801_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1, # Any variable == 1
+      rowSums(!is.na(select(., c(
+        "ksads2_2_801_p", "ksads2_2_802_p", "ksads2_2_931_p",
+        "ksads2_2_936_p", "ksads2_2_931_t", "ksads2_2_936_t",
+        "ksads2_2_802_t", "ksads2_2_801_t"
+      )))) == 0 ~ NA_real_, # All variables are NA
+      TRUE ~ 0               # All variables == 0
+    )
+  )
+
+#1.313 Any Bipolar Disorder
+outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>%
+  mutate(
+    any_bipolar_dx = case_when(
+      rowSums(select(., c(
+        "bipolar_I_dx", "bipolar_II_dx", "ksads2_2_803_p",
+        "ksads2_2_933_p", "ksads2_2_803_t", "ksads2_2_933_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1, # Any variable == 1
+      rowSums(!is.na(select(., c(
+        "bipolar_I_dx", "bipolar_II_dx", "ksads2_2_803_p",
+        "ksads2_2_933_p", "ksads2_2_803_t", "ksads2_2_933_t"
+      )))) == 0 ~ NA_real_, # All variables are NA
+      TRUE ~ 0               # All variables == 0
+    )
+  )
+
+#1.32 Suicide & self-harm related variables
+#1.321 Suicidal Thinking
+outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>%
+  mutate(
+    suicidal_thinking = case_when(
+      rowSums(select(., c(
+        "ksads2_23_917_p", "ksads2_23_918_p", "ksads2_23_919_p", 
+        "ksads2_23_920_p", "ksads2_23_921_p", "ksads2_23_906_p", 
+        "ksads2_23_907_p", "ksads2_23_908_p", "ksads2_23_909_p", 
+        "ksads2_23_910_p", "ksads2_23_917_t", "ksads2_23_918_t", 
+        "ksads2_23_919_t", "ksads2_23_920_t", "ksads2_23_921_t", 
+        "ksads2_23_906_t", "ksads2_23_907_t", "ksads2_23_908_t", 
+        "ksads2_23_909_t", "ksads2_23_910_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1, # Any variable == 1
+      rowSums(!is.na(select(., c(
+        "ksads2_23_917_p", "ksads2_23_918_p", "ksads2_23_919_p", 
+        "ksads2_23_920_p", "ksads2_23_921_p", "ksads2_23_906_p", 
+        "ksads2_23_907_p", "ksads2_23_908_p", "ksads2_23_909_p", 
+        "ksads2_23_910_p", "ksads2_23_917_t", "ksads2_23_918_t", 
+        "ksads2_23_919_t", "ksads2_23_920_t", "ksads2_23_921_t", 
+        "ksads2_23_906_t", "ksads2_23_907_t", "ksads2_23_908_t", 
+        "ksads2_23_909_t", "ksads2_23_910_t"
+      )))) == 0 ~ NA_real_, # All variables are NA
+      TRUE ~ 0               # All variables == 0
+    )
+  )
+
+#1.322 Suicide Attempt (i.e., Suicidal Behavior)
+outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>%
+  mutate(
+    suicide_attempt = case_when(
+      rowSums(select(., c(
+        "ksads2_23_923_p", "ksads2_23_924_p", "ksads2_23_925_p", 
+        "ksads2_23_912_p", "ksads2_23_913_p", "ksads2_23_914_p", 
+        "ksads2_23_923_t", "ksads2_23_924_t", "ksads2_23_925_t", 
+        "ksads2_23_912_t", "ksads2_23_913_t", "ksads2_23_914_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1, # Any variable == 1
+      rowSums(!is.na(select(., c(
+        "ksads2_23_923_p", "ksads2_23_924_p", "ksads2_23_925_p", 
+        "ksads2_23_912_p", "ksads2_23_913_p", "ksads2_23_914_p", 
+        "ksads2_23_923_t", "ksads2_23_924_t", "ksads2_23_925_t", 
+        "ksads2_23_912_t", "ksads2_23_913_t", "ksads2_23_914_t"
+      )))) == 0 ~ NA_real_, # All variables are NA
+      TRUE ~ 0               # All variables == 0
+    )
+  )
+
+#1.323 Non-Suicidal Self Injury
+outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>%
+  mutate(
+    nssi = case_when(
+      rowSums(select(., c(
+        "ksads2_23_905_p", "ksads2_23_916_p", "ksads2_23_905_t",
+        "ksads2_23_916_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1, # Any variable == 1
+      rowSums(!is.na(select(., c(
+        "ksads2_23_905_p", "ksads2_23_916_p", "ksads2_23_905_t",
+        "ksads2_23_916_t"
+      )))) == 0 ~ NA_real_, # All variables are NA
+      TRUE ~ 0               # All variables == 0
+    )
+  )
+
+#2. Merge the clustered risk data with the outcome data
+#2.1 Create a version of the outcome data containing only columns of interest
+outcome_data_to_merge <- outcome_data_merged_trimmed %>% 
+  dplyr::select(c(src_subject_id, eventname, bipolar_I_dx, bipolar_II_dx, any_bipolar_dx, suicidal_thinking, suicide_attempt, nssi, cbcl_scr_dsm5_depress_t, cbcl_scr_dsm5_anxdisord_t, cbcl_scr_syn_attention_t, cbcl_scr_syn_aggressive_t))
+
+#2.2 Left join the outcome data with the clustered data
+bipolar_suicidality_risk_analysis_data <- left_join(outcome_data_to_merge, clustered_risk_variable_data)
+
+```
+
+## Assessment of the Inclusion of Additional Outcome Variable Timepoints
+
+```{r}
+
+# Chi square to test whether there is a difference in who is missing data on the basis of cluster membership
+
+```
+
+## Potential inclusion of additional outcome datapoints
+
+
+
+## Statistical Analysis
+
+```{r}
+
+# logistic regression for binary diagnostic outcomes 
+
+# lmer -> ANCOVA -> post-hoc for continuous secondary outcomes
+
+```
+

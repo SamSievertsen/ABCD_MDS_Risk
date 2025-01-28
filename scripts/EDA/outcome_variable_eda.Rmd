@@ -175,7 +175,6 @@ outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>%
   )
 
 #3.22 Suicide Attempt (i.e., Suicidal Behavior)
-# Create the suicide_attempt variable
 outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>%
   mutate(
     suicide_attempt = case_when(

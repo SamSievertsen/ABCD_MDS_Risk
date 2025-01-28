@@ -121,307 +121,408 @@ Because of this, just the first validation index in the list of indices to asses
 
 As such, given that the silhouette index is [“an unambiguous optimal point determination”](https://www.sciencedirect.com/science/article/pii/S0169743924000571) method, performance of each distance method + optimal k will be assessed using primarily the silhouette method for now (and potentially the point-biserial index [given its relatively quicker run time than other indices](https://doi.org/10.5445/KSP/1000098011/02)), followed by elbow plot examination and evaluation of additional k cluster performance. 
 
+Additionally, given the tendency of initial versions of the clustering algorithm tended to over-weight the separation of the clusters based on the categorical variables, we made the following changes to this iteration of the script relative to the previous for optimizing the k value, distance method, and lambda parameters for the current studies clustering: 
+
+1. ***Extended Lambda Testing**: 
+
+  - Three new methods were used in comparison to the default package method: 
+  
+    - Averaged by variable type lambda values: Use the averaged by variable type (i.e., categorical and continuous) variance derived lambda values (i.e., ~0.2 for categorical variables and 1.0 for continuous variables)
+    
+      - According [to Hennig & Liao (2013)](https://rss.onlinelibrary.wiley.com/doi/epdf/10.1111/j.1467-9876.2012.01066.x), appropriate weighting of variables (e.g., continuous vs. categorical) is crucial to avoid dominance by variables with inherently smaller or larger scales. Averaging lambda values by variable type could therefore provide proportional contributions
+    
+    - Normalized lambda values: 
+    
+      - Same empirical justification as above; this option provides similar, potentially more nuanced information for each variable
+    
+    - Grid search-derived lambda values: iteratively evaluates lambda values to determine the optimal lambda for k-prototypes clustering. The `optimize_lambda` function tests each lambda using significance counts from statistical tests for continuous and categorical variables.
+      
+      - [Van de Velden et al. (2023)](https://arxiv.org/pdf/2301.02190) emphasize the importance of tailored distance measures for clustering, especially for mixed data types. Using grid search enables customization of lambda for improved clustering performance by aligning it with the data structure
+    
+      - Multiple lambda values tied with the highest score during the grid search are iteratively tested
+
+2. **Silhouette Score Methodology**:
+
+  - Replaced computationally intensive validation methods with `cluster::silhouette` and `cluster::daisy` for faster runtime
+  
+  - Output was previously found to be equal given that both the `cluster` package methods and `kproto_validation` use a dissimilarity/distance matrix; the `cluster` package is just exponentially more optimized
+
 ```{r k validation indices, warning = FALSE}
 
 ## Generate Validation Indices to be Used in Determining Optimal k ##
 
-#1. Define parameters for validation indices
+#1. Define parameters of k clustering + optimization
 #1.1 Define k range of clusters to test
-k_range <- 3:12
+k_range <- 2:12
 
-#1.2 Define validation indices to generate during optimization
-validation_methods <- c("silhouette")
-
-#1.3 Define distance methods to be used during optimization
+#1.2 Define distance methods to be used during optimization
 distance_types <- c("huang", "gower")
 
-#1.4 Create a placeholder for results
+#1.3 Define lambda testing procedures
+#1.31 Averaged lambda by variable type
+#1.311 Create a vector containing the categorical variable names
+categorical_vars <- c("family_history_depression", "famhx_ss_momdad_ma_p", 
+                      "bullying")
+
+#1.312 Create a vector containing the continuous variable names
+continuous_vars <- c("cbcl_scr_dsm5_depress_t_scaled", "cbcl_scr_dsm5_anxdisord_t_scaled",
+                     "cbcl_scr_syn_attention_t_scaled", "cbcl_scr_syn_aggressive_t_scaled",
+                     "pgbi_p_ss_score_scaled", "upps_y_ss_negative_urgency_scaled",
+                     "upps_y_ss_positive_urgency_scaled", "sds_p_ss_total_scaled",
+                     "reshist_addr1_coi_z_coi_nat", "nsc_p_ss_mean_3_items_scaled",
+                     "nihtbx_list_uncorrected_scaled", "nihtbx_flanker_uncorrected_scaled",
+                     "nihtbx_pattern_uncorrected_scaled", "ACE_index_sum_score_scaled")
+
+#1.313 Determine the averaged by variable type lambda values
+lambdaest(risk_variable_clustering_data, verbose = TRUE, outtype = "variation", num.method = 2, fac.method = 2)
+
+#1.314 Create a vector containing the averaged by variable type lambda values
+lambda_averaged <- c(rep(0.20, length(categorical_vars)), rep(0.93, length(continuous_vars)))
+
+#1.32 Normalized lambda values
+lambda_raw <- lambdaest(risk_variable_clustering_data, verbose = TRUE, outtype = "variation", num.method = 2, fac.method = 2)
+lambda_normalized <- lambda_raw / mean(lambda_raw)
+
+#1.33 Grid search lambda values
+lambda_grid <- seq(0.1, 5, by = 0.1)
+
+#2. Perform clustering optimization
+#2.1 Define the lambda grid search optimization function
+optimize_lambda <- function(data, lambda) {
+  
+  #2.11 Perform 5-group clustering
+  model <- kproto(data, k = 5, lambda = lambda, nstart = 8, verbose = FALSE)
+  data$cluster <- model$cluster
+  
+  #2.12 Initialize significance counter for each lambda iteration
+  sig_count <- 0
+  
+  #2.13 Continuous variables: Difference in means (t-test) - p values < FDR corrected alpha = sig
+  for (var in continuous_vars) {
+    t_test <- data %>%
+      t_test(as.formula(paste(var, "~ as.factor(cluster)")), detailed = TRUE)
+    if (t_test$p_value < 0.0029) sig_count <- sig_count + 1
+  }
+  
+  #2.14 Categorical variables: Difference in proportions (chi-square test) - p values < FDR corrected alpha = sig
+  for (var in categorical_vars) {
+    chi_test <- data %>%
+      dplyr::select(cluster, !!sym(var)) %>%
+      mutate(cluster = as.factor(cluster)) %>%
+      chisq_test(as.formula(paste("`", var, "` ~ cluster", sep = "")))
+    if (chi_test$p_value < 0.0029)
+      sig_count <- sig_count + 1
+  }
+  
+  #2.15 Return the total count of significant variables
+  return(sig_count)
+}
+
+#2.2 Perform Lambda Grid Search
+#2.21 Create an empty dataframe to store grid search results
+lambda_grid_results <- data.frame(lambda = lambda_grid, score = NA)
+
+#2.22 Iterate through all values in the lambda grid and store results
+for (i in seq_along(lambda_grid)) {
+  lambda_grid_results$score[i] <- optimize_lambda(risk_variable_clustering_data, lambda_grid[i])
+}
+
+#2.23 Identify all optimal lambda values with the highest score
+max_grid_search_score <- max(lambda_grid_results$score, na.rm = TRUE)
+optimal_lambda_grid <- lambda_grid_results$lambda[lambda_grid_results$score == max_grid_search_score]
+
+#2.3 Perform k, distance, and lambda optimization
+#2.31 Initialize placeholders for k optimization
+#2.311 Initialize lambda configurations
+lambda_types <- list(
+  "averaged" = lambda_averaged,
+  "normalized" = lambda_normalized,
+  "default" = NULL
+)
+
+#2.312 Add each optimal lambda from the grid search to the lambda configurations
+for (i in seq_along(optimal_lambda_grid)) {
+  lambda_types[[paste0("grid_search_", i)]] <- optimal_lambda_grid[i]
+}
+
+#2.313 Placeholder for k optimization index results
 k_optimization_indices <- list()
 
-#1.5 Create a dataframe to track individual validation index runtimes
+#2.314 Create a dataframe to track individual validation index runtimes
 runtime_log <- data.frame(
   method = character(),
   distance = character(),
+  lambda_type = character(),
   RuntimeSeconds = numeric(),
-  stringsAsFactors = FALSE)
+  stringsAsFactors = FALSE
+)
 
-#2. Perform k optimization
-#2.1 Create a function to iteratively generate all validation indices
-#2.11 Loop through each distance type
-for (distance in distance_types) {
+#2.315 Placeholder for silhouette scores
+silhouette_scores <- data.frame(
+  k = integer(),
+  lambda_type = character(),
+  distance = character(),
+  silhouette_score = numeric()
+)
+
+#2.32 Perform k clustering optimization + silhouette calculation
+for (lambda_name in names(lambda_types)) {
+  lambda_values <- lambda_types[[lambda_name]]
   
-  #2.111 Loop through each validation method
-  for (method in validation_methods) {
+  for (distance in distance_types) {
     
-    #2.1111 Print index progress
-    message("[", paste0(Sys.time()), "] Running validation for method: ", method, "and distance:", distance, "\n")
-    
-    #2.1112 Start timing
-    start_time <- Sys.time()
-    
-    #2.1113 Run validation_kproto
-    validation_results <- validation_kproto(
-      method = method,
-      data = risk_variable_clustering_data,
-      type = distance,
-      k = k_range,
-      kp_obj = "all",
-      nstart = 8,
-      verbose = TRUE
-    )
-    
-    #2.1114 End timing
-    end_time <- Sys.time()
-    
-    #2.1115 Calculate runtime in seconds
-    runtime_seconds <- as.numeric(difftime(end_time, start_time, units = "secs"))
-    
-    #2.1116 Print index runtime
-    message("Validation index generation for ", method, "statistic using ", distance, "distance = ", round(runtime_seconds, 2), " seconds", "\n")
-    
-    #2.1117 Create a descriptive name for each index result
-    result_name <- paste0(method, "_", distance, "_validation_results")
-    
-    #2.1118 Store the results in the list
-    k_optimization_indices[[result_name]] <- validation_results
-    
-    #2.1119 Log the runtime
-    runtime_log <- runtime_log %>%
-      add_row(method = method, distance = distance, RuntimeSeconds = runtime_seconds)
+    for (k in k_range) {
+      
+      #2.321 Print clustering progress
+      cat("[", paste0(Sys.time()), "] Running kproto clustering for k = ", k, ", lambda = ", lambda_name, ", distance = ", distance, "\n")
+      
+      #2.322 Start timing
+      start_time <- Sys.time()
+      
+      #2.323 Run kproto clustering
+      if (is.null(lambda_values)) {
+        
+        #2.3231 Default lambda clustering 
+        kproto_model <- clustMixType::kproto(
+          x = risk_variable_clustering_data,
+          k = k,
+          type = distance,
+          kp_obj = "all",
+          nstart = 8,
+          verbose = FALSE
+        )
+      } else {
+        
+        #2.3232 Adjusted lambda clustering
+        kproto_model <- clustMixType::kproto(
+          x = risk_variable_clustering_data,
+          k = k,
+          lambda = lambda_values,
+          type = distance,
+          kp_obj = "all",
+          nstart = 8,
+          verbose = FALSE
+        )
+      }
+      
+      #2.324 Calculate silhouette scores using cluster::silhouette and cluster::daisy
+      silhouette_score <- cluster::silhouette(
+        x = kproto_model$cluster,
+        dist = cluster::daisy(risk_variable_clustering_data, metric = "gower")
+      )
+      
+      #2.325 Calculate average silhouette values
+      average_silhouette <- mean(silhouette_score[, "sil_width"])
+      
+      #2.326 Log silhouette scores
+      silhouette_scores <- rbind(
+        silhouette_scores,
+        data.frame(
+          k = k,
+          lambda_type = lambda_name,
+          distance = distance,
+          silhouette_score = average_silhouette
+        )
+      )
+      
+      #2.327 End timing
+      end_time <- Sys.time()
+      runtime_seconds <- as.numeric(difftime(end_time, start_time, units = "secs"))
+      
+      #2.328 Log runtime
+      runtime_log <- runtime_log %>%
+        add_row(method = "silhouette", distance = distance, lambda_type = lambda_name, RuntimeSeconds = runtime_seconds)
+      
+      #2.329 Store clustering results
+      result_name <- paste0("k_", k, "_", lambda_name, "_", distance)
+      k_optimization_indices[[result_name]] <- list(
+        model = kproto_model,
+        silhouette = average_silhouette,
+        runtime = runtime_seconds
+      )
+    }
   }
 }
 
-#2.2 Save the optimization results to an RDS file
-saveRDS(k_optimization_indices, file = "../../results/main_analysis/k_optimization_indices.rds")
-message("RDS file containing validation/optimization indices written successfully\n")
-
-#2.3 Save the run times for each validation index as a csv file
+#3. Output
+#3.1 Save the runtime log
 write.csv(runtime_log, "../../results/main_analysis/k_optimization_runtime_log.csv", row.names = FALSE)
-message("csv file containing run times for each validation index written successfully\n")
+cat("Runtime log saved successfully\n")
+
+#3.2 Save the optimization indices
+saveRDS(k_optimization_indices, file = "../../results/main_analysis/k_optimization_indices.rds")
+cat("Optimization indices saved successfully\n")
 
 ```
 
-### Using Cluster Validation Indices to Select a distance method and k Value
+### Using Cluster Validation Indices to Select a k Value, Distance Method, and lambda Parameters
 
-```{r k selection, echo = FALSE, warning = FALSE}
+```{r parameter selection, echo = FALSE, warning = FALSE}
 
-## Determine the Optimal Number of Clusters (k) to Group Risk Variables ##
+## Determine the Optimal Number of Clusters (k), Distance Method, and Lambda Parameters to Group Risk Variables ##
 
-#1. Generate validation indices for each desired index
-#1.1 Establish parameters for creating the validation indices
-#1.11 Initialize placeholders for summary results
-optimal_k_validation_index_results <- data.frame(method = character(),
-                                distance = character(),
-                                optimal_k = integer(),
-                                optimal_index_value = numeric(),
-                                stringsAsFactors = FALSE)
+#1. Extract relevant results for evaluation of optimal k + distance + 
+#1.1 Initialize placeholders for summary results
+optimal_results <- data.frame(
+  lambda_type = character(),
+  distance = character(),
+  k = integer(),
+  silhouette_score = numeric(),
+  stringsAsFactors = FALSE
+)
 
-#1.12 Initialize a data frame to store all index values
-all_indices_results <- data.frame(method = character(),
-                                   distance = character(),
-                                   index_Name = character(),
-                                   k = integer(),
-                                   index_Value = numeric(),
-                                   stringsAsFactors = FALSE)
-
-#1.2 Create a function to process each validation result
-for (result_name in names(k_optimization_indices)) {
-  validation_result <- k_optimization_indices[[result_name]]
-  
-  #1.21 Extract details from the result name
-  parts <- strsplit(result_name, "_")[[1]]
-  method <- parts[1]
-  distance <- parts[2]
-  
-  #1.22 Store optimal k and corresponding index value(s)
-  optimal_k <- validation_result$k_opt
-  optimal_index_value <- validation_result$index_opt
-  
-  #1.23 Record the optimal results as a dataframe
-  optimal_k_validation_index_results <- rbind(optimal_k_validation_index_results, 
-                              data.frame(method = method, 
-                                         distance = distance, 
-                                         optimal_k = optimal_k, 
-                                         optimal_index_value = optimal_index_value))
-  
-  #1.24 Store all index values for each k
-  indices <- validation_result$indices
-  for (k in names(indices)) {
-    all_indices_results <- rbind(all_indices_results, 
-                                 data.frame(method = method,
-                                            distance = distance,
-                                            index_Name = result_name,
-                                            k = as.integer(k),
-                                            index_Value = indices[[k]]))
+#1.2 Iterate through silhouette_scores to find the optimal combinations
+for (lambda_name in unique(silhouette_scores$lambda_type)) {
+  for (distance in unique(silhouette_scores$distance)) {
+    
+    #1.21 Filter results for the current lambda and distance
+    subset_scores <- silhouette_scores %>%
+      filter(lambda_type == lambda_name & distance == distance & k != 2 & k != 3)
+    
+    #1.22 Find the optimal k (highest silhouette score)
+    best_score <- max(subset_scores$silhouette_score, na.rm = TRUE)
+    best_k <- subset_scores$k[which.max(subset_scores$silhouette_score)]
+    
+    #1.23 Store the result
+    optimal_results <- rbind(
+      optimal_results,
+      data.frame(
+        lambda_type = lambda_name,
+        distance = distance,
+        k = best_k,
+        silhouette_score = best_score
+      )
+    )
   }
 }
 
-#2. Compare the performance of each validation index to determine the optimal k value
-#2.1 Determine the superior distance method to use in generating clusters 
-#2.11 Define index evaluation rules
-index_rules <- c("silhouette" = "max")
+#2. Rank the top solutions
+#2.1 Sort the optimal_results dataframe by silhouette score in descending order
+ranked_results <- optimal_results %>%
+  arrange(desc(silhouette_score))
 
-#2.12 Initialize a data frame to store distance method comparisons
-distance_comparison <- data.frame(index = character(),
-                                   better_distance = character(),
-                                   stringsAsFactors = FALSE)
+#2.2 Extract the top 5 solutions
+top_solutions <- ranked_results[1:5, ]
 
-#2.13 Create a function to compare the performance of distance methods for each metric
-for (index in names(index_rules)) {
-  
-  #2.131 Filter for the relevant index
-  index_data <- optimal_k_validation_index_results[grepl(index, optimal_k_validation_index_results$method), ]
-  
-  #2.132 If both distances are present, compare their optimal index values
-  if (nrow(index_data) == 2) {
-    gower_value <- index_data$optimal_index_value[index_data$distance == "gower"]
-    huang_value <- index_data$optimal_index_value[index_data$distance == "huang"]
-    
-    #2.1321 Determine superiority based on the rule
-    if (index_rules[index] == "max") {
-      better_distance <- ifelse(gower_value > huang_value, "gower", "huang")
-    } else if (index_rules[index] == "min") {
-      better_distance <- ifelse(gower_value < huang_value, "gower", "huang")
-    }
-    
-    #2.1322 Record the result of the distance comparison
-    distance_comparison <- rbind(distance_comparison, 
-                                  data.frame(index = index, 
-                                             better_distance = better_distance))
-  }
-}
+#2.3 Assign ranks to the solutions for easier interpretation
+top_solutions <- top_solutions %>%
+  mutate(rank = row_number())
 
-#2.14 Count the occurrences of each distance method in the better_distance column
-superior_distance_counts <- table(distance_comparison$better_distance)
+#2.4 Print the top solutions for detailed inspection
+kable(top_solutions, digits = 2, caption = "5 Highest k + distance + lambda Silhouette Combinations")
 
-#2.15 Identify the superior distance method (method with the highest count)
-superior_distance <- names(superior_distance_counts)[which.max(superior_distance_counts)]
+#3. Create plots visualizing the results to aid in determining optimal k
+#3.1 Generate the elbow plot
+#3.11 Prepare data for the elbow plot
+cluster_validation_wss <- data.frame(
+  k = integer(),
+  Tot_WithinSS = numeric(),
+  lambda_type = character(),
+  distance = character(),
+  stringsAsFactors = FALSE
+)
 
-#2.16 Filter the optimal_k_validation_index_results dataframe for the superior distance method
-superior_distance_results <- optimal_k_validation_index_results[optimal_k_validation_index_results$distance == superior_distance, ]
-
-#2.171 Calculate mean, median, and mode of the optimal_k for the superior distance method
-superior_distance_mean_k <- mean(superior_distance_results$optimal_k)
-superior_distance_median_k <- median(superior_distance_results$optimal_k)
-superior_distance_mode_k <- as.numeric(names(sort(table(superior_distance_results$optimal_k), decreasing = TRUE))[1])
-
-#2.172 Create a dataframe to summarize the distance comparison results
-summary_results <- data.frame(
-  distance_method = superior_distance,
-  mean_optimal_k = superior_distance_mean_k,
-  median_optimal_k = superior_distance_median_k,
-  mode_optimal_k = superior_distance_mode_k,
-  stringsAsFactors = FALSE)
-
-#2.2 Visually compare the results of the validation indices
-#2.21 Create a faceted elbow plot based on the results of each clustering process conducted as part of the validation index generation
-#2.211 Initialize a data frame to store WSS values for each k
-cluster_validation_wss <- data.frame(method = character(),
-                          distance = character(),
-                          k = integer(),
-                          Tot_WithinSS = numeric(),
-                          stringsAsFactors = FALSE)
-
-#2.212 Loop through the relevant validation results for the superior distance method
-for (result_name in names(k_optimization_indices)) {
-  if (grepl(superior_distance, result_name)) {
-    
-    #2.2121 Extract validation result
-    validation_result <- k_optimization_indices[[result_name]]
-    
-    #2.2122 Extract details from the result name
-    parts <- strsplit(result_name, "_")[[1]]
-    method <- parts[1]
-    distance <- parts[2]
-    
-    #2.2123 Check if this result corresponds to the superior distance method
-    if (distance == superior_distance) {
+#3.12 Iterate through all combinations of k, lambda, and distance
+for (lambda_name in unique(silhouette_scores$lambda_type)) {
+  for (distance in unique(silhouette_scores$distance)) {
+    for (k in k_range) {
       
-      #2.21231 Extract WSS values for each k
-      kp_objects <- validation_result$kp_obj
-      for (k_idx in seq_along(kp_objects)) {
-        k <- kp_objects[[k_idx]][["k"]]
-        wss <- kp_objects[[k_idx]]$object$tot.withinss
-        cluster_validation_wss <- rbind(cluster_validation_wss, 
-                             data.frame(method = method, 
-                                        distance = distance, 
-                                        k = k, 
-                                        Tot_WithinSS = wss))
+      #3.121 Extract the WSS value for the current combination
+      result_key <- paste0("k_", k, "_", lambda_name, "_", distance)
+      if (!is.null(k_optimization_indices[[result_key]])) {
+        wss_value <- k_optimization_indices[[result_key]][["model"]][["tot.withinss"]]
+        cluster_validation_wss <- rbind(
+          cluster_validation_wss,
+          data.frame(
+            k = k,
+            Tot_WithinSS = wss_value,
+            lambda_type = lambda_name,
+            distance = distance
+          )
+        )
       }
     }
   }
 }
 
-#2.213 Create the facet elbow plot
-cluster_validation_elbow_plot <- ggplot(cluster_validation_wss, aes(x = k, y = Tot_WithinSS)) +
-  geom_line(aes(color = method), size = 1) +
-  geom_point(aes(color = method), size = 2) +
-  facet_wrap(~ method, scales = "free_y", ncol = 2) +
-  labs(title = "Elbow Plot for Within-Cluster Sum of Squares (WSS)",
-       x = "Number of Clusters (k)",
-       y = "Total Within-Cluster Sum of Squares",
-       color = "Clustering method") +
+#3.13 Create the facet elbow plot
+faceted_elbow_plot <- ggplot(cluster_validation_wss, aes(x = k, y = Tot_WithinSS)) +
+  geom_line(aes(color = paste(lambda_type, distance, sep = " | ")), size = 1) +
+  geom_point(aes(color = paste(lambda_type, distance, sep = " | ")), size = 2) +
+  facet_wrap(~ lambda_type + distance, scales = "free_y", ncol = 2) +
+  labs(
+    title = "Elbow Plot for Within-Cluster Sum of Squares (WSS)",
+    x = "Number of Clusters (k)",
+    y = "Total Within-Cluster Sum of Squares",
+    color = "Lambda | Distance"
+  ) +
   theme_minimal(base_size = 12) +
   theme(strip.text = element_text(size = 10, face = "bold"))
 
-#2.22 Create a silhouette plot derived using the (determined via data) superior distance method
-#2.221 Extract the silhouette indices for the superior distance method
-superior_distance_silhouette_data <- k_optimization_indices[[paste0("silhouette_", superior_distance, "_validation_results")]][["indices"]]
-
-#2.222 Prepare the data for plotting
-superior_distance_silhouette_plot_data <- data.frame(
-  k = as.integer(names(superior_distance_silhouette_data)), 
-  Silhouette_index = as.numeric(superior_distance_silhouette_data)
-)
-
-#2.223 Create the silhouette plot
-cluster_validation_silhouette_plot <- ggplot(superior_distance_silhouette_plot_data, aes(x = k, y = Silhouette_index)) +
-  geom_line(color = "blue", size = 1) +
-  geom_point(color = "blue", size = 2) +
+#3.2 Facet silhouette plot
+faceted_silhouette_plot <- ggplot(silhouette_scores, aes(x = k, y = silhouette_score)) +
+  geom_line(aes(color = paste(lambda_type, distance, sep = " | ")), size = 1) +
+  geom_point(aes(color = paste(lambda_type, distance, sep = " | ")), size = 2) +
+  facet_wrap(~ lambda_type + distance, scales = "free_y", ncol = 2) +
   labs(
-    title = paste("Silhouette Plot for Superior Distance (", superior_distance, ")", sep = ""),
+    title = "Faceted Silhouette Plot for Lambda and Distance Combinations",
     x = "Number of Clusters (k)",
-    y = "Silhouette index") +
+    y = "Silhouette Score",
+    color = "Lambda | Distance"
+  ) +
   theme_minimal(base_size = 12) +
   theme(
+    strip.text = element_text(size = 10, face = "bold"),
     plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
     axis.title = element_text(size = 12)
   )
 
 ```
 
-1. **Optimal k and Validation Indices:**
-   - The code evaluates the `silhouette` validation index to identify the optimal number of clusters (`k`) for each combination of clustering method and distance metric.
-   - A summary of the **optimal k** values and corresponding **index scores** is generated for both Gower and Huang distance metrics.
+**1. Optimal Clustering Parameters**
 
-2. **Comparison of Distance Metrics:**
-   - Each  index is analyzed to determine which distance metric (Gower or Huang) performs better based on predefined optimization rules (`max` value).
-   - The superior distance metric is identified based on its frequency of outperforming the other on the indices.
-   - **Superior Distance Metric:** `r summary_results$distance_method`
-     - To note, this is according to both the `kproto_validation` function and the subjective, arbitrary determination that the most optimal distance method can be defined by the one with the larger number of superior (lower or higher; index dependent) validation indices
-   - **Summary of Optimal k Values (Superior Distance):**
-     - Mean: `r round(summary_results$mean_optimal_k, 2)`
-     - Median: `r summary_results$median_optimal_k`
-     - Mode: `r summary_results$mode_optimal_k`
+The updated code evaluates silhouette scores and within-cluster sum of squares (WSS) for each combination of:
 
-3. **Elbow Plot for Clustering Evaluation:**
-   - A **facet elbow plot** visualizes the Total Within-Cluster Sum of Squares (WSS) for each clustering method under the superior distance metric.
-   - This plot helps identify the elbow point, suggesting an appropriate value for `k`.
+- *Lambda configurations*: Averaged, normalized, and grid-searched values conpared to default lambda parameters
 
-```{r facet elbow plot, echo = FALSE, warning = FALSE}
+- *Distance metrics*: Huang and Gower.
 
-# Print the facet elbow plot
-print(cluster_validation_elbow_plot)
+- *Number of clusters (`k`)*: Evaluated across `k = 4–12` (excluding `k = 2` and `k = 3` to avoid biased high scores for smaller cluster solutions).
+
+2. **Optimal Solutions**: The top five configurations are ranked by silhouette scores to provide alternative options beyond the single best solution.
+
+3. **Performance Summary**:
+
+   - The best configuration for clustering is selected based on the highest silhouette score among all combinations.
+   
+   - Rankings include distance methods and lambda values for detailed insights into parameter effectiveness.
+
+```{r optimal results, echo = FALSE, warning = FALSE}
+
+# Display the top-ranked solutions in line
+kable(top_solutions, digits = 2, caption = "Top 5 Ranked Clustering Solutions Based on Silhouette Scores")
 
 ```
 
-4. **Silhouette Analysis:**
-   - A **silhouette plot** is created for the superior distance metric, displaying the silhouette index values across different `k` values.
-   - This visualization aids in confirming the clustering structure and provides additional insight into the quality of the proposed clustering.
+**4. Comparison of Distance Metrics and Lambda Configurations**
 
-```{r silhouette plot, echo = FALSE, warning = FALSE}
+Overview:
 
-# Print the silhouette plot
-print(cluster_validation_silhouette_plot)
+- Distance metrics and lambda configurations are compared to identify trends in silhouette scores and WSS values.
 
+- Comparisons are visualized to evaluate clustering stability and interpretability.
+
+Visualization Enhancements:
+
+- *Facet Elbow Plot*: Displays the WSS values for each combination of lambda and distance metrics.
+
+- *Facet Silhouette Plot*: Illustrates silhouette scores across `k` for all combinations, highlighting trends for each parameter setting.
+
+```{r cluster validation plots, echo = FALSE, warning = FALSE}
+
+# Print the facet elbow plot
+print(faceted_elbow_plot)
+
+# Print the facet silhouette plot
+print(faceted_silhouette_plot)
 ```

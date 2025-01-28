@@ -184,6 +184,9 @@ subject_cluster_values <- subject_cluster_values %>%
 #2. Merge cluster values back into original data
 clustered_risk_variable_data <- left_join(risk_variable_data, subject_cluster_values)
 
+#3. Output the merged risk variable + cluster data
+write.csv(clustered_risk_variable_data, "../../data/data_processed/clustered_risk_variable_data.csv", row.names = FALSE)
+
 ```
 
 ### Profiling the Risk Group Clusters According to Risk Variables

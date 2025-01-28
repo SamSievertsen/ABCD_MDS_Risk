@@ -188,6 +188,7 @@ for (k in k_range) {
     x = kproto_model$cluster,
     dist = cluster::daisy(risk_variable_clustering_data, metric = distance_type)
   )
+  
   #2.62 Calculate average silhouette values
   average_cluster_silhouette <- mean(silhouette_score[, "sil_width"])
   
