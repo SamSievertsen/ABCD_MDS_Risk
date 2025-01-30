@@ -360,164 +360,13 @@ Risk Group Modeling</h1>
 
 <div id="data-wrangling-for-analysis" class="section level2">
 <h2>Data Wrangling for Analysis</h2>
-<pre class="r"><code>## Data Wrangling ##
-
-#1. Clean + merge the outcome data
-#1.1 Collapse the data frames containing outcome variables of interest
-outcome_data_merged &lt;- Reduce(
-  function(x, y)
-    merge(x, y,
-      by = c(&quot;src_subject_id&quot;, &quot;eventname&quot;),
-      all = TRUE),
-  list(parent_ksads_data, youth_ksads_data, cbcl_data))
-
-#1.2 Clean the merged data 
-#1.21 Retain only columns of interest
-outcome_data_merged_trimmed &lt;- outcome_data_merged %&gt;% 
-  dplyr::select(c(src_subject_id, eventname, cbcl_scr_dsm5_depress_t, cbcl_scr_dsm5_anxdisord_t, cbcl_scr_syn_attention_t, cbcl_scr_syn_aggressive_t, ksads2_2_937_p, ksads2_2_800_p, ksads2_2_798_p, ksads2_2_799_p, ksads2_2_798_t, ksads2_2_799_t, ksads2_2_800_t, ksads2_2_937_t, ksads2_2_801_p, ksads2_2_802_p, ksads2_2_931_p,ksads2_2_936_p, ksads2_2_931_t, ksads2_2_936_t,ksads2_2_802_t, ksads2_2_801_t, ksads2_2_803_p, ksads2_2_933_p, ksads2_2_803_t, ksads2_2_933_t, ksads2_23_917_p, ksads2_23_918_p, ksads2_23_919_p, ksads2_23_920_p, ksads2_23_921_p, ksads2_23_906_p, ksads2_23_907_p, ksads2_23_908_p, ksads2_23_909_p, ksads2_23_910_p, ksads2_23_917_t, ksads2_23_918_t, ksads2_23_919_t, ksads2_23_920_t, ksads2_23_921_t, ksads2_23_906_t, ksads2_23_907_t, ksads2_23_908_t, ksads2_23_909_t, ksads2_23_910_t, ksads2_23_923_p, ksads2_23_924_p, ksads2_23_925_p, ksads2_23_912_p, ksads2_23_913_p, ksads2_23_914_p, ksads2_23_923_t, ksads2_23_924_t, ksads2_23_925_t, ksads2_23_912_t, ksads2_23_913_t, ksads2_23_914_t, ksads2_23_905_p, ksads2_23_916_p, ksads2_23_905_t, ksads2_23_916_t))
-
-#1.22 Turn all instances of empty, missing, 555, and 999 to NA; and 888 to 0 in KSADS columns
-outcome_data_merged_trimmed &lt;- outcome_data_merged_trimmed %&gt;%
-  mutate(across(starts_with(&quot;ksads&quot;), ~ na_if(replace(., . %in% c(555, 999, &quot;&quot;), NA), 888) %&gt;% replace_na(0)))
-
-#1.23 Filter the trimmed data to only contain rows at the baseline assessment timepoint
-outcome_data_merged_trimmed &lt;- outcome_data_merged_trimmed %&gt;% 
-  filter(eventname == &quot;4_year_follow_up_y_arm_1&quot;)
-
-#1.3 Create relevant outcome variables of interest
-#1.31 Disorder Variables 
-#1.311 Bipolar I Disorder
-# Create the bipolar_I_dx variable
-outcome_data_merged_trimmed &lt;- outcome_data_merged_trimmed %&gt;%
-  mutate(
-    bipolar_I_dx = case_when(
-      rowSums(select(., c(
-        &quot;ksads2_2_937_p&quot;, &quot;ksads2_2_800_p&quot;, &quot;ksads2_2_798_p&quot;, 
-        &quot;ksads2_2_799_p&quot;, &quot;ksads2_2_798_t&quot;, &quot;ksads2_2_799_t&quot;, 
-        &quot;ksads2_2_800_t&quot;, &quot;ksads2_2_937_t&quot;
-      )) == 1, na.rm = TRUE) &gt; 0 ~ 1, # Any variable == 1
-      rowSums(!is.na(select(., c(
-        &quot;ksads2_2_937_p&quot;, &quot;ksads2_2_800_p&quot;, &quot;ksads2_2_798_p&quot;, 
-        &quot;ksads2_2_799_p&quot;, &quot;ksads2_2_798_t&quot;, &quot;ksads2_2_799_t&quot;, 
-        &quot;ksads2_2_800_t&quot;, &quot;ksads2_2_937_t&quot;
-      )))) == 0 ~ NA_real_, # All variables are NA
-      TRUE ~ 0               # All variables == 0
-    )
-  )
-
-#1.312 Bipolar II Disorder
-outcome_data_merged_trimmed &lt;- outcome_data_merged_trimmed %&gt;%
-  mutate(
-    bipolar_II_dx = case_when(
-      rowSums(select(., c(
-        &quot;ksads2_2_801_p&quot;, &quot;ksads2_2_802_p&quot;, &quot;ksads2_2_931_p&quot;,
-        &quot;ksads2_2_936_p&quot;, &quot;ksads2_2_931_t&quot;, &quot;ksads2_2_936_t&quot;,
-        &quot;ksads2_2_802_t&quot;, &quot;ksads2_2_801_t&quot;
-      )) == 1, na.rm = TRUE) &gt; 0 ~ 1, # Any variable == 1
-      rowSums(!is.na(select(., c(
-        &quot;ksads2_2_801_p&quot;, &quot;ksads2_2_802_p&quot;, &quot;ksads2_2_931_p&quot;,
-        &quot;ksads2_2_936_p&quot;, &quot;ksads2_2_931_t&quot;, &quot;ksads2_2_936_t&quot;,
-        &quot;ksads2_2_802_t&quot;, &quot;ksads2_2_801_t&quot;
-      )))) == 0 ~ NA_real_, # All variables are NA
-      TRUE ~ 0               # All variables == 0
-    )
-  )
-
-#1.313 Any Bipolar Disorder
-outcome_data_merged_trimmed &lt;- outcome_data_merged_trimmed %&gt;%
-  mutate(
-    any_bipolar_dx = case_when(
-      rowSums(select(., c(
-        &quot;bipolar_I_dx&quot;, &quot;bipolar_II_dx&quot;, &quot;ksads2_2_803_p&quot;,
-        &quot;ksads2_2_933_p&quot;, &quot;ksads2_2_803_t&quot;, &quot;ksads2_2_933_t&quot;
-      )) == 1, na.rm = TRUE) &gt; 0 ~ 1, # Any variable == 1
-      rowSums(!is.na(select(., c(
-        &quot;bipolar_I_dx&quot;, &quot;bipolar_II_dx&quot;, &quot;ksads2_2_803_p&quot;,
-        &quot;ksads2_2_933_p&quot;, &quot;ksads2_2_803_t&quot;, &quot;ksads2_2_933_t&quot;
-      )))) == 0 ~ NA_real_, # All variables are NA
-      TRUE ~ 0               # All variables == 0
-    )
-  )
-
-#1.32 Suicide &amp; self-harm related variables
-#1.321 Suicidal Thinking
-outcome_data_merged_trimmed &lt;- outcome_data_merged_trimmed %&gt;%
-  mutate(
-    suicidal_thinking = case_when(
-      rowSums(select(., c(
-        &quot;ksads2_23_917_p&quot;, &quot;ksads2_23_918_p&quot;, &quot;ksads2_23_919_p&quot;, 
-        &quot;ksads2_23_920_p&quot;, &quot;ksads2_23_921_p&quot;, &quot;ksads2_23_906_p&quot;, 
-        &quot;ksads2_23_907_p&quot;, &quot;ksads2_23_908_p&quot;, &quot;ksads2_23_909_p&quot;, 
-        &quot;ksads2_23_910_p&quot;, &quot;ksads2_23_917_t&quot;, &quot;ksads2_23_918_t&quot;, 
-        &quot;ksads2_23_919_t&quot;, &quot;ksads2_23_920_t&quot;, &quot;ksads2_23_921_t&quot;, 
-        &quot;ksads2_23_906_t&quot;, &quot;ksads2_23_907_t&quot;, &quot;ksads2_23_908_t&quot;, 
-        &quot;ksads2_23_909_t&quot;, &quot;ksads2_23_910_t&quot;
-      )) == 1, na.rm = TRUE) &gt; 0 ~ 1, # Any variable == 1
-      rowSums(!is.na(select(., c(
-        &quot;ksads2_23_917_p&quot;, &quot;ksads2_23_918_p&quot;, &quot;ksads2_23_919_p&quot;, 
-        &quot;ksads2_23_920_p&quot;, &quot;ksads2_23_921_p&quot;, &quot;ksads2_23_906_p&quot;, 
-        &quot;ksads2_23_907_p&quot;, &quot;ksads2_23_908_p&quot;, &quot;ksads2_23_909_p&quot;, 
-        &quot;ksads2_23_910_p&quot;, &quot;ksads2_23_917_t&quot;, &quot;ksads2_23_918_t&quot;, 
-        &quot;ksads2_23_919_t&quot;, &quot;ksads2_23_920_t&quot;, &quot;ksads2_23_921_t&quot;, 
-        &quot;ksads2_23_906_t&quot;, &quot;ksads2_23_907_t&quot;, &quot;ksads2_23_908_t&quot;, 
-        &quot;ksads2_23_909_t&quot;, &quot;ksads2_23_910_t&quot;
-      )))) == 0 ~ NA_real_, # All variables are NA
-      TRUE ~ 0               # All variables == 0
-    )
-  )
-
-#1.322 Suicide Attempt (i.e., Suicidal Behavior)
-outcome_data_merged_trimmed &lt;- outcome_data_merged_trimmed %&gt;%
-  mutate(
-    suicide_attempt = case_when(
-      rowSums(select(., c(
-        &quot;ksads2_23_923_p&quot;, &quot;ksads2_23_924_p&quot;, &quot;ksads2_23_925_p&quot;, 
-        &quot;ksads2_23_912_p&quot;, &quot;ksads2_23_913_p&quot;, &quot;ksads2_23_914_p&quot;, 
-        &quot;ksads2_23_923_t&quot;, &quot;ksads2_23_924_t&quot;, &quot;ksads2_23_925_t&quot;, 
-        &quot;ksads2_23_912_t&quot;, &quot;ksads2_23_913_t&quot;, &quot;ksads2_23_914_t&quot;
-      )) == 1, na.rm = TRUE) &gt; 0 ~ 1, # Any variable == 1
-      rowSums(!is.na(select(., c(
-        &quot;ksads2_23_923_p&quot;, &quot;ksads2_23_924_p&quot;, &quot;ksads2_23_925_p&quot;, 
-        &quot;ksads2_23_912_p&quot;, &quot;ksads2_23_913_p&quot;, &quot;ksads2_23_914_p&quot;, 
-        &quot;ksads2_23_923_t&quot;, &quot;ksads2_23_924_t&quot;, &quot;ksads2_23_925_t&quot;, 
-        &quot;ksads2_23_912_t&quot;, &quot;ksads2_23_913_t&quot;, &quot;ksads2_23_914_t&quot;
-      )))) == 0 ~ NA_real_, # All variables are NA
-      TRUE ~ 0               # All variables == 0
-    )
-  )
-
-#1.323 Non-Suicidal Self Injury
-outcome_data_merged_trimmed &lt;- outcome_data_merged_trimmed %&gt;%
-  mutate(
-    nssi = case_when(
-      rowSums(select(., c(
-        &quot;ksads2_23_905_p&quot;, &quot;ksads2_23_916_p&quot;, &quot;ksads2_23_905_t&quot;,
-        &quot;ksads2_23_916_t&quot;
-      )) == 1, na.rm = TRUE) &gt; 0 ~ 1, # Any variable == 1
-      rowSums(!is.na(select(., c(
-        &quot;ksads2_23_905_p&quot;, &quot;ksads2_23_916_p&quot;, &quot;ksads2_23_905_t&quot;,
-        &quot;ksads2_23_916_t&quot;
-      )))) == 0 ~ NA_real_, # All variables are NA
-      TRUE ~ 0               # All variables == 0
-    )
-  )
-
-#2. Merge the clustered risk data with the outcome data
-#2.1 Create a version of the outcome data containing only columns of interest
-outcome_data_to_merge &lt;- outcome_data_merged_trimmed %&gt;% 
-  dplyr::select(c(src_subject_id, eventname, bipolar_I_dx, bipolar_II_dx, any_bipolar_dx, suicidal_thinking, suicide_attempt, nssi, cbcl_scr_dsm5_depress_t, cbcl_scr_dsm5_anxdisord_t, cbcl_scr_syn_attention_t, cbcl_scr_syn_aggressive_t))
-
-#2.2 Left join the outcome data with the clustered data
-bipolar_suicidality_risk_analysis_data &lt;- left_join(outcome_data_to_merge, clustered_risk_variable_data)
-
-#2.3 Remove subjects who do not have cluster information
-bipolar_suicidality_risk_analysis_data &lt;- bipolar_suicidality_risk_analysis_data %&gt;% 
-  filter(!is.na(cluster))</code></pre>
+<pre><code>Data Wrangling Complete</code></pre>
 </div>
 <div id="assessment-of-the-inclusion-of-additional-outcome-variable-timepoints" class="section level2">
 <h2>Assessment of the Inclusion of Additional Outcome Variable
 Timepoints</h2>
 <table>
+<caption>N in Each Cluster at Baseline</caption>
 <thead>
 <tr class="header">
 <th align="left">Cluster</th>
@@ -548,6 +397,7 @@ Timepoints</h2>
 </tbody>
 </table>
 <table>
+<caption>Data Present in Each Cluster at Followup</caption>
 <thead>
 <tr class="header">
 <th align="left">Cluster</th>
@@ -589,14 +439,110 @@ Timepoints</h2>
 </tr>
 </tbody>
 </table>
-<pre><code>
-    Pearson&#39;s Chi-squared test
+<pre><code>Effect sizes were labelled following Funder&#39;s (2019) recommendations.
 
-data:  followup_status_table[, c(&quot;Present&quot;, &quot;Missing&quot;)]
-X-squared = 42.4507, df = 4, p-value = 0.000000013453</code></pre>
+The Pearson&#39;s Chi-squared test of independence between suggests that the effect
+is statistically significant, and very small (chi2 = 42.45, p &lt; .001; Adjusted
+Cramer&#39;s v = 0.06, 95% CI [0.04, 1.00])</code></pre>
+<table>
+<caption>Follow-up Missingness Analysis with Binomial Proportion Test
+&amp; Standardized Residual Results</caption>
+<colgroup>
+<col width="10%" />
+<col width="10%" />
+<col width="10%" />
+<col width="20%" />
+<col width="18%" />
+<col width="29%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th align="left">Cluster</th>
+<th align="right">Present</th>
+<th align="right">Missing</th>
+<th align="right">Percent_Missing</th>
+<th align="right">p_value_binom</th>
+<th align="right">Standardized_Residuals</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="left">1</td>
+<td align="right">855</td>
+<td align="right">1129</td>
+<td align="right">43.094758</td>
+<td align="right">0.12119298</td>
+<td align="right">-1.0007898</td>
+</tr>
+<tr class="even">
+<td align="left">2</td>
+<td align="right">781</td>
+<td align="right">1338</td>
+<td align="right">36.857008</td>
+<td align="right">0.00002267</td>
+<td align="right">2.7158819</td>
+</tr>
+<tr class="odd">
+<td align="left">3</td>
+<td align="right">1560</td>
+<td align="right">1938</td>
+<td align="right">44.596913</td>
+<td align="right">0.00011992</td>
+<td align="right">-2.4891966</td>
+</tr>
+<tr class="even">
+<td align="left">4</td>
+<td align="right">158</td>
+<td align="right">269</td>
+<td align="right">37.002342</td>
+<td align="right">0.06909762</td>
+<td align="right">1.1799335</td>
+</tr>
+<tr class="odd">
+<td align="left">5</td>
+<td align="right">433</td>
+<td align="right">692</td>
+<td align="right">38.488889</td>
+<td align="right">0.05267482</td>
+<td align="right">1.2640299</td>
+</tr>
+</tbody>
+</table>
 </div>
-<div id="potential-inclusion-of-additional-outcome-datapoints" class="section level2">
-<h2>Potential inclusion of additional outcome datapoints</h2>
+<div id="preliminary-thoughts-on-inclusion-of-additional-outcome-datapoints" class="section level2">
+<h2>Preliminary thoughts on inclusion of additional outcome
+datapoints</h2>
+<div id="overall-interpretation" class="section level3">
+<h3>Overall Interpretation</h3>
+<ul>
+<li><p>There is a statistically significant difference in missingness
+across clusters (p &lt; 0.001), but the effect size is very small
+(Cramér’s V = 0.06) - significance is likely a result of ABCD sample
+size</p></li>
+<li><p>Cluster 2 is missing fewer participants than expected
+(significantly retained at 4Y data we have thus far)</p></li>
+<li><p>Cluster 3 is missing more participants than expected
+(significantly more missingness as of 4Y data we have thus far)</p>
+<ul>
+<li>This may not actually be a problem given that this is the “control”
+group essentially, and very well powered</li>
+</ul></li>
+<li><p>Clusters 1, 4, and 5 do not significantly deviate from expected
+missingness</p></li>
+</ul>
+</div>
+<div id="what-this-may-mean-for-the-analysis" class="section level3">
+<h3>What This May Mean for the Analysis</h3>
+<ul>
+<li><p>Since Cluster 3 has a disproportionate number of missing
+subjects, any longitudinal analyses may underestimate the risk
+associated with this group</p></li>
+<li><p>Because Cluster 2 is overrepresented in follow-up data, findings
+might overestimate their stability</p></li>
+<li><p>Clusters 1, 4, and 5 appear representative of their baseline
+proportions</p></li>
+</ul>
+</div>
 </div>
 <div id="statistical-analysis" class="section level2">
 <h2>Statistical Analysis</h2>

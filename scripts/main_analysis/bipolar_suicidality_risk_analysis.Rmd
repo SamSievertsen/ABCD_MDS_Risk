@@ -51,7 +51,7 @@ cbcl_data <- read.csv("../../data/data_raw/mh_p_cbcl.csv")
 
 ## Data Wrangling for Analysis
 
-```{r data wrangling, warning = FALSE}
+```{r data wrangling, echo = FALSE, warning = FALSE}
 
 ## Data Wrangling ##
 
@@ -207,6 +207,8 @@ bipolar_suicidality_risk_analysis_data <- left_join(outcome_data_to_merge, clust
 bipolar_suicidality_risk_analysis_data <- bipolar_suicidality_risk_analysis_data %>% 
   filter(!is.na(cluster))
 
+cat("Data Wrangling Complete\n")
+
 ```
 
 ## Assessment of the Inclusion of Additional Outcome Variable Timepoints
@@ -240,19 +242,67 @@ chisq_result <- chisq.test(followup_status_table[, c("Present", "Missing")])
 
 #1.5 Output results
 #1.51 Baseline clusters present
-kable(full_cluster_counts, label = "N in Each Cluster at Baseline", col.names = c("Cluster", "N"))
+kable(full_cluster_counts, caption = "N in Each Cluster at Baseline", col.names = c("Cluster", "N"))
 
 #1.52 4Y followup N clusters present
-kable(followup_status_table, label = "Data Present in Each Cluster at Followup")
+kable(followup_status_table, caption = "Data Present in Each Cluster at Followup")
 
 #1.53 Chi square results
-print(chisq_result)
+report(chisq_result)
+
+#1.6 Run a binomial proportion test for each cluster
+#1.61 Calculate the overall missingness rate across all clusters
+overall_missing_rate <- sum(followup_status_table$Missing) / sum(full_cluster_counts)
+
+#1.62 Conduct binomial tests for each cluster
+followup_status_table <- followup_status_table %>%
+  rowwise() %>%
+  mutate(
+    p_value_binom = binom.test(
+      Missing,  # Observed missing count
+      Missing + Present,  # Total subjects in cluster
+      p = overall_missing_rate,  # Expected missing proportion based on total sample
+      alternative = "two.sided"  # Test if different from expected
+    )$p.value
+  )
+
+#1.7 Generate standardized residuals from the chi-Square test
+#1.71 Compute standardized residuals from the chi-square test
+std_residuals <- chisq_result$residuals
+
+#1.72 Extract standardized residuals for the "Missing" category only
+std_residuals_missing <- std_residuals[, "Missing"]
+
+#1.73 Add standardized residuals to the follow-up table
+followup_status_table <- followup_status_table %>%
+  mutate(Standardized_Residuals = std_residuals_missing[as.numeric(Cluster)])
+
+#1.8 Output results with chi-square and binomial test results
+kable(followup_status_table, caption = "Follow-up Missingness Analysis with Binomial Proportion Test & Standardized Residual Results")
 
 ```
 
-## Potential inclusion of additional outcome datapoints
+## Preliminary thoughts on inclusion of additional outcome datapoints
 
+### Overall Interpretation
 
+- There is a statistically significant difference in missingness across clusters (p < 0.001), but the effect size is very small (Cramér’s V = 0.06) - significance is likely a result of ABCD sample size
+
+- Cluster 2 is missing fewer participants than expected (significantly retained at 4Y data we have thus far)
+
+- Cluster 3 is missing more participants than expected (significantly more missingness as of 4Y data we have thus far)
+  
+  - This may not actually be a problem given that this is the "control" group essentially, and very well powered
+
+- Clusters 1, 4, and 5 do not significantly deviate from expected missingness
+
+### What This May Mean for the Analysis
+
+- Since Cluster 3 has a disproportionate number of missing subjects, any longitudinal analyses may underestimate the risk associated with this group
+
+- Because Cluster 2 is overrepresented in follow-up data, findings might overestimate their stability
+
+- Clusters 1, 4, and 5 appear representative of their baseline proportions
 
 ## Statistical Analysis
 
