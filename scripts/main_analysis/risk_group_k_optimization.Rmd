@@ -121,7 +121,7 @@ Because of this, just the first validation index in the list of indices to asses
 
 As such, given that the silhouette index is [“an unambiguous optimal point determination”](https://www.sciencedirect.com/science/article/pii/S0169743924000571) method, performance of each distance method + optimal k will be assessed using primarily the silhouette method for now (and potentially the point-biserial index [given its relatively quicker run time than other indices](https://doi.org/10.5445/KSP/1000098011/02)), followed by elbow plot examination and evaluation of additional k cluster performance. 
 
-Additionally, given the tendency of initial versions of the clustering algorithm tended to over-weight the separation of the clusters based on the categorical variables, we made the following changes to this iteration of the script relative to the previous for optimizing the k value, distance method, and lambda parameters for the current studies clustering: 
+Additionally, given the tendency of initial versions of the clustering algorithm to over-weight the separation of the clusters based on the categorical variables, we made the following changes to this iteration of the script relative to the previous for optimizing the k value, distance method, and lambda parameters for the current studies clustering: 
 
 1. ***Extended Lambda Testing**: 
 
@@ -525,4 +525,5 @@ print(faceted_elbow_plot)
 
 # Print the facet silhouette plot
 print(faceted_silhouette_plot)
+
 ```

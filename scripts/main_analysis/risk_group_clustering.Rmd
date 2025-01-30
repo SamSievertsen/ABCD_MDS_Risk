@@ -51,19 +51,45 @@ k_optimization_indices <- readRDS(file = "../../results/main_analysis/k_optimiza
 
 **1. Distance Method**
 
-In the "risk_group_k_optimization" script, the silhouette index was calculated for k values 3:12 using both the `huang` and `gower` distance methods. From these calculations, it was determined that the `gower` distance performs better on this dataset, as the silhouette coefficient maximum was > 67% higher using the gower distance than when using the huang distance method. Additionally, total within sum of squares values for optimal k (k = 3) and secondary optimal k (k = 5) were 6.82 times lower using gower distance, and total run time was ~ 17.9% faster. These results align with emerging evidence outlining the [strength of this method when clustering with k prototypes on mixed data](https://doi.org/10.1007/s11634-024-00595-5).
+In the "*risk_group_k_optimization*" script, the silhouette index was calculated for k values 3:12 using both the `huang` and `gower` distance methods. From these calculations, it was initially determined that the `gower` distance performs better on this dataset, as the silhouette coefficient maximum was > 67% higher using the gower distance than when using the huang distance method. Additionally, total within sum of squares values for optimal k (k = 3) and secondary optimal k (k = 5) were 6.82 times lower using gower distance. These results aligned with emerging evidence outlining the [strength of this method when clustering with k prototypes on mixed data](https://doi.org/10.1007/s11634-024-00595-5).
 
-As such, `gower` distance will be utilized here to generate clusters. 
+However, further investigation + characterization of the cluster profiles revealed that the range normalized distance matching performed by the gower method perfectly (and preferentially) separated the categorical variables into separate clusters, but de-weighted and therefore did not appropriately separate 
+
+As such, as described in more detail in section 3 below, `huang` distance will be utilized in the current iteration to generate clusters. 
 
 **2. Optimal k**
 
-While both the `huang` and `gower` derived silhouette scores point to a value of `k = 3` being optimal (i.e., the highest silhouette score), results from the elbow plot created during k optimization also point to `k = 5` and `k = 6` being potential options given the significant reduction in within sum of squares at those k values (and the silhouette score also being the 2nd and 3rd highest values at those k values, respectively). 
+While both the `huang` and `gower` derived silhouette scores point to a value of `k = 2` being optimal (i.e., the highest silhouette score), results from the elbow plot created during k optimization also point to `k = 5` and `k = 6` being potential options given the significant reduction in within sum of squares at those k values (and the silhouette score also being the 3rd and 4th highest values at those k values, respectively). 
 
-As such, clustering will be done here with all values 2:12, with results again assessed for elbow plot performance and silhouette score. To note, `k = 2` was removed as a clustering solution from validation due to its previous poor performance and likelihood of not being the optimal k to capture sufficient variance patterns in all risk variables (17 of them in total) of interest, but is included here as a) processing speed is not as much of an issue with clustering as it is during validation, and b) to assess whether the previously determined optimal k of `k = 3` may have been due to small k values causing there to be fewer clusters that are farther apart (assuming spread in the data). This theoretically would increase the inter-cluster distance, leading to artificially higher silhouette scores, even though within-cluster cohesion may not be ideal in said smaller k values. TBD! 
+As such, clustering will be done here with all values 2:12, with results again assessed for elbow plot performance and silhouette score. 
 
-**3. Other Considerations**
+**3. Lambda Parameters**
 
-`nstart` value of 8 chosen as this has been identified as [leading to stable results in terms of a small standard deviation](https://link.springer.com/article/10.1007/s11634-024-00595-5#Sec12)
+As highlighted above and in the current iteration of the "*risk_group_k_optimization*" script, initial versions of the clustering algorithm tended to over-weight the separation of the clusters based on the categorical variables. As such, Three new methods were used in comparison to the default package method: 
+
+- Averaged by variable type lambda values: Use the averaged by variable type (i.e., categorical and continuous) variance derived lambda values (i.e., ~0.2 for categorical variables and 0.93 for continuous variables); 
+    
+- Normalized by mean individual variable lambda values
+    
+- Grid search-derived lambda values: 
+
+The `optimize_lambda` function within that script then tested each lambda using significance counts from statistical tests for continuous and categorical variables.
+
+Unfortunately, results continue to suggest the highest silhouette scores are still indicative of good separation of the categorical variables, and there's not a clear standout in terms of which specific lambda(s) to use to get balanced separation. 
+
+At the trend level, as first mentioned briefly above, it looks like the huang distance method (i.e., using euclidean distance instead of range normalized distance as is used in gower) results in better separation of the numeric variables than the categorical variables, which might explain the lower silhouette scores we've been observing with that distance method. 
+ 
+Also at the trend level, it looks like the default lambda parameter actually still performs quite well for a 5 group solution, with perfect separation of the categorical variables and the same separation of numeric as before. Subjectively, the next best performing solutions are: 
+
+- Using the averaged across variable values for lambda (k = 5 solution using huang distance separates the best, but k = 4 and k = 6 are decent and should be assessed too)
+
+- Using the vectorized values generated from: *lambdaest(risk_variable_clustering_data, verbose = TRUE, outtype = "vector", num.method = 2, fac.method = 2)* k = 5 solution using huang distance separates the best, but k = 4 and k = 6 are decent and should be assessed too.
+
+In lieu of more advanced iterations of the methods above to optimize lambda parameters, to have results prepared in time for the SOBP late breaking abstracts deadline, we will tentatively plan to use the default lambda parameters and a k = 5 solution. 
+
+**4. Other Considerations**
+
+`nstart` value of 8 chosen as this has been identified as [leading to stable results in terms of a small standard deviation](https://link.springer.com/article/10.1007/s11634-024-00595-5#Sec12) and will be used herein. 
 
 ## Data Wrangling for Clustering 
 
@@ -131,7 +157,7 @@ set.seed(123)
 k_range <- 2:12
 
 #1.3 Define distance type for kproto clustering
-distance_type <- "gower"
+distance_type <- "huang"
 
 #1.4 Create placeholders for clustering results, silhouette scores, and WSS
 #1.41 k prototypes results
@@ -186,7 +212,7 @@ for (k in k_range) {
   #2.61 Calculate the current silhouette value
   silhouette_score <- cluster::silhouette(
     x = kproto_model$cluster,
-    dist = cluster::daisy(risk_variable_clustering_data, metric = distance_type)
+    dist = cluster::daisy(risk_variable_clustering_data, metric = "gower")
   )
   
   #2.62 Calculate average silhouette values

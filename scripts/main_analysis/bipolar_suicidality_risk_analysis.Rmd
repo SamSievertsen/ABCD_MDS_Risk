@@ -29,6 +29,7 @@ library(plotly)
 library(lme4)
 library(lmerTest)
 library(car)
+library(emmeans)
 options(scipen = 999, digits = 8)
 
 # Read in clustered risk variable data
@@ -202,13 +203,50 @@ outcome_data_to_merge <- outcome_data_merged_trimmed %>%
 #2.2 Left join the outcome data with the clustered data
 bipolar_suicidality_risk_analysis_data <- left_join(outcome_data_to_merge, clustered_risk_variable_data)
 
+#2.3 Remove subjects who do not have cluster information
+bipolar_suicidality_risk_analysis_data <- bipolar_suicidality_risk_analysis_data %>% 
+  filter(!is.na(cluster))
+
 ```
 
 ## Assessment of the Inclusion of Additional Outcome Variable Timepoints
 
-```{r}
+```{r cluster missingness, echo = FALSE, warning = FALSE}
 
-# Chi square to test whether there is a difference in who is missing data on the basis of cluster membership
+#1. Run a chi square to test whether there is a difference in who is missing data on the basis of cluster membership
+#1.1 Count subjects in each cluster in the full dataset
+full_cluster_counts <- table(clustered_risk_variable_data$cluster)
+
+#1.21 Count subjects in each cluster in the 4Y follow-up dataset
+followup_cluster_counts <- table(bipolar_suicidality_risk_analysis_data$cluster)
+
+#1.22 Calculate missing subjects per cluster
+missing_cluster_counts <- full_cluster_counts - followup_cluster_counts
+
+#1.3 Create a contingency table: rows = Follow-up Status, columns = Clusters
+#1.31 Create the contingency table
+followup_status_table <- data.frame(
+  Cluster = names(full_cluster_counts),
+  Present = as.numeric(followup_cluster_counts),
+  Missing = as.numeric(missing_cluster_counts)
+)
+
+#1.32 Add a percent missing variable to the contingency table
+followup_status_table <- followup_status_table %>% 
+  mutate(Percent_Missing = ((Present/(Missing + Present)) * 100))
+
+#1.4 Run chi-square test
+chisq_result <- chisq.test(followup_status_table[, c("Present", "Missing")])
+
+#1.5 Output results
+#1.51 Baseline clusters present
+kable(full_cluster_counts, label = "N in Each Cluster at Baseline", col.names = c("Cluster", "N"))
+
+#1.52 4Y followup N clusters present
+kable(followup_status_table, label = "Data Present in Each Cluster at Followup")
+
+#1.53 Chi square results
+print(chisq_result)
 
 ```
 

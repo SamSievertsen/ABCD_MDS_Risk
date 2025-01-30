@@ -93,7 +93,7 @@ risk_variable_data <- risk_variable_data %>%
 
 ## Review of Clustering Results and Selection of Optimal *k*
 
-Results from the `risk_group_clustering` script suggest it is likely that optimal *k* = 5. Re-iterating the most important information here, this determination was made because the elbow plot suggests a natural elbow wherein reduction in total within sum of squares values levels off after *k* = 5 (*note*: a similar tapering is observed after *k* = 6, but the distinction between the two *k* values will be made in the discussion of the silhouette index results): 
+Results from the `risk_group_clustering` script suggest it is likely that optimal *k* = 5. Re-iterating the most important information here, this determination was made because the elbow plot suggests a natural elbow wherein reduction in total within sum of squares values levels off after *k* = 5 (*note*: a similar tapering is observed after *k* = 4, but the distinction between the two *k* values will be made in the discussion of the silhouette index results): 
 
 ```{r elbow plot, echo = FALSE, warning = FALSE, fig.width = 10, fig.height = 6}
 
@@ -110,7 +110,7 @@ print(elbow_plot)
 
 ```
 
-In addition to the elbow plot, wherein *k = 5* is observed to exhibit the qualities of an elbow, the *k* grouped mean silhouette scores indicate that *k = 5* is the third most optimal clustering solution (μ = 0.182; following *k = 6* closely, wherein μ = 0.187): 
+In addition to the elbow plot, wherein *k = 5* is observed to exhibit the qualities of an elbow, the *k* grouped mean silhouette scores indicate that *k = 5* is the third most optimal clustering solution (μ = 0.113; following *k = 4* closely, wherein μ = 0.123): 
 
 ```{r silhouette score means, echo = FALSE, warning = FALSE}
 
@@ -119,7 +119,7 @@ knitr::kable(silhouette_scores, label = "Daisy + cluster::silhouette derived sil
 
 ```
 
-At this point, despite the slightly greater reduction in total within sum of squares values, it is not evident whether *k = 5* is more optimal than *k = 6*. This becomes more clear, though, when we examine the density plot of silhouette scores at the individual subject within-cluster level: 
+At this point, despite the slightly greater reduction in total within sum of squares values, it is not evident whether *k = 5* is more optimal than *k = 4*. This becomes more clear, though, when we examine the density plot of silhouette scores at the individual subject within-cluster level: 
 
 ```{r silhouette density plot, echo = FALSE, warning = FALSE, fig.width = 10, fig.height = 6}
 
@@ -153,11 +153,21 @@ print(silhouette_plot)
 
 ```
 
-At *k = 5*, the tight grouping of clusters about silhouette = 0.20 for clusters 1, 2, 3, and 5 and relatively good (albeit lower and more spread) performance of cluster 4 (about silhouette = 0.05) is vastly superior to *k = 6*. 
+### Assessment of Current Results Using Huang Distance
 
-At *k = 6*, clusters 1, 2, 4, and 5 perform well (i.e., are grouped about silhouette = 0.25), but clusters 3 and 6 perform worse than cluster 4 in the *k = 5* solution, with cluster 3 actually mean centered below 0 (indicating that most subjects in that cluster would have been more accurately grouped into another cluster). 
+At *k = 5*, the tight grouping of clusters about silhouette = 0.20 for clusters 1 and 3 and okay (albeit lower and more spread) performance of cluster 2 and 4 (about silhouette = 0) is superior to *k = 4*. Cluster 5 does not indicate good performance according to the silhouette index, but this limitation will be discussed below.
 
-As such, when considering the results of both the elbow plot and silhouette index, it is likely that optimal *k* = 5. 
+At *k = 4*, cluster 3 performs well (i.e., is grouped about silhouette = 0.25), but cluster 2 performs worse than cluster 2 in the *k = 5* solution, with clusters 1 and 4 actually mean centered below 0 (indicating that most subjects in that cluster would have been more accurately grouped into another cluster). 
+
+It should be noted that the silhouette index as it is currently used is likely not a great indicator of cluster separation/performance, given it tends to favor clustering solutions wherein separation of the categorical variables are prioritized over separation of the continuous variables (as is best done by the gower distance method). Given this bias, our determination of the optimal k value in this iteration of clustering is partially subjective in nature; and while this is acceptable for first round analyses to be submitted to SOBP, these results are tentative, and need to be reviewed more carefully considering: 
+
+- The inclusion of validation indices that provide indicators of within cluster performance (e.g., C index), cluster separation for both categorical and continuous data (e.g., point-biserial coefficient), and something like the weighted silhouette index which takes distance + variance of both types of data into account; 
+
+- Secondary considerations such as the stability of the clusters (e.g., assessed using stability_kproto()) and gap statistics; and
+
+- Optimization of lambda parameters
+
+prior to any publication/more widespread communication of statistical results derived using these clusters. 
 
 ## Characterization of *k* = 5 Clusters
 
@@ -333,3 +343,146 @@ continuous_summary_data %>%
 
 
 ```
+
+### **Refined Cluster Characterization and Labeling Based on Risk Variables**  
+
+Each cluster is characterized based on categorical risk factors (e.g., family history of depression, bullying) and continuous risk factors (e.g., DSM-5 anxiety and depression scores, cognitive functioning, and impulsivity). Below is an in-depth profiling of each cluster, refining your pre-existing hypotheses with more detailed insights.
+
+#### **Cluster 1: Moderate Risk with High Family Depression History and Cognitive Strengths**
+
+- **Size:** 1,984 individuals  
+
+- **Categorical Characteristics:**  
+
+  - **Very high family history of depression**  
+  
+  - **Moderate bullying exposure**  
+  
+  - **Moderate parental history of mania**  
+  
+- **Continuous Characteristics:**  
+
+  - **Moderate DSM-5 Anxiety and Depression**  
+  
+  - **Elevated attention problems and aggression**  
+  
+  - **High cognitive function** 
+  
+  - **Moderate childhood adversity**  
+  
+  - **Moderate sleep disturbances**  
+  
+  - **Moderate impulsivity** 
+  
+  - **Decent neighborhood safety**  
+
+#### **Cluster 2: Moderate Risk with High Impulsivity, Low Cognitive Scores, and Socioeconomic Disadvantage**
+
+- **Size:** 2,119 individuals  
+
+- **Categorical Characteristics:**  
+
+  - **Moderate bullying exposure**  
+  
+  - **Low parental history of mania**  
+  
+  - **Moderate family history of depression**  
+  
+- **Continuous Characteristics:** 
+
+  - **Moderate-low DSM-5 Anxiety and Depression**  
+  
+  - **Low cognitive scores**  
+  
+  - **Low childhood adversity**  
+  
+  - **High impulsivity** 
+  
+  - **Low-moderate sleep disturbances**  
+  
+  - **Low neighborhood safety**  
+
+#### **Cluster 3: Healthy Low-Risk Group**
+
+- **Size:** 3,498 individuals (largest cluster) 
+
+- **Categorical Characteristics:**
+
+  - **Lowest rates of bullying**  
+  
+  - **Lowest rates of family history of depression**  
+  
+  - **Lowest rates of parental mania**  
+  
+- **Continuous Characteristics:**  
+
+  - **Lowest DSM-5 Anxiety and Depression **  
+  
+  - **Lowest aggression and attention problems**  
+  
+  - **Highest cognitive function**  
+  
+  - **Best neighborhood safety**  
+  
+  - **Lowest childhood adversity**  
+  
+  - **Lowest impulsivity**  
+  
+  - **Lowest sleep disturbance**  
+
+#### **Cluster 4: Severe Emotional & Behavioral Dysregulation with High Adversity**
+
+- **Size:** 427 individuals (smallest cluster)  
+
+- **Categorical Characteristics:** 
+
+  - **Highest rates of bullying** 
+  
+  - **High family history of depression**  
+  
+  - **High parental history of mania**  
+  
+- **Continuous Characteristics:**  
+
+  - **Very high DSM-5 Anxiety and Depression **  
+  
+  - **Severe attention problems and aggression**  
+  
+  - **Lower cognitive function** 
+  
+  - **Highest childhood adversity**
+  
+  - **Highest impulsivity** 
+  
+  - **Highest sleep disturbances**
+  
+  - **Low neighborhood safety**  
+
+#### **Cluster 5: Moderate-High Risk with Attention/Aggression Problems and Cognitive Strengths**
+
+- **Size:** 1,125 individuals  
+
+- **Categorical Characteristics:**  
+
+  - **High bullying exposure**  
+  
+  - **Moderate family history of depression**  
+  
+  - **Moderate parental history of mania**  
+  
+- **Continuous Characteristics:**  
+
+  - **Elevated DSM-5 Anxiety and Depression**  
+  
+  - **High attention problems and aggression**  
+  
+  - **Moderate cognitive scores** 
+  
+  - **Moderate childhood adversity**
+  
+  - **Moderate impulsivity** 
+  
+  - **Moderate-high sleep disturbances** 
+  
+  - **Moderate neighborhood safety**  
+  
