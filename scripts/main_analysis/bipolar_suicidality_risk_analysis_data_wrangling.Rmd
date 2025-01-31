@@ -1,0 +1,679 @@
+---
+title: "Mood Disorder & Suicidality ~ Clustered Risk Group Data Wrangling"
+author: "Sam A. Sievertsen"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    self_contained: true
+---
+
+```{r global, include = FALSE}
+
+# Set global env variables
+knitr::opts_chunk$set(warning = FALSE, message = NA, comment = "")
+
+```
+
+```{r environment, echo = FALSE, include = FALSE, warning = FALSE}
+
+# Load necessary packages + environmental variables
+library(knitr)
+library(kableExtra)
+library(dplyr)
+library(tidyr)
+library(report)
+library(ggplot2)
+options(scipen = 999, digits = 8)
+
+# Read in clustered risk variable data
+clustered_risk_variable_data <- read.csv("../../data/data_processed/clustered_risk_variable_data.csv") %>%
+  dplyr::select(-ends_with("_scaled"), -eventname) %>%
+  rename_with(~ sub("^cbcl_", "baseline_cbcl_", .), starts_with("cbcl_"))
+
+# Read in outcome variable data
+# Parent report ksads-comp data
+parent_ksads_data <- read.csv("../../data/data_raw/mh_p_ksads_ss.csv")
+
+# Youth report ksads-comp data
+youth_ksads_data <- read.csv("../../data/data_raw/mh_y_ksads_ss.csv")
+
+# cbcl data
+cbcl_data <- read.csv("../../data/data_raw/mh_p_cbcl.csv")
+
+```
+
+## Data Wrangling for Analysis
+
+```{r data wrangling, echo = FALSE, warning = FALSE}
+
+## Data Wrangling ##
+
+#1. Clean + merge the outcome data
+#1.1 Collapse the data frames containing outcome variables of interest
+outcome_data_merged <- Reduce(
+  function(x, y)
+    merge(x, y,
+      by = c("src_subject_id", "eventname"),
+      all = TRUE),
+  list(parent_ksads_data, youth_ksads_data, cbcl_data))
+
+#1.2 Clean the merged data 
+#1.21 Retain only columns of interest
+outcome_data_merged_trimmed <- outcome_data_merged %>% 
+  dplyr::select(c(src_subject_id, eventname, cbcl_scr_dsm5_depress_t, cbcl_scr_dsm5_anxdisord_t, cbcl_scr_syn_attention_t, cbcl_scr_syn_aggressive_t, ksads2_2_937_p, ksads2_2_800_p, ksads2_2_798_p, ksads2_2_799_p, ksads2_2_798_t, ksads2_2_799_t, ksads2_2_800_t, ksads2_2_937_t, ksads2_2_801_p, ksads2_2_802_p, ksads2_2_931_p,ksads2_2_936_p, ksads2_2_931_t, ksads2_2_936_t,ksads2_2_802_t, ksads2_2_801_t, ksads2_2_803_p, ksads2_2_933_p, ksads2_2_803_t, ksads2_2_933_t, ksads2_23_917_p, ksads2_23_918_p, ksads2_23_919_p, ksads2_23_920_p, ksads2_23_921_p, ksads2_23_906_p, ksads2_23_907_p, ksads2_23_908_p, ksads2_23_909_p, ksads2_23_910_p, ksads2_23_917_t, ksads2_23_918_t, ksads2_23_919_t, ksads2_23_920_t, ksads2_23_921_t, ksads2_23_906_t, ksads2_23_907_t, ksads2_23_908_t, ksads2_23_909_t, ksads2_23_910_t, ksads2_23_923_p, ksads2_23_924_p, ksads2_23_925_p, ksads2_23_912_p, ksads2_23_913_p, ksads2_23_914_p, ksads2_23_923_t, ksads2_23_924_t, ksads2_23_925_t, ksads2_23_912_t, ksads2_23_913_t, ksads2_23_914_t, ksads2_23_905_p, ksads2_23_916_p, ksads2_23_905_t, ksads2_23_916_t, ksads_23_957_p, ksads_23_958_p, ksads_23_959_p, ksads_23_960_p, ksads_23_961_p, ksads_23_946_p, ksads_23_947_p, ksads_23_948_p, ksads_23_949_p, ksads_23_950_p, ksads_23_957_t, ksads_23_958_t, ksads_23_959_t, ksads_23_960_t, ksads_23_961_t, ksads_23_946_t, ksads_23_947_t, ksads_23_948_t, ksads_23_949_t, ksads_23_950_t, ksads_23_963_p, ksads_23_964_p, ksads_23_965_p, ksads_23_952_p, ksads_23_953_p, ksads_23_954_p, ksads_23_963_t, ksads_23_964_t, ksads_23_965_t, ksads_23_952_t, ksads_23_953_t, ksads_23_954_t, ksads_23_945_p, ksads_23_956_p, ksads_23_945_t, ksads_23_956_t, ksads_2_833_p, ksads_2_830_p, ksads_2_831_p, ksads_2_830_t, ksads_2_831_t, ksads_2_833_t, ksads_2_835_p, ksads_2_837_p, ksads_2_836_p, ksads_2_836_t, ksads_2_837_t, ksads_2_835_t, ksads_2_838_p, ksads_2_839_p, ksads_2_838_t, ksads_2_839_t))
+
+#1.22 Turn all instances of empty, missing, 555, and 999 to NA; and 888 to 0 in KSADS columns
+outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>%
+  mutate(across(starts_with("ksads"), ~ na_if(replace(., . %in% c(555, 999, ""), NA), 888) %>% replace_na(0)))
+
+#1.23 Filter the trimmed data to only contain rows at timepoints of interest
+#1.231 Baseline assessment timepoint
+baseline_outcome_data <- outcome_data_merged_trimmed %>%
+  filter(eventname == "baseline_year_1_arm_1")
+
+#1.232 Years 1-3 followup
+Y1_3_outcome_data <- outcome_data_merged_trimmed %>%
+  filter(eventname %in% c("1_year_follow_up_y_arm_1",
+                          "2_year_follow_up_y_arm_1",
+                          "3_year_follow_up_y_arm_1"))
+
+#1.233 Year 4 followup 
+Y4_outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>% 
+  filter(eventname == "4_year_follow_up_y_arm_1")
+
+#1.3 Create relevant outcome variables of interest
+#1.31 Disorder Variables 
+#1.311 Bipolar I Disorder
+#1.3111 Create the bipolar_I_dx variable for the years 1-3 followup assessment timepoints
+Y1_3_bipolar_I_dx <- Y1_3_outcome_data %>%
+  group_by(src_subject_id) %>%
+  summarise(
+    Y1_3_bipolar_I_dx = as.integer(max(
+      c_across(c(
+        
+        #1.31111 Years 1-2
+        "ksads_2_833_p", "ksads_2_830_p", "ksads_2_831_p",
+        "ksads_2_830_t", "ksads_2_831_t", "ksads_2_833_t",
+        
+        #1.31112 Year 3
+        "ksads2_2_937_p", "ksads2_2_800_p", "ksads2_2_798_p",
+        "ksads2_2_799_p", "ksads2_2_798_t", "ksads2_2_799_t",
+        "ksads2_2_800_t", "ksads2_2_937_t"
+      )), na.rm = TRUE),  # Use max() to retain any diagnosis (1 = diagnosed at least once)
+      .groups = "drop"
+    ))
+
+#1.3112 Create the bipolar_I_dx variable for the year 4 assessment timepoint
+Y4_outcome_data_merged_trimmed <- Y4_outcome_data_merged_trimmed %>%
+  mutate(
+    Y4_bipolar_I_dx = case_when(
+      rowSums(select(., c(
+        "ksads2_2_937_p", "ksads2_2_800_p", "ksads2_2_798_p", 
+        "ksads2_2_799_p", "ksads2_2_798_t", "ksads2_2_799_t", 
+        "ksads2_2_800_t", "ksads2_2_937_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(select(., c(
+        "ksads2_2_937_p", "ksads2_2_800_p", "ksads2_2_798_p", 
+        "ksads2_2_799_p", "ksads2_2_798_t", "ksads2_2_799_t", 
+        "ksads2_2_800_t", "ksads2_2_937_t"
+      )))) == 0 ~ NA_real_,
+      TRUE ~ 0
+    )
+  )
+
+#1.312 Bipolar II Disorder
+#1.3121 Create the bipolar_II_dx variable for the years 1-3 followup assessment timepoints
+Y1_3_bipolar_II_dx <- Y1_3_outcome_data %>%
+  group_by(src_subject_id) %>%
+  summarise(
+    Y1_3_bipolar_II_dx = as.integer(max(
+      c_across(c(
+        
+        #1.31211 Years 1-2
+        "ksads_2_835_p", "ksads_2_837_p", "ksads_2_836_p", 
+        "ksads_2_836_t", "ksads_2_837_t", "ksads_2_835_t",
+        
+        #1.31212 Year 3
+        "ksads2_2_801_p", "ksads2_2_802_p", "ksads2_2_931_p",
+        "ksads2_2_936_p", "ksads2_2_931_t", "ksads2_2_936_t",
+        "ksads2_2_802_t", "ksads2_2_801_t"
+      )), na.rm = TRUE),  # Use max() to retain any diagnosis (1 = diagnosed at least once)
+      .groups = "drop"
+    ))
+
+#1.3122 Bipolar II Disorder for the year 4 assessment timepoint
+Y4_outcome_data_merged_trimmed <- Y4_outcome_data_merged_trimmed %>%
+  mutate(
+    Y4_bipolar_II_dx = case_when(
+      rowSums(select(., c(
+        "ksads2_2_801_p", "ksads2_2_802_p", "ksads2_2_931_p",
+        "ksads2_2_936_p", "ksads2_2_931_t", "ksads2_2_936_t",
+        "ksads2_2_802_t", "ksads2_2_801_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(select(., c(
+        "ksads2_2_801_p", "ksads2_2_802_p", "ksads2_2_931_p",
+        "ksads2_2_936_p", "ksads2_2_931_t", "ksads2_2_936_t",
+        "ksads2_2_802_t", "ksads2_2_801_t"
+      )))) == 0 ~ NA_real_,
+      TRUE ~ 0
+    )
+  )
+
+#1.313 Any Bipolar Disorder
+#1.3131 Any Bipolar Disorder for the years 1-3 followup assessment timepoints
+Y1_3_any_bipolar_dx <- Y1_3_outcome_data %>%
+  group_by(src_subject_id) %>%
+  summarise(
+    Y1_3_any_bipolar_dx = as.integer(max(
+      c_across(c(
+        
+        #1.31311 Years 1-2
+        "ksads_2_833_p", "ksads_2_830_p", "ksads_2_831_p",
+        "ksads_2_830_t", "ksads_2_831_t", "ksads_2_833_t",
+        "ksads_2_835_p", "ksads_2_837_p", "ksads_2_836_p", 
+        "ksads_2_836_t", "ksads_2_837_t", "ksads_2_835_t",
+        "ksads_2_838_p", "ksads_2_839_p", "ksads_2_838_t", 
+        "ksads_2_839_t",
+        
+        #1.31312 Year 3
+        "ksads2_2_937_p", "ksads2_2_800_p", "ksads2_2_798_p",
+        "ksads2_2_799_p", "ksads2_2_798_t", "ksads2_2_799_t",
+        "ksads2_2_800_t", "ksads2_2_937_t", "ksads2_2_801_p", 
+        "ksads2_2_802_p", "ksads2_2_931_p", "ksads2_2_936_p", 
+        "ksads2_2_931_t", "ksads2_2_936_t", "ksads2_2_802_t", 
+        "ksads2_2_801_t", "ksads2_2_803_p", "ksads2_2_933_p",
+        "ksads2_2_803_t", "ksads2_2_933_t"
+      )), na.rm = TRUE),  # Use max() to retain any diagnosis (1 = diagnosed at least once)
+      .groups = "drop"
+    ))
+
+#1.3132 Any Bipolar Disorder for the year 4 assessment timepoint
+Y4_outcome_data_merged_trimmed <- Y4_outcome_data_merged_trimmed %>%
+  mutate(
+    Y4_any_bipolar_dx = case_when(
+      rowSums(select(., c(
+        "Y4_bipolar_I_dx", "Y4_bipolar_II_dx", "ksads2_2_803_p",
+        "ksads2_2_933_p", "ksads2_2_803_t", "ksads2_2_933_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(select(., c(
+        "Y4_bipolar_I_dx", "Y4_bipolar_II_dx", "ksads2_2_803_p",
+        "ksads2_2_933_p", "ksads2_2_803_t", "ksads2_2_933_t"
+      )))) == 0 ~ NA_real_,
+      TRUE ~ 0
+    )
+  )
+
+#1.32 Suicide & self-harm related variables
+#1.321 Suicidal Thinking
+#1.3211 Suicidal Thinking for the years 1-3 followup assessment timepoints
+Y1_3_suicidal_thinking <- Y1_3_outcome_data %>%
+  group_by(src_subject_id) %>%
+  summarise(
+    Y1_3_suicidal_thinking = as.integer(max(
+      c_across(c(
+        
+        #1.32111 Years 1-2
+        "ksads_23_957_p", "ksads_23_958_p", "ksads_23_959_p", 
+        "ksads_23_960_p", "ksads_23_961_p", "ksads_23_946_p", 
+        "ksads_23_947_p", "ksads_23_948_p", "ksads_23_949_p", 
+        "ksads_23_950_p", "ksads_23_957_t", "ksads_23_958_t", 
+        "ksads_23_959_t", "ksads_23_960_t", "ksads_23_961_t", 
+        "ksads_23_946_t", "ksads_23_947_t", "ksads_23_948_t", 
+        "ksads_23_949_t", "ksads_23_950_t",
+        
+        #1.32112 Year 3
+        "ksads2_23_917_p", "ksads2_23_918_p", "ksads2_23_919_p", 
+        "ksads2_23_920_p", "ksads2_23_921_p", "ksads2_23_906_p", 
+        "ksads2_23_907_p", "ksads2_23_908_p", "ksads2_23_909_p", 
+        "ksads2_23_910_p", "ksads2_23_917_t", "ksads2_23_918_t", 
+        "ksads2_23_919_t", "ksads2_23_920_t", "ksads2_23_921_t", 
+        "ksads2_23_906_t", "ksads2_23_907_t", "ksads2_23_908_t", 
+        "ksads2_23_909_t", "ksads2_23_910_t"
+      )), na.rm = TRUE),  # Use max() to retain any diagnosis (1 = diagnosed at least once)
+      .groups = "drop"
+    ))
+
+#1.3212 Suicidal Thinking for the year 4 assessment timepoint
+Y4_outcome_data_merged_trimmed <- Y4_outcome_data_merged_trimmed %>%
+  mutate(
+    Y4_suicidal_thinking = case_when(
+      rowSums(select(., c(
+        "ksads2_23_917_p", "ksads2_23_918_p", "ksads2_23_919_p", 
+        "ksads2_23_920_p", "ksads2_23_921_p", "ksads2_23_906_p", 
+        "ksads2_23_907_p", "ksads2_23_908_p", "ksads2_23_909_p", 
+        "ksads2_23_910_p", "ksads2_23_917_t", "ksads2_23_918_t", 
+        "ksads2_23_919_t", "ksads2_23_920_t", "ksads2_23_921_t", 
+        "ksads2_23_906_t", "ksads2_23_907_t", "ksads2_23_908_t", 
+        "ksads2_23_909_t", "ksads2_23_910_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(select(., c(
+        "ksads2_23_917_p", "ksads2_23_918_p", "ksads2_23_919_p", 
+        "ksads2_23_920_p", "ksads2_23_921_p", "ksads2_23_906_p", 
+        "ksads2_23_907_p", "ksads2_23_908_p", "ksads2_23_909_p", 
+        "ksads2_23_910_p", "ksads2_23_917_t", "ksads2_23_918_t", 
+        "ksads2_23_919_t", "ksads2_23_920_t", "ksads2_23_921_t", 
+        "ksads2_23_906_t", "ksads2_23_907_t", "ksads2_23_908_t", 
+        "ksads2_23_909_t", "ksads2_23_910_t"
+      )))) == 0 ~ NA_real_,
+      TRUE ~ 0
+    )
+  )
+
+#1.322 Suicide Attempt 
+#1.3221 Suicide Attempt (i.e., Suicidal Behavior) for the years 1-3 followup assessment timepoints
+Y1_3_suicide_attempt <- Y1_3_outcome_data %>%
+  group_by(src_subject_id) %>%
+  summarise(
+    Y1_3_suicide_attempt = as.integer(max(
+      c_across(c(
+        
+        #1.32111 Years 1-2
+        "ksads_23_963_p", "ksads_23_964_p", "ksads_23_965_p", 
+        "ksads_23_952_p", "ksads_23_953_p", "ksads_23_954_p", 
+        "ksads_23_963_t", "ksads_23_964_t", "ksads_23_965_t", 
+        "ksads_23_952_t", "ksads_23_953_t", "ksads_23_954_t",
+        
+        #1.32112 Year 3
+        "ksads2_23_923_p", "ksads2_23_924_p", "ksads2_23_925_p", 
+        "ksads2_23_912_p", "ksads2_23_913_p", "ksads2_23_914_p", 
+        "ksads2_23_923_t", "ksads2_23_924_t", "ksads2_23_925_t", 
+        "ksads2_23_912_t", "ksads2_23_913_t", "ksads2_23_914_t"
+      )), na.rm = TRUE),  # Use max() to retain any diagnosis (1 = diagnosed at least once)
+      .groups = "drop"
+    ))
+
+#1.3222 Suicde Attempt (i.e., Suicidal Behavior) for the year 4 assessment timepoint
+Y4_outcome_data_merged_trimmed <- Y4_outcome_data_merged_trimmed %>%
+  mutate(
+    Y4_suicide_attempt = case_when(
+      rowSums(select(., c(
+        "ksads2_23_923_p", "ksads2_23_924_p", "ksads2_23_925_p", 
+        "ksads2_23_912_p", "ksads2_23_913_p", "ksads2_23_914_p", 
+        "ksads2_23_923_t", "ksads2_23_924_t", "ksads2_23_925_t", 
+        "ksads2_23_912_t", "ksads2_23_913_t", "ksads2_23_914_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(select(., c(
+        "ksads2_23_923_p", "ksads2_23_924_p", "ksads2_23_925_p", 
+        "ksads2_23_912_p", "ksads2_23_913_p", "ksads2_23_914_p", 
+        "ksads2_23_923_t", "ksads2_23_924_t", "ksads2_23_925_t", 
+        "ksads2_23_912_t", "ksads2_23_913_t", "ksads2_23_914_t"
+      )))) == 0 ~ NA_real_,
+      TRUE ~ 0
+    )
+  )
+
+#1.323 Non-Suicidal Self Injury (NSSI)
+#1.3231 Non-Suicidal Self Injury (NSSI) for the years 1-3 followup assessment timepoints
+Y1_3_nssi <- Y1_3_outcome_data %>%
+  group_by(src_subject_id) %>%
+  summarise(
+    Y1_3_nssi = as.integer(max(
+      c_across(c(
+        
+        #1.32111 Years 1-2
+        "ksads_23_945_p", "ksads_23_956_p", 
+        "ksads_23_945_t", "ksads_23_956_t",
+        
+        #1.32112 Year 3
+        "ksads2_23_905_p", "ksads2_23_916_p", 
+        "ksads2_23_905_t", "ksads2_23_916_t"
+      )), na.rm = TRUE),  # Use max() to retain any diagnosis (1 = diagnosed at least once)
+      .groups = "drop"
+    ))
+
+#1.3232 Non-Suicidal Self Injury (NSSI) for the year 4 assessment timepoint
+Y4_outcome_data_merged_trimmed <- Y4_outcome_data_merged_trimmed %>%
+  mutate(
+    Y4_nssi = case_when(
+      rowSums(select(., c(
+        "ksads2_23_905_p", "ksads2_23_916_p", "ksads2_23_905_t",
+        "ksads2_23_916_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(select(., c(
+        "ksads2_23_905_p", "ksads2_23_916_p", "ksads2_23_905_t",
+        "ksads2_23_916_t"
+      )))) == 0 ~ NA_real_,
+      TRUE ~ 0
+    )
+  )
+
+#1.33 Merge the Y1-3 assessment timepoint outcome data together
+Y1_3_outcome_data_merged_trimmed <- Reduce(
+  function(x, y)
+    merge(x, y,
+      by = "src_subject_id",
+      all = TRUE),
+  list(Y1_3_bipolar_I_dx, Y1_3_bipolar_II_dx, Y1_3_any_bipolar_dx, Y1_3_suicidal_thinking, Y1_3_suicide_attempt, Y1_3_nssi))
+
+#1.34 Merge the Y1-3 and Y4 assessment timepoint outcome data 
+#1.341 Full join the data
+Y1_4_outcome_data_merged_trimmed <- full_join(Y1_3_outcome_data_merged_trimmed, Y4_outcome_data_merged_trimmed)
+
+#1.342 Retain only the columns of interest
+Y1_4_outcome_data_merged_trimmed <- Y1_4_outcome_data_merged_trimmed %>% 
+  dplyr::select(c(src_subject_id, Y1_3_bipolar_I_dx, Y4_bipolar_I_dx, Y1_3_bipolar_II_dx, Y4_bipolar_II_dx, Y1_3_any_bipolar_dx, Y4_any_bipolar_dx, Y1_3_suicidal_thinking, Y4_suicidal_thinking, Y1_3_suicide_attempt, Y4_suicide_attempt, Y1_3_nssi, Y4_nssi, cbcl_scr_dsm5_depress_t, cbcl_scr_dsm5_anxdisord_t, cbcl_scr_syn_attention_t, cbcl_scr_syn_aggressive_t))
+
+#1.4 Create relevant clinical covariates of interest
+#1.41 Baseline Bipolar I Disorder
+baseline_outcome_data <- baseline_outcome_data %>% 
+  mutate(baseline_bipolar_I_dx = case_when(
+      rowSums(select(., c(
+        "ksads_2_833_p", "ksads_2_830_p", "ksads_2_831_p", 
+        "ksads_2_830_t", "ksads_2_831_t", "ksads_2_833_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(select(., c(
+        "ksads_2_833_p", "ksads_2_830_p", "ksads_2_831_p", 
+        "ksads_2_830_t", "ksads_2_831_t", "ksads_2_833_t"
+      )))) == 0 ~ NA_real_,
+      TRUE ~ 0
+    )
+  )
+
+#1.42 Baseline Bipolar II Disorder
+baseline_outcome_data <- baseline_outcome_data %>% 
+  mutate(baseline_bipolar_II_dx = case_when(
+      rowSums(select(., c(
+        "ksads_2_835_p", "ksads_2_837_p", "ksads_2_836_p",  
+        "ksads_2_836_t", "ksads_2_837_t", "ksads_2_835_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(select(., c(
+        "ksads_2_835_p", "ksads_2_837_p", "ksads_2_836_p",  
+        "ksads_2_836_t", "ksads_2_837_t", "ksads_2_835_t"
+      )))) == 0 ~ NA_real_,
+      TRUE ~ 0
+    )
+  )
+
+#1.43 Baseline any Bipolar Disorder
+baseline_outcome_data <- baseline_outcome_data %>% 
+  mutate(baseline_any_bipolar_dx = case_when(
+      rowSums(select(., c(
+        "baseline_bipolar_I_dx", "baseline_bipolar_II_dx", "ksads_2_838_p", 
+        "ksads_2_839_p", "ksads_2_838_t", "ksads_2_839_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(select(., c(
+        "baseline_bipolar_I_dx", "baseline_bipolar_II_dx", "ksads_2_838_p", 
+        "ksads_2_839_p", "ksads_2_838_t", "ksads_2_839_t"
+      )))) == 0 ~ NA_real_,
+      TRUE ~ 0
+    )
+  )
+
+#1.44 Baseline Suicidal Thinking
+baseline_outcome_data <- baseline_outcome_data %>% 
+  mutate(baseline_suicidal_thinking = case_when(
+      rowSums(select(., c(
+        "ksads_23_957_p", "ksads_23_958_p", "ksads_23_959_p", 
+        "ksads_23_960_p", "ksads_23_961_p", "ksads_23_946_p", 
+        "ksads_23_947_p", "ksads_23_948_p", "ksads_23_949_p", 
+        "ksads_23_950_p", "ksads_23_957_t", "ksads_23_958_t", 
+        "ksads_23_959_t", "ksads_23_960_t", "ksads_23_961_t", 
+        "ksads_23_946_t", "ksads_23_947_t", "ksads_23_948_t", 
+        "ksads_23_949_t", "ksads_23_950_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(select(., c(
+        "ksads_23_957_p", "ksads_23_958_p", "ksads_23_959_p", 
+        "ksads_23_960_p", "ksads_23_961_p", "ksads_23_946_p", 
+        "ksads_23_947_p", "ksads_23_948_p", "ksads_23_949_p", 
+        "ksads_23_950_p", "ksads_23_957_t", "ksads_23_958_t", 
+        "ksads_23_959_t", "ksads_23_960_t", "ksads_23_961_t", 
+        "ksads_23_946_t", "ksads_23_947_t", "ksads_23_948_t", 
+        "ksads_23_949_t", "ksads_23_950_t"
+      )))) == 0 ~ NA_real_,
+      TRUE ~ 0
+    )
+  )
+
+#1.45 Baseline Suicide Attempt
+baseline_outcome_data <- baseline_outcome_data %>% 
+  mutate(baseline_suicide_attempt = case_when(
+      rowSums(select(., c(
+        "ksads_23_963_p", "ksads_23_964_p", "ksads_23_965_p", 
+        "ksads_23_952_p", "ksads_23_953_p", "ksads_23_954_p", 
+        "ksads_23_963_t", "ksads_23_964_t", "ksads_23_965_t", 
+        "ksads_23_952_t", "ksads_23_953_t", "ksads_23_954_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(select(., c(
+        "ksads_23_963_p", "ksads_23_964_p", "ksads_23_965_p", 
+        "ksads_23_952_p", "ksads_23_953_p", "ksads_23_954_p", 
+        "ksads_23_963_t", "ksads_23_964_t", "ksads_23_965_t", 
+        "ksads_23_952_t", "ksads_23_953_t", "ksads_23_954_t"
+      )))) == 0 ~ NA_real_,
+      TRUE ~ 0
+    )
+  )
+
+#1.46 Baseline NSSI
+baseline_outcome_data <- baseline_outcome_data %>% 
+  mutate(baseline_nssi = case_when(
+      rowSums(select(., c(
+        "ksads_23_945_p", "ksads_23_956_p", 
+        "ksads_23_945_t", "ksads_23_956_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(select(., c(
+        "ksads_23_945_p", "ksads_23_956_p", 
+        "ksads_23_945_t", "ksads_23_956_t"
+      )))) == 0 ~ NA_real_,
+      TRUE ~ 0
+    )
+  )
+
+#1.47 Retain only the baseline covariates of interest
+baseline_outcome_covariates <- baseline_outcome_data %>% 
+  dplyr::select(c(src_subject_id, baseline_bipolar_I_dx, baseline_bipolar_II_dx, baseline_any_bipolar_dx, baseline_suicidal_thinking, baseline_suicide_attempt, baseline_nssi))
+
+#1.5 Merge the Y1-3 and Y4 assessment timepoint outcome data+ baseline covariates
+outcome_data_w_covars <- full_join(Y1_4_outcome_data_merged_trimmed, baseline_outcome_covariates)
+
+#2. Merge the clustered risk data with the outcome data
+#2.1 Left join the outcome data with the clustered data
+bipolar_suicidality_risk_analysis_data <- left_join(outcome_data_w_covars, clustered_risk_variable_data)
+
+#2.3 Remove subjects who do not have cluster information
+bipolar_suicidality_risk_analysis_data <- bipolar_suicidality_risk_analysis_data %>% 
+  filter(!is.na(cluster))
+
+cat("Data Wrangling of Baseline, Y1-3, and Y4 Outcomes Complete Without Error\n")
+
+```
+
+## Assessment of the Inclusion of Additional Outcome Variable Timepoints
+
+### Determining whether it is appropriate to include additional timepoint data alongside the Y4 data
+
+```{r cluster missingness, echo = FALSE, warning = FALSE}
+
+## Determine whether it is appropriate to include additional timepoint data alongside the Y4 data ##
+
+#1. Run a chi square to test whether there is a difference in who is missing data on the basis of cluster membership
+#1.1 Count subjects in each cluster in the full dataset
+full_cluster_counts <- table(clustered_risk_variable_data$cluster)
+
+#1.21 Count subjects in each cluster in the 4Y follow-up dataset
+followup_cluster_counts <- table(bipolar_suicidality_risk_analysis_data$cluster[!is.na(bipolar_suicidality_risk_analysis_data$Y4_bipolar_I_dx)])
+
+#1.22 Calculate missing subjects per cluster
+missing_cluster_counts <- full_cluster_counts - followup_cluster_counts
+
+#1.3 Create a contingency table: rows = Follow-up Status, columns = Clusters
+#1.31 Create the contingency table
+followup_status_table <- data.frame(
+  Cluster = names(full_cluster_counts),
+  Present = as.numeric(followup_cluster_counts),
+  Missing = as.numeric(missing_cluster_counts)
+)
+
+#1.32 Add a percent missing variable to the contingency table
+followup_status_table <- followup_status_table %>% 
+  mutate(Percent_Missing = ((Present/(Missing + Present)) * 100))
+
+#1.4 Run chi-square test
+chisq_result <- chisq.test(followup_status_table[, c("Present", "Missing")])
+
+#1.5 Output results
+#1.51 Baseline clusters present
+kable(full_cluster_counts, caption = "N in Each Cluster at Baseline", col.names = c("Cluster", "N"))
+
+#1.52 4Y followup N clusters present
+kable(followup_status_table, caption = "Data Present in Each Cluster at Followup")
+
+#1.53 Chi square results
+report(chisq_result)
+
+#1.6 Run a binomial proportion test for each cluster
+#1.61 Calculate the overall missingness rate across all clusters
+overall_missing_rate <- sum(followup_status_table$Missing) / sum(full_cluster_counts)
+
+#1.62 Conduct binomial tests for each cluster
+followup_status_table <- followup_status_table %>%
+  rowwise() %>%
+  mutate(
+    p_value_binom = binom.test(
+      Missing,  # Observed missing count
+      Missing + Present,  # Total subjects in cluster
+      p = overall_missing_rate,  # Expected missing proportion based on total sample
+      alternative = "two.sided"  # Test if different from expected
+    )$p.value
+  )
+
+#1.7 Generate standardized residuals from the chi-Square test
+#1.71 Compute standardized residuals from the chi-square test
+std_residuals <- chisq_result$residuals
+
+#1.72 Extract standardized residuals for the "Missing" category only
+std_residuals_missing <- std_residuals[, "Missing"]
+
+#1.73 Add standardized residuals to the follow-up table
+followup_status_table <- followup_status_table %>%
+  mutate(Standardized_Residuals = std_residuals_missing[as.numeric(Cluster)])
+
+#1.8 Output results with chi-square and binomial test results
+kable(followup_status_table, caption = "Follow-up Missingness Analysis with Binomial Proportion Test & Standardized Residual Results")
+
+```
+
+#### Preliminary thoughts on inclusion of additional outcome datapoints alongside Y4
+
+- There is a statistically significant difference in missingness across clusters (p < 0.001), but the effect size is very small (Cramér’s V = 0.06)
+
+- Cluster 2 is missing fewer participants than expected (significantly retained at 4Y data we have thus far)
+
+- Cluster 3 is missing more participants than expected (significantly more missingness as of 4Y data we have thus far)
+  
+  - This may not actually be a problem given that this is the "control" group essentially, and very well powered
+
+- Clusters 1, 4, and 5 do not significantly deviate from expected missingness
+
+**What This May Mean for the Analysis**
+
+- Since Cluster 3 has a disproportionate number of missing subjects, any longitudinal analyses may underestimate the signal associated with this group
+
+- Because Cluster 2 is over represented in follow-up data, findings might overestimate their stability in relation to other clusters (particularly those at high risk)
+
+- Clusters 1, 4, and 5 appear representative of their baseline proportions; but would need to be interpreted in relation to the other clusters with caution
+
+**Current Tentative Decision**
+
+Given the information above, the current decision is to not include the Y1-Y3 data alongside the 4Y follow-up data given significant group differences in missingness (i.e., unbalanced data). 
+
+### Assessment of whether to use years 1-3 in place of year 4 followup data to assess outcomes
+
+```{r desc dx stats, echo = FALSE, warning = FALSE}
+
+## Generate Descriptive Stats to Determine Whether we Should Use Y1-Y3 Data or Y4 Data in Initial Analyses ##
+
+#1.1 Identify column pairs based on prefixes
+y1_3_columns <- grep("^Y1_3_", names(bipolar_suicidality_risk_analysis_data), value = TRUE)
+y4_columns <- grep("^Y4_", names(bipolar_suicidality_risk_analysis_data), value = TRUE)
+
+#1.2 Ensure matching pairs exist
+paired_outcome_columns <- intersect(gsub("^Y1_3_", "", y1_3_columns), gsub("^Y4_", "", y4_columns))
+
+#2. Function to compute N and % for each diagnosis and missing values
+compute_outcome_summary <- function(y1_3_col, y4_col, data) {
+  
+  #2.1 Subset non-missing data for each timepoint
+  y1_3_present <- !is.na(data[[y1_3_col]])
+  y4_present <- !is.na(data[[y4_col]])
+  
+  #2.2 Compute N and % for 1 = Yes
+  y1_3_n_yes <- sum(data[[y1_3_col]] == 1, na.rm = TRUE)
+  y1_3_n_present <- sum(y1_3_present)
+  y1_3_percent_yes <- (y1_3_n_yes / y1_3_n_present) * 100
+  
+  y4_n_yes <- sum(data[[y4_col]] == 1, na.rm = TRUE)
+  y4_n_present <- sum(y4_present)
+  y4_percent_yes <- (y4_n_yes / y4_n_present) * 100
+  
+  #2.3 Compute missing counts and %
+  y1_3_n_missing <- sum(is.na(data[[y1_3_col]]))
+  y1_3_percent_missing <- (y1_3_n_missing / nrow(data)) * 100
+  
+  y4_n_missing <- sum(is.na(data[[y4_col]]))
+  y4_percent_missing <- (y4_n_missing / nrow(data)) * 100
+  
+  #2.4 Create a summary dataframe
+  return(data.frame(
+    Diagnosis = gsub("^Y1_3_", "", y1_3_col),
+    Y1_3_N_Yes = y1_3_n_yes,
+    Y1_3_Percent_Yes = round(y1_3_percent_yes, 2),
+    Y1_3_N_Missing = y1_3_n_missing,
+    Y1_3_Percent_Missing = round(y1_3_percent_missing, 2),
+    Y4_N_Yes = y4_n_yes,
+    Y4_Percent_Yes = round(y4_percent_yes, 2),
+    Y4_N_Missing = y4_n_missing,
+    Y4_Percent_Missing = round(y4_percent_missing, 2)
+  ))
+}
+
+#3. Apply the function to each diagnosis pair
+outcome_availability_comparison <- do.call(rbind, lapply(paired_outcome_columns, function(col) {
+  compute_outcome_summary(paste0("Y1_3_", col), paste0("Y4_", col), bipolar_suicidality_risk_analysis_data)
+}))
+
+#4. Display results
+kable(outcome_availability_comparison, caption = "Comparison of Y1-3 vs Y4 Outcome Data Availability", col.names = c("Diagnosis", "Y1-3 N Yes", "Y1-3 Perc Yes", "Y1-3 N Missing", "Y1-3 Perc Missing", "Y1-4 N Yes", "Y4 Perc Yes", "Y4 N Missing", "Y4 Perc Missing"))
+
+```
+
+To maximize statistical power and account for diagnostic availability, we evaluated the feasibility of using aggregated diagnostic data from follow-up years 1-3 (Y1-3) instead of relying solely on year 4 (Y4). The decision was driven by the following info:
+
+- Increased Sample Size & Diagnostic Prevalence:  
+
+  - The number of subjects with available Y1-3 clinical outcome data was substantially higher than those with Y4 data (e.g., 3.71% BD-I in Y1-3 vs. 1.24% in Y4).  
+  
+  - Aggregating Y1-3 data resulted in higher incidence rates across all diagnoses - liekly driven by BD-I diagnoses
+
+- Patterns of Missingness:  
+
+  - Y4 had substantial missingness (~58.63% across all diagnoses) compared to availability of clustered data, while Y1-3 had only ~2.52% missing values relative to clustered data  
+
+- Potential Overdiagnosis Concerns:  
+
+  - The ABCD KSADS-COMP's lack of manual clinician review may contribute to overdiagnosis, particularly for mania -> BD-I.  
+  
+  - Literature suggests refining BD-I diagnoses by requiring co-occurrence with major depressive disorder (MDD), persistent depressive disorder (PDD), or other depressive disorders - see below for more info 
+
+- Timepoint-Specific Considerations:  
+
+  - Mood disorder diagnoses were only assessed at baseline, Y2, and Y4—confirming no BD-I or BD-II data collection at Y1 or Y3.
+  
+  - Suicidality data, however, was collected consistently across all follow-ups.  
+
+- Final Decision TBD pending review of findings herein and discussions with co-authors.   
+
+ALso, per [Barch et al. (2021)](https://www.sciencedirect.com/science/article/pii/S1878929321001201), we could technically retain the use of the complete Y2 data by taking the following into account: 
+
+> "... the computerized KSADS 1.0 shows higher than expected rates of caregiver- and youth-reported past manic episodes (i.e., the caregiver-reported prevalence of Bipolar I Disorder, most recent past episode manic is 2.6%). To address for these higher than expected rates, we recommend rescoring Bipolar I Disorder, most recent past episode manic so that the youth has to meet criteria for past manic episode and any current or past depressive disorder (e.g., major depressive disorder, persistent depressive disorder, other specified depressive disorder) in order to meet diagnostic criteria."
+
+Also TBD pending conversations surrounding feasability with Beka. 
+
+## Output
+
+```{r output, warning = FALSE}
+
+# Write the merged clustered + outcome data as a csv
+write.csv(bipolar_suicidality_risk_analysis_data, "../../data/data_processed/bipolar_suicidality_risk_analysis_data.csv", row.names = FALSE)
+
+```
+
