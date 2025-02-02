@@ -642,7 +642,7 @@ To maximize statistical power and account for diagnostic availability, we evalua
 
   - The number of subjects with available Y1-3 clinical outcome data was substantially higher than those with Y4 data (e.g., 3.71% BD-I in Y1-3 vs. 1.24% in Y4).  
   
-  - Aggregating Y1-3 data resulted in higher incidence rates across all diagnoses - liekly driven by BD-I diagnoses
+  - Aggregating Y1-3 data resulted in higher incidence rates across all diagnoses - likely driven by BD-I diagnoses
 
 - Patterns of Missingness:  
 
@@ -650,7 +650,7 @@ To maximize statistical power and account for diagnostic availability, we evalua
 
 - Potential Overdiagnosis Concerns:  
 
-  - The ABCD KSADS-COMP's lack of manual clinician review may contribute to overdiagnosis, particularly for mania -> BD-I.  
+  - The ABCD KSADS-COMP's lack of manual clinician review may contribute to over diagnosis, particularly for mania -> BD-I.  
   
   - Literature suggests refining BD-I diagnoses by requiring co-occurrence with major depressive disorder (MDD), persistent depressive disorder (PDD), or other depressive disorders - see below for more info 
 
@@ -662,7 +662,7 @@ To maximize statistical power and account for diagnostic availability, we evalua
 
 - Final Decision TBD pending review of findings herein and discussions with co-authors.   
 
-ALso, per [Barch et al. (2021)](https://www.sciencedirect.com/science/article/pii/S1878929321001201), we could technically retain the use of the complete Y2 data by taking the following into account: 
+Also, per [Barch et al. (2021)](https://www.sciencedirect.com/science/article/pii/S1878929321001201), we could technically retain the use of the complete Y2 data by taking the following into account: 
 
 > "... the computerized KSADS 1.0 shows higher than expected rates of caregiver- and youth-reported past manic episodes (i.e., the caregiver-reported prevalence of Bipolar I Disorder, most recent past episode manic is 2.6%). To address for these higher than expected rates, we recommend rescoring Bipolar I Disorder, most recent past episode manic so that the youth has to meet criteria for past manic episode and any current or past depressive disorder (e.g., major depressive disorder, persistent depressive disorder, other specified depressive disorder) in order to meet diagnostic criteria."
 

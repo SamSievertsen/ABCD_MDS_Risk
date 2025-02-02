@@ -383,6 +383,22 @@
       ],
       "Hash": "e78499cbcbbca98200254bd171379165"
     },
+    "TMB": {
+      "Package": "TMB",
+      "Version": "1.9.16",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "Matrix",
+        "R",
+        "RcppEigen",
+        "graphics",
+        "methods",
+        "stats",
+        "utils"
+      ],
+      "Hash": "ab41aa976351076a1840842a4e415d7f"
+    },
     "TTR": {
       "Package": "TTR",
       "Version": "0.24.4",
@@ -1472,6 +1488,25 @@
         "stats"
       ],
       "Hash": "c0fb9f61bfa549d9606801b1ee56a643"
+    },
+    "glmmTMB": {
+      "Package": "glmmTMB",
+      "Version": "1.1.10",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "Matrix",
+        "R",
+        "RcppEigen",
+        "TMB",
+        "lme4",
+        "methods",
+        "mgcv",
+        "nlme",
+        "numDeriv",
+        "reformulas"
+      ],
+      "Hash": "09c1a82cf7f80e2289aaf8267345dfd1"
     },
     "globals": {
       "Package": "globals",
