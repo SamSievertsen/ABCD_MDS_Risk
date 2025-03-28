@@ -1,0 +1,789 @@
+---
+title: "SOBP 2025: BD & Suicidality ~ Risk Cluster Analysis"
+author: "Sam A. Sievertsen"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    self_contained: true
+---
+
+```{r global, include = FALSE}
+
+# Set global env variables
+knitr::opts_chunk$set(warning = FALSE, message = NA, comment = "", dpi = 720)
+
+```
+
+```{r environment, echo = FALSE, include = FALSE, warning = FALSE}
+
+# Load necessary packages + environmental variables
+library(knitr)
+library(kableExtra)
+library(dplyr)
+library(tidyr)
+library(easystats)
+library(performance)
+library(cluster)
+library(clustMixType)
+library(ggplot2)
+library(viridis)
+library(lme4)
+library(glmmTMB)
+library(lmerTest)
+library(lmtest)
+library(sandwich)
+library(car)
+library(emmeans)
+options(scipen = 999, digits = 8)
+
+# Read in clustered risk variable + outcome data for analysis
+bipolar_suicidality_risk_data <- read.csv("../../data/data_processed/bipolar_suicidality_risk_analysis_data.csv")
+
+# Read in family ID data for determining subjects' age in years at 4-year follow-up
+year_4_age_data <- read.csv("../../data/data_raw/abcd_y_lt.csv") %>% 
+  filter(eventname == "4_year_follow_up_y_arm_1") %>% 
+  dplyr::select(c(src_subject_id, interview_age)) %>% 
+  mutate(year_4_age_in_years = (interview_age / 12)) %>% 
+  dplyr::select(-interview_age)
+
+```
+
+## Data Wrangling
+
+```{r data wrangling, warning = FALSE}
+
+## Data Wrangling for Analyses ## 
+
+#1. Create a dataframe for primary analyses
+#1.1 Retain only the columns of interest to the analyses
+bipolar_suicidality_risk_primary_analysis_data <- bipolar_suicidality_risk_data %>% 
+  dplyr::select(c(src_subject_id, sex, family_id, site_name, cluster, Y4_bipolar_I_dx, Y4_bipolar_II_dx, Y4_any_bipolar_dx, Y4_suicidal_thinking, Y4_suicide_attempt, Y4_nssi, baseline_bipolar_I_dx, baseline_bipolar_II_dx, baseline_any_bipolar_dx, baseline_suicidal_thinking, baseline_suicide_attempt, baseline_nssi))
+
+#1.2 Alter the names of clusters to better reflect their membership during modeling
+bipolar_suicidality_risk_primary_analysis_data <- bipolar_suicidality_risk_primary_analysis_data %>%
+  mutate(cluster = paste0("cluster_", cluster))
+
+#1.3 Ensure columns of interest are the correct data type
+#1.31 Set relevant columns to factor type
+bipolar_suicidality_risk_primary_analysis_data <- bipolar_suicidality_risk_primary_analysis_data %>% 
+  mutate(across(c("sex", "family_id", "site_name", "cluster", "Y4_bipolar_I_dx", "Y4_bipolar_II_dx", "Y4_any_bipolar_dx", "Y4_suicidal_thinking", "Y4_suicide_attempt", "Y4_nssi", "baseline_bipolar_I_dx", "baseline_bipolar_II_dx", "baseline_any_bipolar_dx", "baseline_suicidal_thinking", "baseline_suicide_attempt", "baseline_nssi"), as.factor))
+
+#1.32 Set reference level of the cluster variable
+bipolar_suicidality_risk_primary_analysis_data$cluster <- relevel(bipolar_suicidality_risk_primary_analysis_data$cluster, ref = "cluster_3")
+
+#2. Create a dataframe for secondary analyses
+#2.1 Retain only the columns of interest to the analyses
+dimensional_psychopathology_risk_secondary_analysis_data <- bipolar_suicidality_risk_data %>%
+  dplyr::select(c(src_subject_id, sex, family_id, site_name, cluster, baseline_cbcl_scr_dsm5_depress_t, baseline_cbcl_scr_dsm5_anxdisord_t, baseline_cbcl_scr_syn_attention_t, baseline_cbcl_scr_syn_aggressive_t, cbcl_scr_dsm5_depress_t, cbcl_scr_dsm5_anxdisord_t, cbcl_scr_syn_attention_t, cbcl_scr_syn_aggressive_t))
+
+#2.2 Alter the names of clusters to better reflect their membership during modeling
+dimensional_psychopathology_risk_secondary_analysis_data <- dimensional_psychopathology_risk_secondary_analysis_data %>%
+  mutate(cluster = paste0("cluster_", cluster))
+
+#2.3 Ensure columns of interest are the correct data type
+#2.31 Set relevant columns to factor type
+dimensional_psychopathology_risk_secondary_analysis_data <- dimensional_psychopathology_risk_secondary_analysis_data %>% 
+  mutate(across(c("sex", "family_id", "site_name", "cluster"), as.factor))
+
+#2.32 Set reference level of the cluster variable
+dimensional_psychopathology_risk_secondary_analysis_data$cluster <- relevel(dimensional_psychopathology_risk_secondary_analysis_data$cluster, ref = "cluster_3")
+
+#3. Create a dataframe for demographic data summarization
+#3.1 Subset data of interest and ensure it is representative of subjects who have complete data at 4-year follow-up
+bipolar_suicidality_risk_demographic_data <- bipolar_suicidality_risk_data %>%
+    filter(
+        if_all(all_of(c("Y4_bipolar_I_dx", "Y4_bipolar_II_dx", "Y4_any_bipolar_dx",
+                        "Y4_suicidal_thinking", "Y4_suicide_attempt", "Y4_nssi")), 
+               ~ !is.na(.x))) %>% 
+    dplyr::select(src_subject_id, family_id, site_name, sex, age_in_years, race_ethnicity, cluster)
+
+#3.2 Alter the names of variables to better reflect their membership during modeling
+#3.21 Alter the names of clusters
+bipolar_suicidality_risk_demographic_data <- bipolar_suicidality_risk_demographic_data %>%
+  mutate(cluster = paste0("cluster_", cluster))
+
+#3.22 Alter the names + columns representing age in years
+#3.221 Alter the existing age_in_years column to reflect that it is the age column for the baseline assessment timepoint
+bipolar_suicidality_risk_demographic_data <- rename(bipolar_suicidality_risk_demographic_data, baseline_age_in_years = age_in_years)
+
+#3.222 Add in the age_in_years variable for 4-year follow-up to be used in generating descriptive stats
+bipolar_suicidality_risk_demographic_data <- left_join(bipolar_suicidality_risk_demographic_data, year_4_age_data)
+
+#3.3 Ensure columns of interest are the correct data type
+bipolar_suicidality_risk_demographic_data <- bipolar_suicidality_risk_demographic_data %>% 
+  mutate(across(c("sex", "family_id", "site_name", "cluster"), as.factor))
+
+```
+
+## Descriptive Statistics
+
+For the purpose of describing the characteristics of the sample, both in terms of the demographic and risk variable presentations of each cluster (and the sample at large), the following tables & plots represent the group used in analyses: 
+
+```{r cluster descriptive stats, echo = FALSE, warning = FALSE}
+
+#1. Create a descriptive statistics table for the 4-year follow-up analysis data
+participant_characteristics <- bipolar_suicidality_risk_demographic_data %>%
+  group_by(cluster) %>%
+  summarise(
+    N = n(),
+    `Mean Age ± SD` = paste0(round(mean(year_4_age_in_years), 2), " ± ", round(sd(year_4_age_in_years), 2)),
+    `N Female (%)` = paste0(sum(sex == "F"), " (", round(mean(sex == "F")*100, 1), "%)")) %>%
+  arrange(cluster)
+
+#1.1 Add a total sample row to the participant characteristics stats
+#1.11 Calculate the descriptive stats of interest for the whole sample
+participant_characteristics_total <- bipolar_suicidality_risk_demographic_data %>%
+  summarise(
+    cluster = "Total",
+    N = n(),
+    `Mean Age ± SD` = paste0(round(mean(year_4_age_in_years), 2), " ± ", round(sd(year_4_age_in_years), 2)),
+    `N Female (%)` = paste0(sum(sex == "F"), " (", round(mean(sex == "F")*100, 1), "%)"))
+
+#1.12 Bind the total sample stats to the rest of the descriptive stats grouped by cluster
+participant_characteristics <- bind_rows(participant_characteristics, participant_characteristics_total)
+
+#1.2 Rename reference cluster for clarity in the output
+participant_characteristics$cluster <- ifelse(participant_characteristics$cluster == "cluster_3", "cluster_3 (ref)", participant_characteristics$cluster)
+
+#1.3 View final table in the output
+kable(participant_characteristics, caption = "Sample Characteristics at 4-Year Follow-Up", align = "l") %>% 
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+#2. Characterize clusters according to their relative distributions of categorical and continuous variables
+#2.1 Characterize the Clusters According to Binary Risk Variables
+#2.11 Define the binary variables
+binary_vars <- c("family_history_depression", "famhx_ss_momdad_ma_p", "bullying")
+
+#2.12 Define variable descriptions
+binary_variable_labels <- c(
+  family_history_depression = "1st Degree Relative History of Dep",
+  famhx_ss_momdad_ma_p = "Parent History of Mania",
+  bullying = "Bullying Victimization")
+
+#2.13 Wrangle data for plotting
+binary_plot_data <- bipolar_suicidality_risk_data %>%
+  filter(
+        if_all(all_of(c("Y4_bipolar_I_dx", "Y4_bipolar_II_dx", "Y4_any_bipolar_dx",
+                        "Y4_suicidal_thinking", "Y4_suicide_attempt", "Y4_nssi")), 
+               ~ !is.na(.x))) %>%
+  dplyr::select(cluster, family_history_depression, famhx_ss_momdad_ma_p, bullying) %>%
+  pivot_longer(-cluster, names_to = "variable", values_to = "value") %>%
+  group_by(cluster, variable, value) %>%
+  summarise(count = n(), .groups = "drop")
+
+#2.14 Create the binary variable plot
+binary_plot_stacked <- binary_plot_data_pct %>%
+  ggplot(aes(x = as.factor(cluster), y = percent, fill = value_label)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = paste0(count)),
+            position = position_stack(vjust = 0.5), size = 3, color = "black") +
+  facet_wrap(~variable, labeller = as_labeller(binary_variable_labels)) +
+  labs(x = "Cluster", y = "Percentage (%)", fill = "Endorsement",
+       title = "Proportions of Categorical Risk Variable Endorsement by Cluster") +
+  theme_minimal() +
+  theme(strip.text = element_text(size = 12),
+        axis.text = element_text(size = 10),
+        panel.grid.minor.y = element_blank(),
+        panel.grid.major.y = element_blank(),
+        panel.grid.major.x = element_blank(),
+        axis.line.y.left = element_line(),
+        axis.line.x.bottom = element_line(),
+        legend.position = "top") +
+  scale_fill_manual(values = c("lightblue", "salmon"))
+
+#2.15 Print the binary risk variable plot
+print(binary_plot_stacked)
+
+#2.2 Characterize the Clusters According to Continuous Risk Variables with Violin Boxplots
+#2.21 Define the continuous variables and descriptions
+continuous_vars <- c("cbcl_scr_dsm5_depress_t", "cbcl_scr_dsm5_anxdisord_t",
+                     "cbcl_scr_syn_attention_t", "cbcl_scr_syn_aggressive_t",
+                     "pgbi_p_ss_score", "upps_y_ss_negative_urgency",
+                     "upps_y_ss_positive_urgency", "sds_p_ss_total",
+                     "reshist_addr1_coi_z_coi_nat", "nsc_p_ss_mean_3_items",
+                     "nihtbx_list_uncorrected", "nihtbx_flanker_uncorrected",
+                     "nihtbx_pattern_uncorrected", "ACE_index_sum_score")
+
+#2.22 Define labels for each continuous variable
+continuous_variable_labels <- c(
+  cbcl_scr_dsm5_depress_t = "CBCL DSM-5 Depression T-Score",
+  cbcl_scr_dsm5_anxdisord_t = "CBCL DSM-5 Anxiety T-Score",
+  cbcl_scr_syn_attention_t = "CBCL Attention Problems T-Score",
+  cbcl_scr_syn_aggressive_t = "CBCL Aggression Problems T-Score",
+  pgbi_p_ss_score = "GBI Mania Sum Score",
+  upps_y_ss_negative_urgency = "UPPS-P Negative Urgency Score",
+  upps_y_ss_positive_urgency = "UPPS-P Positive Urgency Score",
+  sds_p_ss_total = "Sleep Disturbance Score",
+  reshist_addr1_coi_z_coi_nat = "COI Z-Score",
+  nsc_p_ss_mean_3_items = "Mean Neighborhood Safety",
+  nihtbx_list_uncorrected = "NIHTB Uncorrected List Sorting Score",
+  nihtbx_flanker_uncorrected = "NIHTB Uncorrected Flanker Task Score",
+  nihtbx_pattern_uncorrected = "NIHTB Uncorrected Pattern Comparison Score",
+  ACE_index_sum_score = "ACE Index Sum Score")
+
+#2.23 Calculate y-axis limits for each variable
+y_limits <- continuous_plot_data %>%
+  group_by(variable) %>%
+  summarise(
+    y_min = min(value, na.rm = TRUE),
+    y_max = max(value, na.rm = TRUE)
+  ) %>%
+  #2.231 Add a small buffer to the limits
+  mutate(
+    y_min = y_min - 0.1 * (y_max - y_min),
+    y_max = y_max + 0.1 * (y_max - y_min)
+  ) %>%
+  #2.232 Add a dummy cluster column to match the plot data
+  mutate(cluster = "1")
+
+#2.24 Create the violin boxplot
+continuous_plot <- continuous_plot_data %>%
+  ggplot(aes(x = as.factor(cluster), y = value, fill = as.factor(cluster))) +
+  geom_violin(trim = FALSE, alpha = 0.5, scale = "width") +
+  geom_boxplot(width = 0.2, position = position_dodge(width = 0.9), outlier.size = 0.5) +
+  facet_wrap(
+    ~variable,
+    scales = "free_y",
+    labeller = as_labeller(continuous_variable_labels)
+  ) +
+  #2.241 Apply y-axis limits for each facet
+  geom_blank(data = y_limits, aes(y = y_min)) +
+  geom_blank(data = y_limits, aes(y = y_max)) +
+  labs(x = "Cluster", y = "Value", fill = "Cluster",
+       title = "Distributions of Continuous Risk Variables by Cluster") +
+  theme_minimal() +
+  theme(
+    strip.text = element_text(size = 10),
+    axis.text = element_text(size = 8),
+    legend.position = "top",
+    #2.2411 Remove y-axis minor gridlines
+    panel.grid.minor.y = element_blank(),
+    #2.2412 Customize major gridlines to only show above x-axis
+    panel.grid.major.y = element_blank(),
+    # Ensure x-axis gridlines remain
+    panel.grid.major.x = element_blank(),
+    #2.2413 Add bolded lines for y and x axes
+    axis.line.y.left = element_line(),
+    axis.line.x.bottom = element_line()
+  ) +
+  scale_fill_brewer(palette = "Set3")
+
+#2.25 Print the continuous violin boxplot
+print(continuous_plot)
+
+```
+
+## Primary Analysis: Logistic Regression for Binary Diagnostic Outcomes
+
+**Outcomes Examined:**  
+  
+Six diagnostic outcomes were evaluated: *bipolar I dx*, *bipolar II dx*, *any bipolar dx*, *suicidal thinking*, *suicide attempt*, and *nssi*.
+
+**Model Specification:**  
+  
+For each outcome, a logistic regression model was fit using predictors that include a cluster variable, the corresponding baseline diagnosis covariate, and sex. The binomial family was specified to model binary diagnostic outcomes.
+
+**Template model:** 
+
+  $$
+  \log\left(\frac{P(Y=1)}{1-P(Y=1)}\right) = \beta_0 + \beta_1\,\text{Cluster} + \beta_2\,\text{Baseline} + \beta_3\,\text{Sex} + \varepsilon
+  $$
+    
+  where: 
+    
+  - \(Y\) is the binary diagnostic outcome
+  
+  - \(\beta_0\) is the intercept
+  
+  - \(\beta_1\) represents the effect of cluster membership
+  
+  - \(\beta_2\) represents the effect of the corresponding baseline covariate (derived by replacing the "Y4\_" prefix with "baseline\_")
+  
+  - \(\beta_3\) represents the effect of sex
+  
+  - \(\varepsilon\) is the error term
+
+**Robust Standard Error Analysis:**  
+  
+Robust (clustered) standard errors were computed using a clustered variance estimator (vcovCL) for effects of *family_id*. The coefficient tests (via coeftest) were then used to extract the robust p-values, which were combined with the exponentiated coefficients to obtain odds ratios and corresponding 95% confidence intervals.
+
+**Result Extraction and FDR Correction:**  
+
+For each outcome, the odds ratios, standard errors, lower and upper 95% confidence bounds, and p-values were extracted. P-values were then adjusted for multiple comparisons using the false discovery rate (FDR) procedure applied within each outcome analysis. 
+
+**Compilation of Final Results:**  
+
+The results were compiled into a single, clean table where results were reformatted and cluster information was extracted (with Cluster 3 relabeled as the reference group). The final output is presented below: 
+
+```{r primary analysis, echo = FALSE, warning = FALSE}
+
+## Logistic Regression for Binary Diagnostic Outcomes ##
+
+#1. Generate relevant summary statistics for each diagnosis of interest by cluster membership
+#1.1 Define diagnostic outcome variables
+diagnostic_outcome_vars <- c("Y4_bipolar_I_dx", "Y4_bipolar_II_dx", "Y4_any_bipolar_dx",
+                  "Y4_suicidal_thinking", "Y4_suicide_attempt", "Y4_nssi")
+
+#1.2 Create an outcome variable (prevalence) summary table by cluster membership
+primary_analysis_variable_summary <- bipolar_suicidality_risk_primary_analysis_data %>%
+  dplyr::select(cluster, all_of(diagnostic_outcome_vars)) %>%
+  
+  #1.21 Pivot the diagnosis columns into a long format
+  pivot_longer(cols = all_of(diagnostic_outcome_vars), 
+               names_to = "Diagnosis", 
+               values_to = "Status") %>%
+  
+  #1.22 Clean the Diagnosis column: remove "Y4_" prefix and replace underscores with spaces
+  mutate(Diagnosis = gsub("_", " ", gsub("^Y4_", "", Diagnosis))) %>%
+  
+  #1.23 Remove missing values in the diagnosis variable
+  filter(!is.na(Status)) %>%
+  
+  #1.24 Group by cluster and diagnosis, and calculate counts and percentages
+  group_by(cluster, Diagnosis) %>%
+  summarize(N = sum(Status == 1, na.rm = TRUE),
+            Total = n(),
+            Percent = round((N / Total) * 100, 1),
+            .groups = "drop") %>%
+  
+  #1.25 Create a formatted summary column
+  mutate(Summary = paste0(N, " (", Percent, "%)")) %>%
+  dplyr::select(cluster, Diagnosis, Summary) %>%
+  
+  #1.26 Pivot wider so that each cluster is a separate column
+  pivot_wider(names_from = cluster, values_from = Summary)
+
+#1.3 Print the primary analysis summary table
+primary_analysis_variable_summary %>%
+  kable(caption = "Prevalence of Diagnoses by Cluster Membership",
+        align = "l", 
+        col.names = c("Diagnosis", "Cluster 3 (Ref)", "Cluster 1", "Cluster 2", "Cluster 4", "Cluster 5")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+#2. Run the logistic regressions for each diagnostic outcome variable 
+#2.1 Define the function to run logistic regression with robust standard errors
+run_logistic_models <- function(data, diagnostic_outcomes, cluster_var) {
+  
+  #2.11 Initialize an empty list to store model results
+  logistic_results_list <- list()
+  
+  #2.12 Iterate over each diagnostic outcome variable
+  for (diagnostic_outcome in diagnostic_outcomes) {
+    
+    #2.121 Define the corresponding baseline covariate name
+    baseline_var <- gsub("^Y4_", "baseline_", diagnostic_outcome)
+    
+    #2.122 Ensure the baseline variable exists in the dataset
+    if (!baseline_var %in% colnames(data)) {
+      warning(paste("Skipping", diagnostic_outcome, "as baseline variable", baseline_var, "not found in dataset"))
+      next
+    }
+    
+    #2.123 Fit the logistic regression model
+    logistic_regression_model <- glm(as.formula(paste(diagnostic_outcome, "~ cluster +", baseline_var, "+ sex")), 
+                 data = data, 
+                 na.action = na.omit, 
+                 family = "binomial")
+    
+    #2.124 Compute robust standard errors using clustered variance estimator
+    robust_se <- vcovCL(logistic_regression_model, cluster = data[[cluster_var]])
+    
+    #2.125 Extract robust coefficients
+    robust_coeffs <- coeftest(logistic_regression_model, vcov = robust_se)
+    
+    #2.126 Compute odds ratios, se, and confidence intervals
+    odds_ratios <- exp(coef(logistic_regression_model))
+    se <- sqrt(diag(robust_se)) 
+    conf_intervals <- exp(confint(logistic_regression_model, vcov = robust_se))
+    p_values <- robust_coeffs[, 4]
+    
+    #2.127 Store results in a dataframe
+    logistic_regression_model_results <- data.frame(
+      Outcome = diagnostic_outcome,
+      Predictor = names(odds_ratios),
+      Odds_Ratio = odds_ratios,
+      SE = se,
+      CI_Lower = conf_intervals[, 1],
+      CI_Upper = conf_intervals[, 2],
+      P_Value = p_values
+    )
+    
+    #2.128 Append results to the list
+    logistic_results_list[[diagnostic_outcome]] <- logistic_regression_model_results
+  }
+  
+  #2.13 Combine all results into a single dataframe
+  merged_logistic_regression_results <- bind_rows(logistic_results_list)
+  
+  return(merged_logistic_regression_results)
+}
+
+#2.2 Run the logistic regression function on the primary analysis dataset
+primary_analysis_results_raw <- run_logistic_models(data = bipolar_suicidality_risk_primary_analysis_data, 
+                                        diagnostic_outcomes = diagnostic_outcome_vars, 
+                                        cluster_var = "family_id")
+
+#3. Clean + display the results of the logistic regression models
+#3.1 Filter the primary analysis results to only include those pertaining to the clusters of interest
+primary_cluster_analysis_results <- primary_analysis_results_raw %>%
+  filter(grepl("^cluster", Predictor))
+
+#3.2 FDR correct p values within each outcome analysis
+primary_cluster_analysis_results <- primary_cluster_analysis_results %>%
+  group_by(Outcome) %>%
+  mutate(FDR_P_Value = p.adjust(P_Value, method = "fdr")) %>%
+  ungroup()
+
+#3.3 Clean and reformat the logistic regression results
+#3.31 Create a table with cleaned + reformatted OR, SE, and p values
+primary_analysis_results_table <- primary_cluster_analysis_results %>%
+  
+  #3.311 Clean Outcome names: remove "Y4_" prefix and change underscores to spaces
+  mutate(Outcome = gsub("^Y4_", "", Outcome),
+         Outcome = gsub("_", " ", Outcome)) %>%
+  
+  #3.312 Extract the cluster level from the Predictor column and relabel the reference
+  mutate(Cluster = sub(".*_(\\d+)$", "\\1", Predictor),
+         Cluster = paste("Cluster", Cluster),
+         Cluster = ifelse(Cluster == "Cluster 3", "Cluster 3 (Ref)", Cluster)) %>%
+  
+  #3.313 Format numeric values: round odds ratios, SE, and confidence limits
+  mutate(Odds_Ratio = round(Odds_Ratio, 2),
+         SE = round(SE, 2),
+         CI_Lower = round(CI_Lower, 2),
+         CI_Upper = round(CI_Upper, 2),
+         
+         #3.3131 Format the original p-values: show values < 0.001 as "<0.001"
+         P_Value = ifelse(P_Value < 0.001, "<0.001", round(P_Value, 3)),
+         
+         #3.3132 Format the FDR corrected p-values similarly
+         FDR_P_Value = ifelse(FDR_P_Value < 0.001, "<0.001", round(FDR_P_Value, 3))) %>%
+  
+  #3.314 Combine CI_Lower and CI_Upper into a single column for the 95% confidence interval
+  mutate(`95% CI` = paste0("(", CI_Lower, ", ", CI_Upper, ")")) %>%
+  
+  #3.315 Select the columns for the final table, with FDR P-Value as the last column
+  dplyr::select(Outcome, Cluster, Odds_Ratio, SE, `95% CI`, P_Value, FDR_P_Value)
+
+#3.32 Print the cleaned and reformatted logistic regression results table
+primary_analysis_results_table %>%
+  kable(caption = "Logistic Regression Results: Outcome ~ Cluster (Relative to Cluster 3)",
+        align = "l", 
+        col.names = c("Outcome", "Cluster", "Odds Ratio", "SE", "95% CI", "P-Value", "FDR P-Value"),
+        row.names = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+```
+
+### Plotting Primary Analysis Results
+
+```{r primary analysis plots, echo = FALSE, warning = FALSE, fig.width = 10, fig.height = 6}
+
+## Plot the Results of the Primary Logistic Regression Analyses ##
+
+#1. Prepare the data by cleaning Outcome names, extracting Cluster info, and flagging significance
+primary_analysis_plot_data <- primary_cluster_analysis_results %>%
+  mutate(
+    
+    #1.1 Clean outcome names: remove "Y4_" prefix and replace underscores with spaces
+    Outcome = gsub("^Y4_", "", Outcome),
+    Outcome = gsub("_", " ", Outcome),
+    
+    #1.2 Extract the cluster number from the Predictor column and format it
+    Cluster = sub(".*_(\\d+)$", "\\1", Predictor),
+    Cluster = paste("Cluster", Cluster),
+    
+    #1.3 Flag significant odds ratios (using p < 0.05 as the threshold)
+    Significant = if_else(P_Value < 0.05, "Significant p<0.05", "Not Significant p>0.05")
+  ) %>%
+  
+  #1.3 For rows with a missing lower CI (e.g., bipolar II dx, Cluster 4), set Odds_Ratio to NA.
+  mutate(Odds_Ratio = ifelse(is.na(CI_Lower), NA, Odds_Ratio))
+
+#2. Plot the primary analysis results (OR)
+#2.1 Create the odds ratio forest plot of primary analysis results
+primary_analysis_plot <- ggplot(primary_analysis_plot_data, aes(x = Odds_Ratio, y = Cluster, color = Cluster, shape = Significant)) +
+  geom_point(size = 3) +
+  
+  #2.12 Only draw error bars where the lower confidence bound is available
+  geom_errorbarh(data = filter(primary_analysis_plot_data, !is.na(CI_Lower)),
+                 aes(xmin = CI_Lower, xmax = CI_Upper), height = 0.2) +
+  
+  #2.13 Facet by Outcome with free x scales for interpretability
+  facet_wrap(~ Outcome, scales = "free_x", ncol = 3) +
+  
+  #2.14 Add a vertical dashed line at 1.0 that stands out in red
+  geom_vline(xintercept = 1, linetype = "dashed", color = "red", size = 1) +
+  
+  #2.15 Set x-axis on log scale with the specified breaks
+  #scale_x_log10(breaks = c(0.5, 1, 2, 5, 10)) +
+  labs(
+    x = "Odds Ratio",
+    y = "Cluster",
+    title = "Odds Ratios for Diagnostic Outcomes by Cluster (Relative to Cluster 3)"
+  ) +
+  
+  #2.16 Use the viridis color palette for a deep and vibrant scheme
+  scale_color_viridis_d(option = "viridis") +
+  
+  #2.17 Map shapes: use circles (16) for non-significant and triangles (17) for significant estimates
+  scale_shape_manual(values = c("Not Significant p>0.05" = 16, "Significant p<0.05" = 17)) +
+  theme_bw(base_size = 12) +
+  theme(
+    
+    #2.181 Bold axis titles and text
+    axis.title = element_text(face = "bold", size = 12),
+    axis.text = element_text(face = "bold", size = 10),
+    
+    #2.182 Only show major vertical gridlines (x-axis) at the specified breaks
+    panel.grid.major.x = element_line(color = "grey80", size = 0.5),
+    panel.grid.minor = element_blank(),
+    panel.grid.major.y = element_blank(),
+    
+    #2.183 Add a clear border around each facet panel
+    panel.border = element_rect(color = "black", fill = NA, size = 1),
+    
+    #2.184 Bold the facet strip text and add a white background with a black border
+    strip.background = element_rect(fill = "white", color = "black", size = 1),
+    strip.text = element_text(face = "bold", size = 12),
+    
+    #2.185 Center and bold the plot title
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5)
+  )
+
+#2.2 Print the primary analysis results plot
+print(primary_analysis_plot)
+
+```
+
+## Secondary Analysis: Associations Between Risk Group + Dimensional Psychopathology
+
+**Rationale for Secondary Continuous Outcome Modeling Methods**
+
+For the secondary analyses, continuous measures of psychopathology - specifically, DSM‑5 Oriented Depression Problems, DSM‑5 Oriented Anxiety Problems, Attention Problems, and Aggression Problems (as measured by CBCL scores)—were modeled using linear mixed‐effects regression. Each model regressed the outcome on cluster membership, the corresponding baseline CBCL score (included because baseline scores contributed to the derivation of the risk clusters), and sex. Importantly, a random intercept for **family_id** was incorporated to account for the within-family correlation - which is different than the previous primary analyses and discussed below. 
+
+The use of the `lmer()` model framework was due to the successful inclusion of **family_id** as a random effect, as it effectively partitioned between-family variance, especially in comparison to the logistic regression models above. This structure ensured that individual-level variability was not over-absorbed by the random effects, thereby preserving the interpretability and stability of the fixed effect estimates (in a way that the use of a mixed effects logistic regression model for the primary analyses did not).
+
+Following model fitting with `lmer()`, an ANCOVA (Type II) was conducted using `car::Anova()` to assess the omnibus effect of cluster on each outcome metric. When the omnibus effect was significant (p < 0.05), post-hoc pairwise contrasts were computed using `emmeans` with FDR adjustment.
+
+TL;DR: Linear mixed-effects models with a random intercept for family_id were chosen to robustly account for within-family correlations in continuous CBCL outcomes. The models controlled for baseline scores and sex, and subsequent ANCOVA and post-hoc tests provided nuanced insight into how cluster membership relates to dimensional psychopathology measures.
+
+```{r secondary analyses, echo = FALSE, warning = FALSE}
+
+## Secondary Analyses: Continuous CBCL Scores by Risk Group Cluster ##
+
+#1. Generate relevant summary statistics for each continuous outcome of interest by cluster membership
+#1.1 Define continuous outcome variables
+secondary_outcome_vars <- c("cbcl_scr_dsm5_depress_t", 
+                  "cbcl_scr_dsm5_anxdisord_t", 
+                  "cbcl_scr_syn_attention_t", 
+                  "cbcl_scr_syn_aggressive_t")
+
+#1.2 Create a summary table by cluster membership for the continuous outcomes
+secondary_continuous_summary_table <- dimensional_psychopathology_risk_secondary_analysis_data %>%
+  dplyr::select(cluster, all_of(secondary_outcome_vars)) %>%
+  
+  #1.21 Pivot outcomes into a long format
+  pivot_longer(cols = all_of(secondary_outcome_vars), 
+               names_to = "Outcome", 
+               values_to = "Score") %>%
+  
+  #1.22 Exclude missing scores
+  filter(!is.na(Score)) %>%
+  
+  #1.23 Group by cluster and outcome to compute summary statistics
+  group_by(cluster, Outcome) %>%
+  summarize(
+    Mean = round(mean(Score, na.rm = TRUE), 2),
+    SD = round(sd(Score, na.rm = TRUE), 2),
+    Median = round(median(Score, na.rm = TRUE), 2),
+    Min = round(min(Score, na.rm = TRUE), 2),
+    Max = round(max(Score, na.rm = TRUE), 2),
+    .groups = "drop"
+  ) %>%
+  
+  #1.24 Create a range column and clean the outcome names
+  mutate(
+    Range = paste0(Min, " - ", Max),
+    Outcome = gsub("^cbcl_scr_", "", Outcome),
+    Outcome = gsub("syn", "", Outcome),
+    Outcome = gsub("_", " ", Outcome)
+  ) %>%
+  
+  #1.25 Select desired columns for the final table
+  dplyr::select(Outcome, cluster, Mean, SD, Median, Range)
+
+#1.3 Print the secondary outcomes summary table by cluster membership
+secondary_continuous_summary_table %>%
+  kable(caption = "Summary Statistics for Secondary CBCL Continuous Outcomes by Cluster Membership",
+        align = "l", 
+        col.names = c("Outcome", "Cluster", "Mean", "SD", "Median", "Range"),
+        row.names = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+#2. Run the linear mixed effect regressions for each continuous outcome variable 
+#2.1 Initialize a list to store results for each outcome
+secondary_analysis_results <- list()
+
+#2.2 Create a function to iterate over each secondary outcome variable
+for (secondary_outcome in secondary_outcome_vars) {
+  
+  #2.21 Define the corresponding baseline variable
+  baseline_var <- paste0("baseline_", secondary_outcome)
+  
+  #2.22 Fit the linear mixed-effects model
+  linear_mem <- lmer(as.formula(paste(secondary_outcome, "~ cluster +", baseline_var, "+ sex + (1|family_id)")),
+                na.action = na.omit,
+                data = dimensional_psychopathology_risk_secondary_analysis_data)
+  
+  #2.23 Run ANCOVA (Type II) to assess omnibus fixed effects
+  ancova_result <- car::Anova(linear_mem, type = "II", test.statistic = "F")
+  
+  #2.24 Extract the omnibus p-value for the cluster effect
+  cluster_p <- ancova_result["cluster", "Pr(>F)"]
+  
+  #2.25 Initialize post hoc results
+  posthoc_results <- NA
+  
+  #2.26 If the omnibus effect is significant (p < 0.05), run post hoc pairwise contrasts
+  if (!is.na(cluster_p) && cluster_p < 0.05) {
+    emmeans_obj <- emmeans(linear_mem, ~ cluster)
+    posthoc_results <- contrast(emmeans_obj, method = "pairwise", adjust = "fdr")
+  }
+  
+  #2.27 Store the modeling results
+  secondary_analysis_results[[secondary_outcome]] <- list(
+    model = linear_mem,
+    ancova = ancova_result,
+    cluster_p = cluster_p,
+    posthoc = posthoc_results
+  )
+}
+
+#3. Clean + display the results of the linear mixed effects regression models
+#3.1 Create a function to clean the omnibus ANCOVA results
+omnibus_results_list <- lapply(names(secondary_analysis_results), function(outcome_name) {
+  
+  #3.11 Extract the results for this outcome
+  omnibus_result <- secondary_analysis_results[[outcome_name]]
+  
+  #3.12 Extract the row name "cluster" which corresponds to the cluster effect in the ANCOVA
+  ancova_df <- omnibus_result$ancova
+  omnibus_row <- ancova_df[rownames(ancova_df) == "cluster", ]
+  
+  data.frame(
+    Outcome = outcome_name,
+    Comparison = "Omnibus (cluster)",
+    Statistic = round(omnibus_row["F"], 2),
+    df = paste0(omnibus_row["Df"], ", ", omnibus_row["Df.res"]),
+    p_value = as.character(ifelse(omnibus_row["Pr(>F)"] < 0.001, "<0.001", round(omnibus_row["Pr(>F)"], 3))),
+    Test_Type = "Omnibus",
+    stringsAsFactors = FALSE
+  )
+})
+
+omnibus_results_table <- bind_rows(omnibus_results_list) %>%
+  mutate(
+    Outcome = gsub("^cbcl_scr_", "", Outcome),
+    Outcome = gsub("syn", "", Outcome),
+    Outcome = gsub("_", " ", Outcome)
+  )
+
+#3.2 Clean the pairwise post hoc comparison results
+posthoc_results_list <- lapply(names(secondary_analysis_results), function(outcome_name) {
+  res <- secondary_analysis_results[[outcome_name]]
+  posthoc_result <- NULL
+  
+  #3.21 Check if posthoc results are available (i.e. not just an NA placeholder)
+  if (!inherits(res$posthoc, "logical")) {
+    posthoc_df <- as.data.frame(res$posthoc)
+    if (nrow(posthoc_df) > 0) {
+      posthoc_result <- posthoc_df %>%
+        mutate(
+          Outcome = outcome_name,
+          Comparison = contrast,
+          Statistic = round(estimate, 2),
+          SE = round(SE, 2),
+          p_value = as.character(ifelse(p.value < 0.001, "<0.001", round(p.value, 3))),
+          Test_Type = "Posthoc"
+        ) %>%
+        dplyr::select(Outcome, Comparison, Statistic, SE, p_value, Test_Type)
+    }
+  }
+  return(posthoc_result)
+})
+
+posthoc_results_table <- bind_rows(posthoc_results_list) %>%
+  mutate(
+    Outcome = gsub("^cbcl_scr_", "", Outcome),
+    Outcome = gsub("syn", "", Outcome),
+    Outcome = gsub("_", " ", Outcome)
+  )
+
+#3.3 Print the cleaned + reformatted secondary analysis results tables
+#3.31 Omnibus ANCOVA Results Table
+omnibus_results_table %>%
+  kable(caption = "Omnibus ANCOVA Results for Continuous CBCL Outcomes by Cluster",
+        align = "l",
+        col.names = c("Outcome", "Comparison", "F Statistic", "df", "P-Value", "Test Type"),
+        row.names = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+#3.32 Pairwise Post Hoc Results Table
+posthoc_results_table %>%
+  kable(caption = "Pairwise Post Hoc Results for Continuous CBCL Outcomes by Cluster",
+        align = "l",
+        col.names = c("Outcome", "Comparison", "Estimate", "SE", "FDR P-Value", "Test Type"),
+        row.names = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+```
+
+### Plotting Secondary Analysis Results
+
+```{r secondary analysis plots, echo = FALSE, warning = FALSE, fig.width = 10, fig.height = 6}
+
+## Plot the Results of the Secondary Linear Mixed Effects Regression Analyses ##
+
+#1. Prepare the data for plotting
+secondary_analysis_plot_data <- dimensional_psychopathology_risk_secondary_analysis_data %>%
+  pivot_longer(
+    cols = all_of(secondary_outcome_vars), 
+    names_to = "Outcome", 
+    values_to = "Score"
+  ) %>%
+  mutate(
+    Outcome = gsub("^cbcl_scr_", "", Outcome),
+    Outcome = gsub("syn", "", Outcome),
+    Outcome = gsub("_", " ", Outcome),
+    Cluster = paste("Cluster", cluster)
+  )
+
+#2 Generate a faceted boxplot of secondary continuous outcomes
+#2.1 Create the facet boxplot
+secondary_analysis_plot <- ggplot(secondary_analysis_plot_data, aes(x = Cluster, y = Score, fill = Cluster)) +
+  geom_boxplot(alpha = 0.8, outlier.shape = NA) +
+  facet_wrap(~ Outcome, scales = "free_y", ncol = 2) +
+  scale_fill_viridis_d(option = "viridis") +
+  # Remove the redundant "Cluster" prefix from x-axis labels.
+  scale_x_discrete(labels = function(x) gsub("Cluster ", "", x)) +
+  labs(
+    x = "Cluster",
+    y = "Score",
+    title = "Continuous CBCL Outcomes by Cluster"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(
+    axis.title = element_text(face = "bold", size = 12),
+    axis.text = element_text(face = "bold", size = 10),
+    strip.background = element_rect(fill = "white", color = "black", size = 1),
+    strip.text = element_text(face = "bold", size = 12),
+    panel.border = element_rect(color = "black", fill = NA, size = 1),
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    legend.position = "none"
+  )
+
+#2.2 Print the secondary analysis plot
+print(secondary_analysis_plot)
+
+```

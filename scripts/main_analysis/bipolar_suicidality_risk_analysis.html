@@ -11,7 +11,7 @@
 
 <meta name="author" content="Sam A. Sievertsen" />
 
-<meta name="date" content="2025-02-01" />
+<meta name="date" content="2025-02-02" />
 
 <title>Mood Disorder &amp; Suicidality ~ Clustered Risk Group Modeling</title>
 
@@ -577,7 +577,7 @@ display: none;
 <h1 class="title toc-ignore">Mood Disorder &amp; Suicidality ~ Clustered
 Risk Group Modeling</h1>
 <h4 class="author">Sam A. Sievertsen</h4>
-<h4 class="date">2025-02-01</h4>
+<h4 class="date">2025-02-02</h4>
 
 </div>
 
@@ -1534,13 +1534,16 @@ model regressed the outcome on cluster membership, the corresponding
 baseline CBCL score (included because baseline scores contributed to the
 derivation of the risk clusters), and sex. Importantly, a random
 intercept for <strong>family_id</strong> was incorporated to account for
-the within-family correlation - which is different than the previous</p>
-<p>The inclusion of <strong>family_id</strong> as a random effect
-performed very well: it effectively partitioned between-family variance,
-especially in comparison to the logistic regression models above. This
-structure ensured that individual-level variability was not
-over-absorbed by the random effects, thereby preserving the
-interpretability and stability of the fixed effect estimates.</p>
+the within-family correlation - which is different than the previous
+primary analyses and discussed below.</p>
+<p>The use of the <code>lmer()</code> model framework was due to the
+successful inclusion of <strong>family_id</strong> as a random effect,
+as it effectively partitioned between-family variance, especially in
+comparison to the logistic regression models above. This structure
+ensured that individual-level variability was not over-absorbed by the
+random effects, thereby preserving the interpretability and stability of
+the fixed effect estimates (in a way that the use of a mixed effects
+logistic regression model for the primary analyses did not).</p>
 <p>Following model fitting with <code>lmer()</code>, an ANCOVA (Type II)
 was conducted using <code>car::Anova()</code> to assess the omnibus
 effect of cluster on each outcome metric. When the omnibus effect was
@@ -2020,7 +2023,7 @@ Omnibus (cluster)
 13.96
 </td>
 <td style="text-align:left;">
-4, 3698.55654635509
+4, 3698.55654637327
 </td>
 <td style="text-align:left;">
 &lt;0.001
@@ -2040,7 +2043,7 @@ Omnibus (cluster)
 4.24
 </td>
 <td style="text-align:left;">
-4, 3695.71726976343
+4, 3695.71726977049
 </td>
 <td style="text-align:left;">
 0.002
@@ -2060,7 +2063,7 @@ Omnibus (cluster)
 8.21
 </td>
 <td style="text-align:left;">
-4, 3684.80438097683
+4, 3684.80438094023
 </td>
 <td style="text-align:left;">
 &lt;0.001
@@ -2080,7 +2083,7 @@ Omnibus (cluster)
 2.89
 </td>
 <td style="text-align:left;">
-4, 3681.54313142135
+4, 3681.54312654697
 </td>
 <td style="text-align:left;">
 0.021
