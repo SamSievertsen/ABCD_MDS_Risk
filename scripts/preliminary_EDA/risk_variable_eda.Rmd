@@ -1,0 +1,592 @@
+---
+title: "Mood Disorder & Suicidality Risk Variable EDA"
+author: "Sam A. Sievertsen"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    self_contained: true
+---
+
+```{r global, include = FALSE}
+
+# Set global env variables
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, comment = "")
+
+```
+
+# Exploratory Data Analysis (EDA) of variables to be included in the clustering of groups at potential risk for the development of mood disorders and suicidality in the ABCD dataset
+
+The most up to date list of variables to be incorporated in the risk clustering, including their role, domain, details of each variable as it relates to the ABCD dataset, empirical justification for inclusion in the clustering, etc., can be [found here](https://ohsuitg-my.sharepoint.com/:x:/r/personal/sievertsen_ohsu_edu/Documents/Huber_Lab/FYP/Project_Planning/ABCD_Mood_Disorder_Risk_Model_Variables_010624_SS.xlsx?d=w286583f8914b4ab5a402e36ce8c36291&csf=1&web=1&e=wmfy1l&nav=MTVfezk2MDA5QjlDLUQyNkQtNDFBRS04NTA5LUFDQUQwOEZGMUJFN30). 
+
+Additionally, details regarding the incorporation of the sum adverse childhood experience (ACE) index and specific variables within it, as first recommended by [Hoffman et al., (2019)](https://www.sciencedirect.com/science/article/pii/S2352289518300821?via%3Dihub) and iterated upon by [Raney et al., (2022)](https://pmc.ncbi.nlm.nih.gov/articles/PMC9288265/) can be [located here](https://ohsuitg-my.sharepoint.com/:x:/r/personal/sievertsen_ohsu_edu/Documents/Huber_Lab/FYP/Project_Planning/ABCD_Mood_Disorder_Risk_Model_Variables_010624_SS.xlsx?d=w286583f8914b4ab5a402e36ce8c36291&csf=1&web=1&e=mr4ikT&nav=MTVfe0Y1OUEwNTY2LTY2MTUtNDNCOC1BQUQ4LTgwNkI0QkVDODZEQn0). 
+
+The following report contains information regarding the: 
+
+  1. Integrity of the data
+  
+  2. Assessment of outliers in the data + preliminary thoughts on how to address them
+  
+  3. Skewness + appropriateness of the mean as the measure of central tendency for continuous variables
+  
+  4. Shape of each variables' distribution
+  
+  5. A summary of the overall availability of variables of interest to the current study
+
+```{r environment, echo = FALSE, include = FALSE, warning = FALSE}
+
+# Load necessary packages + environmental variables
+library(knitr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(moments)
+library(skimr)
+options(scipen = 999, digits = 8)
+
+# Read in cbcl data
+cbcl_data <- read.csv("../../data/preliminary_analysis/data_raw/mh_p_cbcl.csv")
+
+# Read in general behavior inventory data
+gbi_data <- read.csv("../../data/preliminary_analysis/data_raw/mh_p_gbi.csv")
+
+# Read in upps-p data
+uppsp_data <- read.csv("../../data/preliminary_analysis/data_raw/mh_y_upps.csv")
+
+# Read in sleep disturbance scale data
+sleep_disturbance_data <- read.csv("../../data/preliminary_analysis/data_raw/ph_p_sds.csv")
+
+# Read in family history data
+family_hx_data <- read.csv("../../data/preliminary_analysis/data_raw/mh_p_fhx.csv")
+
+# Read in childhood opportunity index data
+coi_data <- read.csv("../../data/preliminary_analysis/data_raw/led_l_coi.csv")
+
+# Read in parent KSADS-COMP background data
+parent_ksads_bg_data <- read.csv("../../data/preliminary_analysis/data_raw/mh_p_ksads_bg.csv")
+
+# Read in youth KSADS-COMP background data
+youth_ksads_bg_data <- read.csv("../../data/preliminary_analysis/data_raw/mh_y_ksads_bg.csv")
+
+# Read in neighborhood safety data
+neighborhood_safety_data <- read.csv("../../data/preliminary_analysis/data_raw/ce_p_nsc.csv")
+
+# Read in NIH-toolbox data
+nihtb_data <- read.csv("../../data/preliminary_analysis/data_raw/nc_y_nihtb.csv")
+
+# Read in ACE Index Data
+# KSADS-COMP PTSD Questions
+ksads_ptsd_data <- read.csv("../../data/preliminary_analysis/data_raw/mh_p_ksads_ptsd.csv")
+
+# Parent reported demographics survey - family conflict subscale
+parent_demo_conflict_data <- read.csv("../../data/preliminary_analysis/data_raw/ce_p_fes.csv")
+
+# Youth reported parental monitoring survey
+youth_parental_monitoring_data <- read.csv("../../data/preliminary_analysis/data_raw/ce_y_fes.csv")
+
+# Family history data read in above
+
+# Parent reported demographic data
+parent_demographic_data <- read.csv("../../data/preliminary_analysis/data_raw/abcd_p_demo.csv")
+
+# Youth caregiver acceptance
+youth_crpbi_data <- read.csv("../../data/preliminary_analysis/data_raw/ce_y_crpbi.csv")
+
+# Parental monitoring survey
+parental_monitoring_data <- read.csv("../../data/preliminary_analysis/data_raw/ce_y_pm.csv")
+
+```
+
+
+
+```{r data wrangling, echo = FALSE, include = FALSE, warning = FALSE}
+
+## Data Wrangling ##
+
+#1. Merge the data
+#1.1 Collapse the data frames containing risk variables of interest
+risk_data_merged <- Reduce(
+  function(x, y)
+    merge(x, y,
+      by = c("src_subject_id", "eventname"),
+      all = TRUE),
+  list(cbcl_data, gbi_data, uppsp_data, sleep_disturbance_data, family_hx_data, coi_data, parent_ksads_bg_data, youth_ksads_bg_data, neighborhood_safety_data, nihtb_data, ksads_ptsd_data, parent_demo_conflict_data, youth_parental_monitoring_data, parent_demographic_data, youth_crpbi_data, parental_monitoring_data))
+
+#1.2 Verify the merge did not duplicate any columns and resulted in an expected 
+#1.21 Check for duplicate columns
+duplicate_columns <- grep("\\.x$|\\.y$", colnames(risk_data_merged), value = TRUE)
+if (length(duplicate_columns) > 0) {
+  message("Duplicate columns found: ", paste(duplicate_columns, collapse = ", "))
+} else {
+  message("No duplicate columns ending found.")
+}
+
+#1.22 Check the number of unique subjects to ensure no data was lost/erroneously created during merging
+unique_count <- length(unique(risk_data_merged$src_subject_id))
+if (unique_count >= 11800 && unique_count <= 12000) {
+  message("The number of unique src_subject_id (", unique_count, ") is within the acceptable range.")
+} else {
+  message("The number of unique src_subject_id (", unique_count, ") is outside the acceptable range!")
+}
+
+#2. Clean the merged data 
+#2.1 Retain only columns of interest
+risk_data_merged_trimmed <- risk_data_merged %>% 
+  dplyr::select(c(src_subject_id, eventname, cbcl_scr_dsm5_depress_t, cbcl_scr_dsm5_anxdisord_t,	cbcl_scr_syn_attention_t, cbcl_scr_syn_aggressive_t, pgbi_p_ss_score, upps_y_ss_negative_urgency, upps_y_ss_positive_urgency, sds_p_ss_total, fam_history_6_yes_no, fam_history_q6a_depression, fam_history_q6d_depression, q6k_full_sib_young1_depression, q6k_full_sib_young2_depression, q6k_full_sib_young3_depression, q6k_full_sib_young4_depression, q6k_full_sib_young5_depression, q6l_full_sib_old1_depression, q6l_full_sib_old2_depression, q6l_full_sib_old3_depression, q6l_full_sib_old4_depression, q6l_full_sib_old5_depression, famhx_ss_momdad_ma_p, reshist_addr1_coi_z_coi_nat, kbi_p_c_bully, ksads_bully_raw_26, nsc_p_ss_mean_3_items, nihtbx_list_agecorrected, nihtbx_list_uncorrected, nihtbx_flanker_agecorrected, nihtbx_flanker_uncorrected, nihtbx_pattern_uncorrected, nihtbx_pattern_agecorrected, ksads_ptsd_raw_762_p, ksads_ptsd_raw_763_p,  ksads_ptsd_raw_767_p, ksads_ptsd_raw_768_p, ksads_ptsd_raw_766_p, fam_enviro6_p, fam_enviro3_p, fes_youth_q6, fes_youth_q3, famhx_4_p, fam_history_13_yes_no, fam_history_5_yes_no, fam_history_6_yes_no, demo_prnt_marital_v2, fam_history_9_yes_no, crpbi_parent4_y, parent_monitor_q1_y, parent_monitor_q3_y))
+
+#2.2 Filter the trimmed data to only contain rows at the baseline assessment timepoint
+risk_data_merged_trimmed <- risk_data_merged_trimmed %>% 
+  filter(eventname == "baseline_year_1_arm_1")
+
+#3. Preliminarily create relevant risk clustering variables
+#3.1 Family (first-degree relative) history of depression
+risk_data_merged_trimmed <- risk_data_merged_trimmed %>%
+  mutate(
+    family_history_depression = case_when(
+      
+      #3.11 Assign 1 if any first-degree relative has depression
+      replace_na(fam_history_q6a_depression == 1, FALSE) |
+        replace_na(fam_history_q6d_depression == 1, FALSE) |
+        replace_na(q6k_full_sib_young1_depression == 1, FALSE) |
+        replace_na(q6k_full_sib_young2_depression == 1, FALSE) |
+        replace_na(q6k_full_sib_young3_depression == 1, FALSE) |
+        replace_na(q6k_full_sib_young4_depression == 1, FALSE) |
+        replace_na(q6k_full_sib_young5_depression == 1, FALSE) |
+        replace_na(q6l_full_sib_old1_depression == 1, FALSE) |
+        replace_na(q6l_full_sib_old2_depression == 1, FALSE) |
+        replace_na(q6l_full_sib_old3_depression == 1, FALSE) |
+        replace_na(q6l_full_sib_old4_depression == 1, FALSE) |
+        replace_na(q6l_full_sib_old5_depression == 1, FALSE) ~ 1,
+      
+      #3.12 Assign 0 if "fam_history_6_yes_no" is 1 but no first-degree relative has depression
+      fam_history_6_yes_no == 1 ~ 0,
+      
+      #3.13 Assign 0 if "fam_history_6_yes_no" is 0
+      fam_history_6_yes_no == 0 ~ 0,
+      
+      #3.14 Otherwise, assign NA
+      TRUE ~ NA_real_
+    )
+  )
+
+#3.2 Sum ACE Score Index
+risk_data_merged_trimmed <- risk_data_merged_trimmed %>%
+  mutate(
+    
+    #3.211 Calculate each ACE component
+    ACE_1 = if_else(fam_history_9_yes_no == 1, 1, 0, missing = 0),
+    ACE_2 = if_else(crpbi_parent4_y %in% c(1, 2), 1, 0, missing = 0),
+    ACE_3 = if_else(fam_history_13_yes_no == 1 | fam_history_6_yes_no == 1, 1, 0, missing = 0),
+    ACE_4 = if_else(famhx_4_p == 1 | fam_history_5_yes_no == 1, 1, 0, missing = 0),
+    ACE_5 = if_else(ksads_ptsd_raw_766_p == 1 | fes_youth_q6 == 1 | fes_youth_q3 == 1, 1, 0, missing = 0),
+    ACE_6 = if_else(demo_prnt_marital_v2 %in% c(2, 3, 4), 1, 0, missing = 0),
+    ACE_7 = if_else(ksads_ptsd_raw_762_p == 1 | ksads_ptsd_raw_763_p == 1, 1, 0, missing = 0),
+    ACE_8 = if_else(parent_monitor_q1_y %in% c(1, 2) | parent_monitor_q3_y %in% c(1, 2), 1, 0, missing = 0),
+    ACE_9 = if_else(ksads_ptsd_raw_767_p == 1 | ksads_ptsd_raw_768_p == 1, 1, 0, missing = 0),
+    
+    #3.212 Sum the ACE components for each participant
+    ACE_index_sum_score = rowSums(across(starts_with("ACE_")), na.rm = TRUE),
+    
+    #3.22 Count the number of missing values for the ACE components
+    ACE_index_sum_score_n_missing = rowSums(
+      across(c(
+        fam_history_9_yes_no, crpbi_parent4_y, fam_history_13_yes_no, fam_history_6_yes_no, 
+        famhx_4_p, fam_history_5_yes_no, ksads_ptsd_raw_766_p, fes_youth_q6, fes_youth_q3,
+        demo_prnt_marital_v2, ksads_ptsd_raw_762_p, ksads_ptsd_raw_763_p, 
+        parent_monitor_q1_y, parent_monitor_q3_y, ksads_ptsd_raw_767_p, ksads_ptsd_raw_768_p
+      ), ~ . %in% c(NA, "", 999, 7, 777))
+    )
+  )
+
+```
+
+## 1. Define the N, percent, and range of risk variables of interest at the baseline assessment timepoint
+
+```{r EDA 1, echo = FALSE, warning = FALSE}
+
+## Exploratory Data Analysis ##
+
+#1. Define the N, percent, and range of risk variables of interest at the baseline assessment timepoint
+#1.1 Define the columns to analyze
+columns_to_check <- c(
+  "cbcl_scr_dsm5_depress_t",
+  "cbcl_scr_dsm5_anxdisord_t",
+  "cbcl_scr_syn_attention_t",
+  "cbcl_scr_syn_aggressive_t",
+  "pgbi_p_ss_score",
+  "upps_y_ss_negative_urgency",
+  "upps_y_ss_positive_urgency",
+  "sds_p_ss_total",
+  "family_history_depression",
+  "fam_history_q6a_depression",
+  "fam_history_q6d_depression",
+  "q6k_full_sib_young1_depression",
+  "q6k_full_sib_young2_depression",
+  "q6k_full_sib_young3_depression",
+  "q6k_full_sib_young4_depression",
+  "q6k_full_sib_young5_depression",
+  "q6l_full_sib_old1_depression",
+  "q6l_full_sib_old2_depression",
+  "q6l_full_sib_old3_depression",
+  "q6l_full_sib_old4_depression",
+  "q6l_full_sib_old5_depression",
+  "famhx_ss_momdad_ma_p",
+  "reshist_addr1_coi_z_coi_nat",
+  "kbi_p_c_bully",
+  "ksads_bully_raw_26",
+  "nsc_p_ss_mean_3_items",
+  "nihtbx_list_agecorrected",
+  "nihtbx_list_uncorrected",
+  "nihtbx_flanker_agecorrected",
+  "nihtbx_flanker_uncorrected",
+  "nihtbx_pattern_agecorrected",
+  "nihtbx_pattern_uncorrected",
+  "ksads_ptsd_raw_762_p",
+  "ksads_ptsd_raw_763_p",
+  "ksads_ptsd_raw_767_p",
+  "ksads_ptsd_raw_768_p",
+  "ksads_ptsd_raw_766_p",
+  "fam_enviro6_p",
+  "fam_enviro3_p",
+  "fes_youth_q6",
+  "fes_youth_q3",
+  "famhx_4_p",
+  "fam_history_13_yes_no",
+  "fam_history_5_yes_no",
+  "fam_history_6_yes_no",
+  "demo_prnt_marital_v2",
+  "fam_history_9_yes_no",
+  "crpbi_parent4_y",
+  "parent_monitor_q1_y",
+  "parent_monitor_q3_y",
+  "ACE_index_sum_score")
+
+# 1.2 Create a function to compute the required metrics for each column
+get_column_metrics <- function(column_name, data, total_subjects = nrow(data)) {
+  
+  # 1.21 Extract each column
+  column_data <- data[[column_name]]
+  
+  # 1.22 Define variable-specific missing value codes
+  missing_values <- c(999, 7)  # Default missing codes
+  if (column_name == "demo_prnt_marital_v2") {
+    missing_values <- c(777)
+  } else if (column_name %in% c("fam_history_q6a_depression", "fam_history_q6d_depression",
+                                "q6k_full_sib_young1_depression", "q6k_full_sib_young2_depression",
+                                "q6k_full_sib_young3_depression", "q6k_full_sib_young4_depression",
+                                "q6k_full_sib_young5_depression", "q6l_full_sib_old1_depression",
+                                "q6l_full_sib_old2_depression", "q6l_full_sib_old3_depression",
+                                "q6l_full_sib_old4_depression", "q6l_full_sib_old5_depression")) {
+    missing_values <- c(7, 999)
+  } else if (column_name %in% c("famhx_4_p", "fam_history_13_yes_no", "fam_history_5_yes_no",
+                                "fam_history_6_yes_no", "fam_history_9_yes_no")) {
+    missing_values <- c(7, 999)
+  }
+  
+  # 1.23 Filter non-NA, non-empty, and non-invalid values
+  valid_values <- column_data[!is.na(column_data) &
+                                column_data != "" &
+                                !column_data %in% missing_values]
+  
+  # 1.24 Compute metrics
+  n_non_na <- length(valid_values)
+  percent_non_na <- (n_non_na / total_subjects) * 100
+  
+  if (is.numeric(valid_values)) {
+    range_or_unique <- range(valid_values, na.rm = TRUE)
+  } else {
+    range_or_unique <- unique(valid_values)
+  }
+  
+  # 1.25 Return the metrics as a list
+  list(
+    column = column_name,
+    n_non_na = n_non_na,
+    percent_non_na = percent_non_na,
+    range_or_unique = range_or_unique
+  )
+}
+
+# 1.3 Apply the function to all columns and store risk data missingness in a list
+risk_data_missingness_list <- lapply(columns_to_check, get_column_metrics, data = risk_data_merged_trimmed)
+
+# 1.4 Convert the risk data missingness into a dataframe for easier viewing
+risk_data_missingness_df <- do.call(rbind, lapply(risk_data_missingness_list, function(x) {
+  data.frame(
+    column = x$column,
+    n_non_na = x$n_non_na,
+    percent_non_na = x$percent_non_na,
+    range_or_unique = I(list(x$range_or_unique))  # Use I() to preserve list structure for unique/range
+  )
+}))
+
+#1.5 Print the final dataframe of risk_data_missingness_
+kable(risk_data_missingness_df, col.names = c("Risk Variable", "N True Values", "Percent True Values", "Range or Unique Values in Data"), digits = 2)
+
+```
+
+## 2. Visually and Quantitatively Assess for any Outliers in the Data
+
+```{r EDA 2, echo = FALSE, warning = FALSE}
+
+## Exploratory Data Analysis ##
+
+#2. Visually and Quantitatively Assess for any Outliers in the Data
+#2.1 Create boxplots with outlier indicators for continuous variables in the dataset
+#2.11 Filter only continuous variables (excluding ID and gender)
+risk_data_continuous_variables <- risk_data_merged_trimmed %>%
+  dplyr::select(cbcl_scr_dsm5_depress_t, cbcl_scr_dsm5_anxdisord_t, cbcl_scr_syn_attention_t, cbcl_scr_syn_aggressive_t, pgbi_p_ss_score, upps_y_ss_negative_urgency, upps_y_ss_positive_urgency, sds_p_ss_total, reshist_addr1_coi_z_coi_nat, nsc_p_ss_mean_3_items, nihtbx_list_agecorrected, nihtbx_list_uncorrected, nihtbx_flanker_agecorrected, nihtbx_flanker_uncorrected, nihtbx_pattern_agecorrected, nihtbx_pattern_uncorrected, ACE_index_sum_score) %>%
+  gather(key = "Variable", value = "Value")
+
+#2.12 Create boxplot with facets for continuous variables
+risk_data_continuous_variables_boxplot <- ggplot(risk_data_continuous_variables, aes(x = Variable, y = Value)) + 
+  geom_boxplot(fill = "lightblue", color = "darkblue") + 
+  facet_wrap(~ Variable, scales = "free") + 
+  theme_minimal() + 
+  theme(axis.text.x = element_blank(),
+        strip.text = element_text(size = 6, face = "bold")) +
+  labs(title = "Boxplots of Continuous Variables",
+       y = "Values",
+       x = "")
+
+#2.13 Print the plot
+print(risk_data_continuous_variables_boxplot)
+
+```
+
+From the boxplots for continuous variables, it is evident that some of the NIHTB scores are likely out of the expected range. While no guidelines within the [overview of the ABCD baseline neurocognition battery](https://www.sciencedirect.com/science/article/pii/S1878929317302384?via%3Dihub#tbl0005) or mention of the extraneously high/low scores within [current release notes](https://wiki.abcdstudy.org/release-notes/non-imaging/neurocognition.html#nih-toolbox-cognition) could be located, it is likely that winsorization or other outlier removal methods will need to be applied to handle values beyond the expected range. 
+
+Following review of the [NIH Toolbox (Cognition) Instrument Description](https://wiki.abcdstudy.org/release-notes/non-imaging/neurocognition.html#nih-toolbox-cognition) (see **"Notes and Special Considerations"**), it is noted by the neurocognitive working group that "For longitudinal analyses, we recommend using either uncorrected Scaled Scores or raw scores." Following review of the distributions below, a tentative decision regarding which strategy to use will be chosen.
+
+No other anomalous or outlier values are noteworthy. 
+
+## 3. Appropriateness of the Mean as a Measure of Central Tendency
+
+Though proposed clustering methods herein do not have parametric assumptions, assessment of kurtosis & skewness provides information about the asymmetry of variable distributions, which may help identify variables with extreme outliers or long tails. Such variables can disproportionately influence cluster formation when using euclidean distances (as in k-prototypes for continuous variables), and thus it is important to examine them. The skewness & kurtosis values for continuous variables herein are as such: 
+
+```{r EDA 3, echo = FALSE, warning = FALSE}
+
+## Exploratory Data Analysis ##
+
+#3.1 Calculate skewness for continuous variables
+risk_data_continuous_variables_skewness_table <- risk_data_merged_trimmed %>%
+  dplyr::select(
+    cbcl_scr_dsm5_depress_t,
+    cbcl_scr_dsm5_anxdisord_t,
+    cbcl_scr_syn_attention_t,
+    cbcl_scr_syn_aggressive_t,
+    pgbi_p_ss_score,
+    upps_y_ss_negative_urgency,
+    upps_y_ss_positive_urgency,
+    sds_p_ss_total,
+    reshist_addr1_coi_z_coi_nat,
+    nsc_p_ss_mean_3_items,
+    nihtbx_list_agecorrected,
+    nihtbx_list_uncorrected,
+    nihtbx_flanker_agecorrected,
+    nihtbx_flanker_uncorrected,
+    nihtbx_pattern_agecorrected,
+    nihtbx_pattern_uncorrected,
+    ACE_index_sum_score) %>%
+  summarise(across(everything(), ~ skewness(.x, na.rm = TRUE))) %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Skewness")
+
+#3.2 Display the skewness table
+kable(risk_data_continuous_variables_skewness_table, caption = "Skewness Values for Continuous Variables", digits = 2)
+
+```
+
+Results from the assessment of skewness values suggest that the only variable which may be problematically skewed is *pgbi_p_ss_score* (GBI Mania Sum Score, skewness = `r round(risk_data_continuous_variables_skewness_table %>% filter(Variable == "pgbi_p_ss_score") %>% pull(Skewness), digits = 2)`); though, it is expected that the variable would be positively skewed given [low rates of mania in this age range](https://pmc.ncbi.nlm.nih.gov/articles/PMC8233426/). 
+
+As such, it is likely that no variable transformations are necessary, and downstream trends of this variable during clustering and subsequent frequentist analyses will just need to be monitored with this skew in mind. 
+
+## 4. Shape of Each Variables' Distribution
+
+The shape of the distribution for each continuous variable and frequency distribution of each categorical variable is outlined below, both in terms of summary statistics derived from and a graphical histogram with density overlay of relevant data:
+
+```{r EDA 4, echo = FALSE, warning = FALSE, fig.height=10, fig.width=10}
+
+## Exploratory Data Analysis ##
+
+#4. Create summary tables and visualizations for the distributions of categorical and continuous variables included in the risk model
+#4.1 Create a summary table of distribution information
+#4.11 Specify continuous columns explicitly
+continuous_columns <- c(
+  "cbcl_scr_dsm5_depress_t", "cbcl_scr_dsm5_anxdisord_t", 
+  "cbcl_scr_syn_attention_t", "cbcl_scr_syn_aggressive_t", 
+  "pgbi_p_ss_score", "upps_y_ss_negative_urgency", 
+  "upps_y_ss_positive_urgency", "sds_p_ss_total", 
+  "reshist_addr1_coi_z_coi_nat", "nsc_p_ss_mean_3_items", 
+  "nihtbx_list_agecorrected", "nihtbx_list_uncorrected",
+  "nihtbx_flanker_agecorrected", "nihtbx_flanker_uncorrected", 
+  "nihtbx_pattern_agecorrected", "nihtbx_pattern_uncorrected", 
+  "ACE_index_sum_score")
+
+#4.12 Define all columns to check
+columns_to_check <- colnames(risk_data_merged_trimmed)
+
+#4.131 Derive categorical columns as those not in the continuous list
+categorical_columns <- setdiff(columns_to_check, continuous_columns)
+categorical_columns <- categorical_columns[!categorical_columns %in% c("src_subject_id", "eventname", "fam_history_q6a_depression", "fam_history_q6d_depression", "q6k_full_sib_young1_depression", "q6k_full_sib_young2_depression", "q6k_full_sib_young3_depression", "q6k_full_sib_young4_depression", "q6k_full_sib_young5_depression", "q6l_full_sib_old1_depression", "q6l_full_sib_old2_depression", "q6l_full_sib_old3_depression", "q6l_full_sib_old4_depression", "q6l_full_sib_old5_depression", "ksads_ptsd_raw_762_p", "ksads_ptsd_raw_763_p",  "ksads_ptsd_raw_767_p", "ksads_ptsd_raw_768_p", "ksads_ptsd_raw_766_p", "fam_enviro6_p", "fam_enviro3_p", "fes_youth_q6", "fes_youth_q3", "famhx_4_p", "fam_history_13_yes_no", "fam_history_5_yes_no", "fam_history_6_yes_no", "demo_prnt_marital_v2", "fam_history_9_yes_no", "crpbi_parent4_y", "parent_monitor_q1_y", "parent_monitor_q3_y", "ACE_index_sum_score_n_missing")]
+
+#4.132 Define new titles for individual ACE variables
+categorical_title_map <- c(
+  "ACE_1" = "Criminal Household Member",
+  "ACE_2" = "Emotional neglect",
+  "ACE_3" = "Household Depression or SI",
+  "ACE_4" = "Household substance abuse",
+  "ACE_5" = "Mother treated violently",
+  "ACE_6" = "Parental separation or divorce",
+  "ACE_7" = "Physical abuse",
+  "ACE_8" = "Physical neglect",
+  "ACE_9" = "Sexual Abuse")
+
+#4.14 Create a summary table for continuous and categorical variables
+# Adjust summary function for categorical columns
+summarize_data <- function(data, continuous_cols, categorical_cols) {
+  summary_list <- list()
+  
+  # Continuous variables summary
+  for (col in continuous_cols) {
+    column_data <- data[[col]]
+    valid_values <- column_data[!is.na(column_data)]
+    summary_list[[col]] <- data.frame(
+      Variable = col,
+      Type = "Continuous",
+      Mean = mean(valid_values, na.rm = TRUE),
+      Median = median(valid_values, na.rm = TRUE),
+      SD = sd(valid_values, na.rm = TRUE),
+      Min = min(valid_values, na.rm = TRUE),
+      Max = max(valid_values, na.rm = TRUE),
+      Levels = NA,
+      Frequencies = NA,
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  # Categorical variables summary
+  for (col in categorical_cols) {
+    column_data <- data[[col]]
+    freq_table <- table(column_data, useNA = "no")
+    summary_list[[col]] <- data.frame(
+      Variable = col,
+      Type = "Categorical",
+      Mean = NA,
+      Median = NA,
+      SD = NA,
+      Min = NA,
+      Max = NA,
+      Levels = paste(names(freq_table), collapse = ", "),
+      Frequencies = paste(freq_table, collapse = ", "),
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  do.call(rbind, summary_list)
+}
+
+#4.151 Generate the summary table
+summary_table <- summarize_data(risk_data_merged_trimmed, continuous_columns, categorical_columns)
+
+#4.152 Rename the ACE variables in the summary table
+summary_table <- summary_table %>%
+  mutate(Variable = ifelse(Variable %in% names(categorical_title_map), categorical_title_map[Variable], Variable))
+
+#4.153 Print the summary table in the RMD
+kable(summary_table, caption = "Summary Statistics for Risk Model Variables", row.names = FALSE)
+
+#4.2 Create plots visualizing distributions of risk variables
+#4.21 Generate a combined dataset with an indicator for variable type
+plot_data <- list()
+
+#4.22 Add continuous variables
+for (col in continuous_columns) {
+  plot_data[[col]] <- risk_data_merged_trimmed %>%
+    select(Value = !!sym(col)) %>%
+    mutate(Type = "Continuous", Variable = col)
+}
+
+#4.23 Add categorical variables
+for (col in categorical_columns) {
+  plot_data[[col]] <- risk_data_merged_trimmed %>%
+    select(Value = !!sym(col)) %>%
+    mutate(Type = "Categorical", Variable = col)
+}
+
+#4.24 Combine all into a single data frame
+plot_data_combined <- bind_rows(plot_data)
+
+#4.251 Generate facet plot for continuous variables
+continuous_plot <- ggplot(
+  plot_data_combined %>% filter(Type == "Continuous"),
+  aes(x = Value)) +
+  geom_histogram(aes(y = ..density..), binwidth = 1, fill = "blue", alpha = 0.6, color = "black") +
+  geom_density(color = "red", size = 1, adjust = 1.5) +
+  facet_wrap(~Variable, ncol = 3, scales = "free") +
+  theme_minimal() +
+  labs(title = "Distributions of Continuous Variables",
+       x = "Value",
+       y = "Density") +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    strip.text = element_text(size = 8),
+    panel.spacing = unit(1, "lines"))
+
+#4.252 Print the continuous variable plot
+print(continuous_plot)
+
+#4.261 Generate facet plot for categorical variables
+#4.2611 Alter reverse coded values for the "kbi_p_c_bully" variable for plotting purposes
+plot_data_combined <- plot_data_combined %>%
+  mutate(Value = ifelse(Variable == "kbi_p_c_bully", recode(Value, `1` = 1, `2` = 0), Value))
+
+#4.2612 Generate the categorical variable plot
+categorical_plot <- ggplot(
+  plot_data_combined %>% filter(Type == "Categorical"),
+  aes(x = as.factor(Value))) +  # Treat Value as a factor
+  geom_bar(fill = "skyblue", color = "black", alpha = 0.8) +
+  facet_wrap(~Variable, ncol = 3, scales = "free", 
+             labeller = labeller(Variable = categorical_title_map)) +
+  theme_minimal() +
+  labs(title = "Distributions of Categorical Variables",
+       x = "Categories",
+       y = "Count") +
+  scale_x_discrete(limits = c("0", "1"), labels = c("No", "Yes")) + # Set specific x-axis breaks and labels
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    strip.text = element_text(size = 8),
+    panel.spacing = unit(1, "lines"))
+
+#4.2613 Print the categorical variable plot
+print(categorical_plot)
+
+```
+
+Distributions of continuous variables and rates of categorical variables (including the individual ACEs comprising the sum ACE index score) are shown above. While some previously mentioned variables exhibit noticeable skew, no problematic distributions are notable here. 
+
+Per previous mention in section 2 (assessing outliers in the data), following review of the distributions above, I make the tentative choice of utilizing the uncorrected standard scores (as opposed to winsorizing the age corrected standard scores). This choice is for two key reasons: 
+
+  1. This selection aligns with the [NIH Toolbox (Cognition) Instrument Description](https://wiki.abcdstudy.org/release-notes/non-imaging/neurocognition.html#nih-toolbox-cognition) (see **"Notes and Special Considerations"**)
+  
+  2. The means, standard deviations, and full ranges of the uncorrected standard scores align more closely with the expected descriptive statistics of a measure of IQ (i.e., μ = 100; σ = 15), and contain less outliers than the age corrected standard scores of interest
+  
+This decision is tentative, however, and subject to future review/change in the event new information comes to light. 
+
+## 5. Overall Availability of Risk Model Variables for Clustering
+
+```{r EDA 5, echo = FALSE, warning = FALSE}
+
+## Exploratory Data Analysis ##
+
+#5. Determine the broad availability of variables to be included in the risk model
+#5.1 Determine the number of unique subjects in the dataset
+unique_subject_count <- as.numeric(length(unique(risk_data_merged_trimmed$src_subject_id)))
+
+#5.2 Create a vector of counts for complete cases across specified columns
+complete_cases_count <- risk_data_merged_trimmed %>%
+  dplyr::select(matches("cbcl_scr|pgbi_p_ss_score|upps_y_ss|sds_p_ss_total|family_history_depression|famhx_ss_momdad_ma_p|reshist_addr1_coi_z_coi_nat|nsc_p_ss_mean_3_items|kbi_p_c_bully|ksads_bully_raw_26|nihtbx_|ACE_index_sum_score")) %>%
+  filter_all(all_vars(!is.na(.) & . != "" & . != 999 & . != 777)) %>%
+  nrow()
+
+```
+
+When looking across all relevant risk variables in the dataset, 9,153 (77.12%) subjects have complete (i.e., fully reported, non-missing) data. 

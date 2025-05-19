@@ -18,402 +18,468 @@ knitr::opts_chunk$set(warning = FALSE, message = FALSE, comment = "")
 
 # Load necessary packages + environmental variables
 library(knitr)
+library(kableExtra)
 library(dplyr)
 library(tidyr)
 library(skimr)
 options(scipen = 999, digits = 8)
 
-# Load custom function to protect subject ID data
-source("update_interview_age.R")
-
-# Read in data containing variables directly implementable in risk group clustering
-# cbcl data
-cbcl_data <- read.csv("../../data/data_raw/mh_p_cbcl.csv")
-
-# general behavior inventory data
-gbi_data <- read.csv("../../data/data_raw/mh_p_gbi.csv")
-
-# upps-p data
-uppsp_data <- read.csv("../../data/data_raw/mh_y_upps.csv")
-
-# sleep disturbance scale data
-sleep_disturbance_data <- read.csv("../../data/data_raw/ph_p_sds.csv")
-
-# family history data
-family_hx_data <- read.csv("../../data/data_raw/mh_p_fhx.csv")
-
-# childhood opportunity index data
-coi_data <- read.csv("../../data/data_raw/led_l_coi.csv")
-
-# parent KSADS-COMP background data
-parent_ksads_bg_data <- read.csv("../../data/data_raw/mh_p_ksads_bg.csv")
-
-# youth KSADS-COMP background data
-youth_ksads_bg_data <- read.csv("../../data/data_raw/mh_y_ksads_bg.csv")
-
-# neighborhood safety data
-neighborhood_safety_data <- read.csv("../../data/data_raw/ce_p_nsc.csv")
-
-# NIH-toolbox data
-nihtb_data <- read.csv("../../data/data_raw/nc_y_nihtb.csv")
-
-# Read in ACE Index Data
-# KSADS-COMP PTSD Questions
-ksads_ptsd_data <- read.csv("../../data/data_raw/mh_p_ksads_ptsd.csv")
-
-# Parent reported demographics survey - family conflict subscale
-parent_demo_conflict_data <- read.csv("../../data/data_raw/ce_p_fes.csv")
-
-# Youth reported parental monitoring survey
-youth_parental_monitoring_data <- read.csv("../../data/data_raw/ce_y_fes.csv")
-
-# Family history data read in above
-
-# Parent reported demographic data
-parent_demographic_data <- read.csv("../../data/data_raw/abcd_p_demo.csv")
-
-# Youth caregiver acceptance
-youth_crpbi_data <- read.csv("../../data/data_raw/ce_y_crpbi.csv")
-
-# Parental monitoring survey
-parental_monitoring_data <- read.csv("../../data/data_raw/ce_y_pm.csv")
-
-# Read in demographic/covariate data of interest
-# Site name data
-site_name_data <- read.csv("../../data/data_raw/mri_y_adm_info.csv")
-
-# Family ID data
-family_id_data <- read.csv("../../data/data_raw/abcd_y_lt.csv")
+# Read in raw data generated in DEAP
+raw_data <- read.csv("../../data/data_raw/dataset.csv")
 
 ```
 
-## Dataframe Merging
+## Risk Variable Data Wrangling
 
-```{r data merging, warning = FALSE}
+This section completes the following data wrangling objectives:
 
-## Data Wrangling ##
-
-#1. Merge the data
-#1.1 Collapse the data frames containing risk variables of interest
-risk_data_merged <- Reduce(
-  function(x, y)
-    merge(x, y,
-      by = c("src_subject_id", "eventname"),
-      all = TRUE),
-  list(cbcl_data, gbi_data, uppsp_data, sleep_disturbance_data, family_hx_data, coi_data, parent_ksads_bg_data, youth_ksads_bg_data, neighborhood_safety_data, nihtb_data, ksads_ptsd_data, parent_demo_conflict_data, youth_parental_monitoring_data, parent_demographic_data, youth_crpbi_data, parental_monitoring_data))
-
-#1.2 Verify the merge did not duplicate any columns and resulted in an expected 
-#1.21 Check for duplicate columns
-duplicate_columns <- grep("\\.x$|\\.y$", colnames(risk_data_merged), value = TRUE)
-if (length(duplicate_columns) > 0) {
-  message("Duplicate columns found: ", paste(duplicate_columns, collapse = ", "))
-} else {
-  message("No duplicate columns ending found.")
-}
-
-#1.22 Check the number of unique subjects to ensure no data was lost/erroneously created during merging
-unique_count <- length(unique(risk_data_merged$src_subject_id))
-if (unique_count >= 11800 && unique_count <= 12000) {
-  message("The number of unique src_subject_id (", unique_count, ") with data present is within the possible range of sampled subjects.")
-} else {
-  message("The number of unique src_subject_id (", unique_count, ") is outside the acceptable range!")
-}
-
-#2. Clean the merged data 
-#2.1 Retain only columns of interest
-risk_data_merged_trimmed <- risk_data_merged %>% 
-  dplyr::select(c(src_subject_id, eventname, cbcl_scr_dsm5_depress_t, cbcl_scr_dsm5_depress_nm, cbcl_scr_dsm5_anxdisord_t, cbcl_scr_dsm5_anxdisord_nm,	cbcl_scr_syn_attention_t, cbcl_scr_syn_attention_nm, cbcl_scr_syn_aggressive_t, cbcl_scr_syn_aggressive_nm, pgbi_p_ss_score, upps_y_ss_negative_urgency, upps_y_ss_negative_urgency_nm, upps_y_ss_positive_urgency, upps_y_ss_positive_urgency_nm, sds_p_ss_total, fam_history_6_yes_no, fam_history_q6a_depression, fam_history_q6d_depression, q6k_full_sib_young1_depression, q6k_full_sib_young2_depression, q6k_full_sib_young3_depression, q6k_full_sib_young4_depression, q6k_full_sib_young5_depression, q6l_full_sib_old1_depression, q6l_full_sib_old2_depression, q6l_full_sib_old3_depression, q6l_full_sib_old4_depression, q6l_full_sib_old5_depression, famhx_ss_momdad_ma_p, reshist_addr1_coi_z_coi_nat, kbi_p_c_bully, ksads_bully_raw_26, nsc_p_ss_mean_3_items, nsc_p_ss_mean_3_items_nm, nihtbx_list_uncorrected, nihtbx_flanker_uncorrected, nihtbx_pattern_uncorrected, ksads_ptsd_raw_762_p, ksads_ptsd_raw_763_p,  ksads_ptsd_raw_767_p, ksads_ptsd_raw_768_p, ksads_ptsd_raw_766_p, fam_enviro6_p, fam_enviro3_p, fes_youth_q6, fes_youth_q3, famhx_4_p, fam_history_13_yes_no, fam_history_5_yes_no, fam_history_6_yes_no, demo_prnt_marital_v2, fam_history_9_yes_no, crpbi_parent4_y, parent_monitor_q1_y, parent_monitor_q3_y))
-
-#2.2 Filter the trimmed data to only contain rows at the baseline assessment timepoint
-risk_data_merged_trimmed <- risk_data_merged_trimmed %>% 
-  filter(eventname == "baseline_year_1_arm_1")
-
-```
-
-## Secondary Risk Variable Creation + Validation
+  1. Filtering just the baseline assessment timepoint data for use in baseline risk clustering
+  
+  2. Creating variables from raw ABCD data to be used in clustering
+  
+  3. Retaining columns of interest for validation & clustering
 
 ```{r data wrangling, warning = FALSE}
 
 ## Data Wrangling ##
 
-#1. Create relevant risk clustering variables
-#1.1 Family (first-degree relative) history of depression
-risk_data_merged_trimmed <- risk_data_merged_trimmed %>%
+#1. Filter the trimmed data to only contain rows at the baseline assessment timepoint
+cat("Filtering just the baseline assessment timepoint data for use in baseline risk clustering", "\n")
+raw_data_baseline <- raw_data %>% 
+  filter(session_id == "ses-00A")
+
+#2. Preliminarily create relevant risk clustering variables
+cat("Creating secondary variables from raw ABCD data to be used in clustering", "\n")
+#2.1 Family (first-degree relative) history of depression
+raw_data_baseline_clean <- raw_data_baseline %>%
   mutate(
     family_history_depression = case_when(
       
-      #1.11 Assign 1 if any first-degree relative has depression
-      replace_na(fam_history_q6a_depression == 1, FALSE) |
-        replace_na(fam_history_q6d_depression == 1, FALSE) |
-        replace_na(q6k_full_sib_young1_depression == 1, FALSE) |
-        replace_na(q6k_full_sib_young2_depression == 1, FALSE) |
-        replace_na(q6k_full_sib_young3_depression == 1, FALSE) |
-        replace_na(q6k_full_sib_young4_depression == 1, FALSE) |
-        replace_na(q6k_full_sib_young5_depression == 1, FALSE) |
-        replace_na(q6l_full_sib_old1_depression == 1, FALSE) |
-        replace_na(q6l_full_sib_old2_depression == 1, FALSE) |
-        replace_na(q6l_full_sib_old3_depression == 1, FALSE) |
-        replace_na(q6l_full_sib_old4_depression == 1, FALSE) |
-        replace_na(q6l_full_sib_old5_depression == 1, FALSE) ~ 1,
+      #2.1.1 Assign 1 if any first-degree relative has a history of depression
+      replace_na(mh_p_famhx__dep__fath_001 == 1, FALSE) |
+        replace_na(mh_p_famhx__dep__moth_001 == 1, FALSE) |
+        replace_na(mh_p_famhx__dep__full__young_001 == 1, FALSE) |
+        replace_na(mh_p_famhx__dep__full__young_002 == 1, FALSE) |
+        replace_na(mh_p_famhx__dep__full__young_003 == 1, FALSE) |
+        replace_na(mh_p_famhx__dep__full__young_004 == 1, FALSE) |
+        replace_na(mh_p_famhx__dep__full__young_005 == 1, FALSE) |
+        replace_na(mh_p_famhx__dep__full__old_001 == 1, FALSE) |
+        replace_na(mh_p_famhx__dep__full__old_002 == 1, FALSE) |
+        replace_na(mh_p_famhx__dep__full__old_003 == 1, FALSE) |
+        replace_na(mh_p_famhx__dep__full__old_004 == 1, FALSE) |
+        replace_na(mh_p_famhx__dep__full__old_005 == 1, FALSE) ~ 1,
       
-      #1.12 Assign 0 if "fam_history_6_yes_no" is 1 but no first-degree relative has depression
-      fam_history_6_yes_no == 1 ~ 0,
+      #2.1.2 Assign 0 if "mh_p_famhx__dep_001" (any relative) is 1 but no first-degree relative has a history of depression
+      mh_p_famhx__dep_001 == 1 ~ 0,
       
-      #1.13 Assign 0 if "fam_history_6_yes_no" is 0
-      fam_history_6_yes_no == 0 ~ 0,
+      #2.1.3 Assign 0 if "mh_p_famhx__dep_001" is 0
+      mh_p_famhx__dep_001 == 0 ~ 0,
       
-      #1.14 Otherwise, assign NA
-      TRUE ~ NA_real_))
+      #2.1.4 Otherwise, assign NA
+      TRUE ~ NA_real_
+    )
+  )
 
-#1.2 Sum ACE Score Index
-risk_data_merged_trimmed <- risk_data_merged_trimmed %>%
+#2.2 Family (first-degree relative) history of mania
+raw_data_baseline_clean <- raw_data_baseline_clean %>%
+  mutate(
+    family_history_mania = case_when(
+      
+      #2.2.1 Assign 1 if any first-degree relative has a history of mania
+      replace_na(mh_p_famhx__mania__fath_001 == 1, FALSE) |
+        replace_na(mh_p_famhx__mania__moth_001 == 1, FALSE) |
+        replace_na(mh_p_famhx__mania__full__young_001 == 1, FALSE) |
+        replace_na(mh_p_famhx__mania__full__young_002 == 1, FALSE) |
+        replace_na(mh_p_famhx__mania__full__young_003 == 1, FALSE) |
+        replace_na(mh_p_famhx__mania__full__young_004 == 1, FALSE) |
+        replace_na(mh_p_famhx__mania__full__young_005 == 1, FALSE) |
+        replace_na(mh_p_famhx__mania__full__old_001 == 1, FALSE) |
+        replace_na(mh_p_famhx__mania__full__old_002 == 1, FALSE) |
+        replace_na(mh_p_famhx__mania__full__old_003 == 1, FALSE) |
+        replace_na(mh_p_famhx__mania__full__old_004 == 1, FALSE) |
+        replace_na(mh_p_famhx__mania__full__old_005 == 1, FALSE) ~ 1,
+      
+      #2.2.2 Assign 0 if "mh_p_famhx__mania_001" (any relative) is 1 but no first-degree relative has a history of mania
+      mh_p_famhx__mania_001 == 1 ~ 0,
+      
+      #2.2.3 Assign 0 if "mh_p_famhx__mania_001" is 0
+      mh_p_famhx__mania_001 == 0 ~ 0,
+      
+      #2.2.4 Otherwise, assign NA
+      TRUE ~ NA_real_
+    )
+  )
+
+#2.3 Sum ACE Score Index
+raw_data_baseline_clean <- raw_data_baseline_clean %>%
   mutate(
     
-    #1.211 Calculate each ACE component
-    ACE_1 = if_else(fam_history_9_yes_no == 1, 1, 0, missing = 0),
-    ACE_2 = if_else(crpbi_parent4_y %in% c(1, 2), 1, 0, missing = 0),
-    ACE_3 = if_else(fam_history_13_yes_no == 1 | fam_history_6_yes_no == 1, 1, 0, missing = 0),
-    ACE_4 = if_else(famhx_4_p == 1 | fam_history_5_yes_no == 1, 1, 0, missing = 0),
-    ACE_5 = if_else(ksads_ptsd_raw_766_p == 1 | fes_youth_q6 == 1 | fes_youth_q3 == 1, 1, 0, missing = 0),
-    ACE_6 = if_else(demo_prnt_marital_v2 %in% c(2, 3, 4), 1, 0, missing = 0),
-    ACE_7 = if_else(ksads_ptsd_raw_762_p == 1 | ksads_ptsd_raw_763_p == 1, 1, 0, missing = 0),
-    ACE_8 = if_else(parent_monitor_q1_y %in% c(1, 2) | parent_monitor_q3_y %in% c(1, 2), 1, 0, missing = 0),
-    ACE_9 = if_else(ksads_ptsd_raw_767_p == 1 | ksads_ptsd_raw_768_p == 1, 1, 0, missing = 0),
+    #2.3.1.1 Calculate each ACE component
+    ACE_1 = if_else(mh_p_famhx__troub_001 == 1, 1, 0, missing = NA),
+    ACE_2 = if_else(fc_y_crpbi__cg1_005 %in% c(1, 2), 1, 0, missing = NA),
+    ACE_3 = if_else(mh_p_famhx__suic_001 == 1 | mh_p_famhx__dep_001 == 1, 1, 0, missing = NA),
+    ACE_4 = if_else(mh_p_famhx__alc_001 == 1 | mh_p_famhx__drg_001 == 1, 1, 0, missing = NA),
+    ACE_5 = if_else(ksads_ptsd_raw_766_p == 1 | fc_y_fes__confl_006 == 1 | fc_y_fes__confl_003 == 1, 1, 0, missing = NA),
+    ACE_6 = if_else(ab_p_demo__marital__slf_001 %in% c(2, 3, 4), 1, 0, missing = NA),
+    ACE_7 = if_else(ksads_ptsd_raw_762_p == 1 | ksads_ptsd_raw_763_p == 1, 1, 0, missing = NA),
+    ACE_8 = if_else(fc_y_pm_001 %in% c(1, 2) | fc_y_pm_003 %in% c(1, 2), 1, 0, missing = NA),
+    ACE_9 = if_else(ksads_ptsd_raw_767_p == 1 | ksads_ptsd_raw_768_p == 1, 1, 0, missing = NA),
     
-    #1.212 Sum the ACE components for each participant
-    ACE_index_sum_score = rowSums(across(starts_with("ACE_") & 
-               !matches("ACE_index_sum_score|ACE_index_sum_score_n_missing")), na.rm = TRUE),
+    #2.3.1.2 Sum the ACE components for each participant
+    ACE_index_sum_score = rowSums(across(starts_with("ACE_")), na.rm = TRUE),
     
-    #1.22 Count the number of missing values for the ACE components
+    #2.3.2 Count the number of missing values for the ACE components
     ACE_index_sum_score_n_missing = rowSums(
       across(c(
-        fam_history_9_yes_no, crpbi_parent4_y, fam_history_13_yes_no, fam_history_6_yes_no, 
-        famhx_4_p, fam_history_5_yes_no, ksads_ptsd_raw_766_p, fes_youth_q6, fes_youth_q3,
-        demo_prnt_marital_v2, ksads_ptsd_raw_762_p, ksads_ptsd_raw_763_p, 
-        parent_monitor_q1_y, parent_monitor_q3_y, ksads_ptsd_raw_767_p, ksads_ptsd_raw_768_p
-      ), ~ . %in% c(NA, "", 999, 7, 777))))
+        mh_p_famhx__troub_001, 
+        fc_y_crpbi__cg1_005, 
+        mh_p_famhx__suic_001, 
+        mh_p_famhx__dep_001, 
+        mh_p_famhx__alc_001, 
+        mh_p_famhx__drg_001, 
+        ksads_ptsd_raw_766_p, 
+        fc_y_fes__confl_006, 
+        fc_y_fes__confl_003,
+        ab_p_demo__marital__slf_001, 
+        ksads_ptsd_raw_762_p, 
+        ksads_ptsd_raw_763_p, 
+        fc_y_pm_001, 
+        fc_y_pm_003, 
+        ksads_ptsd_raw_767_p, 
+        ksads_ptsd_raw_768_p
+      ), ~ . %in% c(NA, "", 999, 7, 777))),
+    
+    #2.3.3 Set sum score to NA if any components are missing
+    ACE_index_sum_score = if_else(ACE_index_sum_score_n_missing >= 1, NA_real_, ACE_index_sum_score)
+  )
 
-#1.3 Bullying
-risk_data_merged_trimmed <- risk_data_merged_trimmed %>%
+#2.4 History of Bullying (Parent and/or Youth Reported)
+raw_data_baseline_clean <- raw_data_baseline_clean %>%
+  
+  #2.4.1 Determine whether the parent or youth endorsed the youth being bullied
   mutate(bullying = case_when(
-    kbi_p_c_bully == 1 | ksads_bully_raw_26 == 1 ~ 1, 
-    is.na(kbi_p_c_bully) & is.na(ksads_bully_raw_26) ~ NA_real_,
-    kbi_p_c_bully == "" & ksads_bully_raw_26 == "" ~ NA_real_,
-    TRUE ~ 0))
+    mh_p_kbi__bully_001 == 1 | mh_y_kbi__bully_001 == 1 ~ 1, 
+    is.na(mh_p_kbi__bully_001) & is.na(mh_y_kbi__bully_001) ~ NA_real_,
+    mh_p_kbi__bully_001 == "" & mh_y_kbi__bully_001 == "" ~ NA_real_,
+    TRUE ~ 0)
+    )
 
+#2.5 SDSC Total (Sum) Score
+#2.5.1 Define the column names to be summed
+sds_columns <- c(
+  "ph_p_sds__da_001", "ph_p_sds__da_002", "ph_p_sds__da_003",
+  "ph_p_sds__dims_001", "ph_p_sds__dims_002", "ph_p_sds__dims_003",
+  "ph_p_sds__dims_004", "ph_p_sds__dims_005", "ph_p_sds__dims_006",
+  "ph_p_sds__dims_007", "ph_p_sds__does_001", "ph_p_sds__does_002",
+  "ph_p_sds__does_003", "ph_p_sds__does_004", "ph_p_sds__does_005",
+  "ph_p_sds__hyphy_001", "ph_p_sds__hyphy_002", "ph_p_sds__sbd_001",
+  "ph_p_sds__sbd_002", "ph_p_sds__sbd_003", "ph_p_sds__swtd_001",
+  "ph_p_sds__swtd_002", "ph_p_sds__swtd_003", "ph_p_sds__swtd_004",
+  "ph_p_sds__swtd_005", "ph_p_sds__swtd_006"
+)
 
-#2. Validate the family history of depression, ACE index, and bullying variables
-#2.1 Family history of depression
-#2.11 Generate a frequency table to list generated values
-table(risk_data_merged_trimmed$family_history_depression, useNA = "ifany")
+#2.5.2 Write a function to calculate total SDSC score for each participant row
+calculate_sds_total <- function(data) {
+  
+  #2.5.2.1 For each row, check if ANY column has NA
+  has_missing <- apply(data[, sds_columns], 1, function(row) any(is.na(row)))
+  
+  #2.5.2.2 Calculate the sum for each row
+  raw_sums <- rowSums(data[, sds_columns], na.rm = TRUE)
+  
+  #2.5.2.3 Set the sum to NA for any row with missing values
+  data$sds_total <- ifelse(has_missing, NA, raw_sums)
+  
+  #2.524 Return the data with the sum SDSC score
+  return(data)
+}
 
-#2.121 Define the specific columns used for family history of depression
-family_history_columns <- c(
-  "fam_history_6_yes_no",
-  "fam_history_q6a_depression",
-  "fam_history_q6d_depression",
-  "q6k_full_sib_young1_depression",
-  "q6k_full_sib_young2_depression",
-  "q6k_full_sib_young3_depression",
-  "q6k_full_sib_young4_depression",
-  "q6k_full_sib_young5_depression",
-  "q6l_full_sib_old1_depression",
-  "q6l_full_sib_old2_depression",
-  "q6l_full_sib_old3_depression",
-  "q6l_full_sib_old4_depression",
-  "q6l_full_sib_old5_depression")
+#2.5.3 Apply the SDSC score calculation function to the baseline data
+raw_data_baseline_clean <- calculate_sds_total(raw_data_baseline_clean)
 
-#2.122 Verify edge cases: family history variable inconsistencies
-risk_data_merged_trimmed %>%
-  filter(fam_history_6_yes_no == 1 & family_history_depression == 0) %>%
-  dplyr::select(all_of(family_history_columns), family_history_depression) %>% 
-  head()
+#3. Retain columns of interest for risk clustering
+cat("Retaining columns of interest for validation & clustering", "\n")
+raw_data_baseline_clean_trim <- raw_data_baseline_clean %>% 
+  dplyr::select(c(participant_id, session_id, ab_g_dyn__design_site, ab_g_dyn__visit_age, ab_g_stc__cohort_ethnrace__meim, ab_g_stc__cohort_sex, ab_g_stc__design_id__fam, mh_p_cbcl__dsm__dep_tscore, mh_p_cbcl__dsm__dep_nm, mh_p_cbcl__dsm__anx_tscore, mh_p_cbcl__dsm__anx_nm, mh_p_cbcl__synd__attn_tscore, mh_p_cbcl__synd__attn_nm, mh_p_cbcl__synd__aggr_tscore, mh_p_cbcl__synd__aggr_nm, mh_p_gbi_sum, mh_y_upps__nurg_sum, mh_y_upps__nurg_nm, mh_y_upps__purg_sum, mh_y_upps__purg_nm, le_l_coi__addr1__coi__total__national_zscore, fc_p_nsc__ns_mean, fc_p_nsc__ns_nm, sds_total, family_history_depression, family_history_mania, bullying, nc_y_nihtb__lswmt__uncor_score, nc_y_nihtb__lswmt__agecor_score, nc_y_nihtb__flnkr__uncor_score, nc_y_nihtb__flnkr__agecor_score, nc_y_nihtb__pttcp__uncor_score, nc_y_nihtb__pttcp__agecor_score, ACE_1, ACE_2, ACE_3, ACE_4, ACE_5, ACE_6, ACE_7, ACE_8, ACE_9, ACE_index_sum_score, ACE_index_sum_score_n_missing))
 
-#2.123 Verify cases where family history of depression is present
-risk_data_merged_trimmed %>%
-  filter(family_history_depression == 1) %>%
-  dplyr::select(all_of(family_history_columns), family_history_depression) %>% 
-  head()
+```
 
-#2.2 Sum ACE index
-#2.21 Generate a summary of the ACE index
-summary(risk_data_merged_trimmed$ACE_index_sum_score)
+## Risk Variable Cleaning
 
-# 2.22 Verify sum computation for random samples (exclude ACE_index_sum_score and ACE_index_sum_score_n_missing)
-risk_data_merged_trimmed %>%
-  sample_n(5) %>%
+This section cleans the variables to be used for risk clustering by:
+
+  1. Altering column names and coded values within columns to match desired formatting
+  
+  2. Removing risk variable values from the data that were generated using any missing data (e.g., incomplete CBCL -> t scores)
+
+```{r variable cleaning, warning = FALSE}
+
+## Data Wrangling ##
+
+#1. Alter column names and coded values within columns to match desired formatting
+cat("Altering column names and coded values within columns to match desired formatting", "\n")
+#1.1 Alter the biological sex column name + values
+colnames(raw_data_baseline_clean_trim)[colnames(raw_data_baseline_clean_trim) == "ab_g_stc__cohort_sex"] <- "sex"
+raw_data_baseline_clean_trim$sex[raw_data_baseline_clean_trim$sex == 1] <- "M"
+raw_data_baseline_clean_trim$sex[raw_data_baseline_clean_trim$sex == 2] <- "F"
+raw_data_baseline_clean_trim$sex[raw_data_baseline_clean_trim$sex == 3] <- "Non-Binary"
+
+#1.2 Alter the race-ethnicity column name & coded values
+colnames(raw_data_baseline_clean_trim)[colnames(raw_data_baseline_clean_trim) == "ab_g_stc__cohort_ethnrace__meim"] <- "race_ethnicity"
+raw_data_baseline_clean_trim$race_ethnicity[raw_data_baseline_clean_trim$race_ethnicity == 0] <- "Other Ethnicity"
+raw_data_baseline_clean_trim$race_ethnicity[raw_data_baseline_clean_trim$race_ethnicity == 1] <- "White/Caucasian"
+raw_data_baseline_clean_trim$race_ethnicity[raw_data_baseline_clean_trim$race_ethnicity == 2] <- "Western European"
+raw_data_baseline_clean_trim$race_ethnicity[raw_data_baseline_clean_trim$race_ethnicity == 3] <- "Eastern European"
+raw_data_baseline_clean_trim$race_ethnicity[raw_data_baseline_clean_trim$race_ethnicity == 4] <- "Hispanic/Latino"
+raw_data_baseline_clean_trim$race_ethnicity[raw_data_baseline_clean_trim$race_ethnicity == 5] <- "Black/African American"
+raw_data_baseline_clean_trim$race_ethnicity[raw_data_baseline_clean_trim$race_ethnicity == 6] <- "Afro-Carribean/Indo-Carribbean/West Indian"
+raw_data_baseline_clean_trim$race_ethnicity[raw_data_baseline_clean_trim$race_ethnicity == 7] <- "East Asian"
+raw_data_baseline_clean_trim$race_ethnicity[raw_data_baseline_clean_trim$race_ethnicity == 8] <- "South Asian"
+raw_data_baseline_clean_trim$race_ethnicity[raw_data_baseline_clean_trim$race_ethnicity == 9] <- "Southeast Asian"
+raw_data_baseline_clean_trim$race_ethnicity[raw_data_baseline_clean_trim$race_ethnicity == 10] <- "American Indian/Alaska Native"
+raw_data_baseline_clean_trim$race_ethnicity[raw_data_baseline_clean_trim$race_ethnicity == 11] <- "Middle Eastern/North African"
+raw_data_baseline_clean_trim$race_ethnicity[raw_data_baseline_clean_trim$race_ethnicity == 12] <- "Native Hawaiian or Pacific Islander"
+raw_data_baseline_clean_trim$race_ethnicity[raw_data_baseline_clean_trim$race_ethnicity == 13] <- "Multiracial/Multiethnic"
+raw_data_baseline_clean_trim$race_ethnicity[raw_data_baseline_clean_trim$race_ethnicity == 14] <- "Other Ethnicity"
+raw_data_baseline_clean_trim$race_ethnicity[raw_data_baseline_clean_trim$race_ethnicity == 15] <- "None"
+raw_data_baseline_clean_trim$race_ethnicity[raw_data_baseline_clean_trim$race_ethnicity == ""] <- "Unsure"
+raw_data_baseline_clean_trim$race_ethnicity[is.na(raw_data_baseline_clean_trim$race_ethnicity)] <- "Unsure"
+
+#1.3 Change the name of the family id column
+colnames(raw_data_baseline_clean_trim)[colnames(raw_data_baseline_clean_trim) == "ab_g_stc__design_id__fam"] <- "family_id"
+
+#1.4 Change the name of the site id column
+colnames(raw_data_baseline_clean_trim)[colnames(raw_data_baseline_clean_trim) == "ab_g_dyn__design_site"] <- "site"
+
+#1.5 Change the name of the age column 
+colnames(raw_data_baseline_clean_trim)[colnames(raw_data_baseline_clean_trim) == "ab_g_dyn__visit_age"] <- "age"
+
+#2. Use nm columns to turn any respective instances of values created using missing data to NA
+cat("Removing risk variable values from the data that were generated using any missing data (e.g., incomplete CBCL -> t scores)", "\n")
+raw_data_baseline_clean_trim <- raw_data_baseline_clean_trim %>%
   mutate(
-    calculated_sum = rowSums(
-      across(starts_with("ACE_") & 
-               !matches("ACE_index_sum_score|ACE_index_sum_score_n_missing")),
-      na.rm = TRUE)) %>%
-  dplyr::select(ACE_index_sum_score, calculated_sum, 
-         starts_with("ACE_") & 
-         !matches("ACE_index_sum_score|ACE_index_sum_score_n_missing"))
-
-#2.23 Check rows with missing ACE components (exclude derived columns in selection)
-risk_data_merged_trimmed %>%
-  filter(ACE_index_sum_score_n_missing > 0) %>%
-  dplyr::select(
-    ACE_index_sum_score,
-    ACE_index_sum_score_n_missing,
-    starts_with("ACE_") & !matches("ACE_index_sum_score|ACE_index_sum_score_n_missing")) %>% 
-  head()
-
-#2.3 Bullying
-#2.31 Generate a frequency table of identified values
-table(risk_data_merged_trimmed$bullying, useNA = "ifany")
-
-#2.32 Validate cases where bullying is 1
-risk_data_merged_trimmed %>%
-  filter(bullying == 1) %>%
-  select(kbi_p_c_bully, ksads_bully_raw_26, bullying) %>% 
-  head()
-
-#2.33 Validate cases where bullying is NA
-risk_data_merged_trimmed %>%
-  filter(is.na(bullying)) %>%
-  select(kbi_p_c_bully, ksads_bully_raw_26, bullying) %>% 
-  head()
-
-#3. Merge in demographic/covariate data of interest
-#3.1 Clean and merge all demographic/covariate data of interest
-#3.111 Create the imaging site name variable 
-site_name_data$imaging_site_name <- substr(site_name_data$mri_info_visitid, 1, 4)
-
-#3.112 Retain only the site name variable at the baseline timepoint
-site_name_data <- site_name_data %>% 
-  filter(eventname == "baseline_year_1_arm_1") %>% 
-  dplyr::select(c(src_subject_id, imaging_site_name))
-
-#3.12 Obtain the biological sex and race-ethnicity variables from the parent demographic data
-#3.121 Subset the variables of interest at the baseline timepoint
-sex_ethnicity_data <- parent_demographic_data %>% 
-  dplyr::select(c(src_subject_id, eventname, demo_sex_v2, race_ethnicity)) %>% 
-  filter(eventname == "baseline_year_1_arm_1")
-
-#3.122 Alter the biological sex name + values
-sex_ethnicity_data$sex <- sex_ethnicity_data$demo_sex_v2
-sex_ethnicity_data$sex[sex_ethnicity_data$sex == 1] <- "M"
-sex_ethnicity_data$sex[sex_ethnicity_data$sex == 2] <- "F"
-sex_ethnicity_data$sex[sex_ethnicity_data$sex == 3] <- "Other"
-
-#3.123 Alter the race-ethnicity coded values
-sex_ethnicity_data$race_ethnicity[sex_ethnicity_data$race_ethnicity == 1] <- "White"
-sex_ethnicity_data$race_ethnicity[sex_ethnicity_data$race_ethnicity == 2] <- "Black"
-sex_ethnicity_data$race_ethnicity[sex_ethnicity_data$race_ethnicity == 3] <- "Hispanic"
-sex_ethnicity_data$race_ethnicity[sex_ethnicity_data$race_ethnicity == 4] <- "Asian"
-sex_ethnicity_data$race_ethnicity[sex_ethnicity_data$race_ethnicity == 5] <- "Other"
-sex_ethnicity_data$race_ethnicity[sex_ethnicity_data$race_ethnicity == ""] <- "Unsure"
-sex_ethnicity_data$race_ethnicity[is.na(sex_ethnicity_data$race_ethnicity)] <- "Unsure"
-
-#3.124 Retain only columns of interest
-sex_ethnicity_data <- sex_ethnicity_data %>% 
-  dplyr::select(c(src_subject_id, sex, race_ethnicity))
-
-#3.13 Obtain the family id, age, and age in years variables 
-#3.131 Subset the variables of interest at the baseline assessment timepoint
-family_id_site_age_data <- family_id_data %>% 
-  dplyr::select(c(src_subject_id, eventname, site_id_l, rel_family_id, interview_age)) %>% 
-  filter(eventname == "baseline_year_1_arm_1")
-
-#3.132 Change the name of the family id column
-colnames(family_id_site_age_data)[colnames(family_id_site_age_data) == "rel_family_id"] <- "family_id"
-
-#3.133 Change the name of the site id column
-colnames(family_id_site_age_data)[colnames(family_id_site_age_data) == "site_id_l"] <- "site_name"
+    
+    #2.1 CBCL Depression
+    mh_p_cbcl__dsm__dep_tscore = if_else(mh_p_cbcl__dsm__dep_nm >= 1, NA_real_, mh_p_cbcl__dsm__dep_tscore),
+    
+    #2.2 CBCL Anxiety
+    mh_p_cbcl__dsm__anx_tscore = if_else(mh_p_cbcl__dsm__anx_nm >= 1, NA_real_, mh_p_cbcl__dsm__anx_tscore),
+    
+    #2.3 CBCL Attention
+    mh_p_cbcl__synd__attn_tscore = if_else(mh_p_cbcl__synd__attn_nm >= 1, NA_real_, mh_p_cbcl__synd__attn_tscore),
+    
+    #2.4 CBCL Aggression
+    mh_p_cbcl__synd__aggr_tscore = if_else(mh_p_cbcl__synd__aggr_nm >= 1, NA_real_, mh_p_cbcl__synd__aggr_tscore),
+    
+    #2.5 UPPS Negative Urgency
+    mh_y_upps__nurg_sum = if_else(mh_y_upps__nurg_nm >= 1, NA_real_, mh_y_upps__nurg_sum),
+    
+    #2.6 UPPS Positive Urgency
+    mh_y_upps__purg_sum = if_else(mh_y_upps__purg_nm >= 1, NA_real_, mh_y_upps__purg_sum),
+    
+    #2.7 Neighborhood Safety Score
+    fc_p_nsc__ns_mean = if_else(fc_p_nsc__ns_nm >= 1, NA_real_, fc_p_nsc__ns_mean)
+  )
 
 ```
 
-... Manually adding in interview_age values that were excluded from the data ...
+## Risk Variable Data Validation & Trimming
 
-```{r add in age values, echo = FALSE, warning = FALSE}
+This section validates and trims the data to be used for risk clustering by:
 
-## Manually Add in Age Values Where Missing in the Data ## 
+  1. Creating a dataframe containing columns of interest to the clustering process
+  
+  2. Creating a copy of the data which only contains subjects who have complete data (i.e., can be clustered)
+  
+  3. Cross checking (using a distinct function) whether any secondary variables created herein were done so correctly
+  
+  4. Summarizing the properties of the final dataset via EDA functions from skimr
 
-#1. Apply the function to the family ID / age dataframe
-family_id_site_age_data <- update_interview_age(family_id_site_age_data)
-
-```
-
-
-``` {r data wrangling cont, warning = FALSE}
-
-## Data Wrangling Continued ## 
-
-#3.133 Compute the age in years column
-family_id_site_age_data$age_in_years <- ((family_id_site_age_data$interview_age) / 12)
-
-#3.134 Retain only columns of interest
-family_id_site_age_data <- family_id_site_age_data %>% 
-  dplyr::select(c(src_subject_id, family_id, site_name, interview_age, age_in_years))
-
-#3.2 Merge all demographic/covariate data together
-demographic_covariate_data <- Reduce(
-  function(x, y)
-    merge(x, y,
-      by = "src_subject_id",
-      all = TRUE),
-  list(sex_ethnicity_data, family_id_site_age_data))
-
-#3.3 Merge all demographic/covariate data with the risk variable data
-risk_demographic_data_merged_trimmed <- left_join(risk_data_merged_trimmed, demographic_covariate_data)
-
-```
-
-## Data Cleaning + Summation
-
-```{r final dataframe cleaning, warning = FALSE}
+```{r variable validation + trimming, warning = FALSE}
 
 ## Data Cleaning ##
 
 #1. Create a dataframe containing only ordered variables of interest to risk group clustering
-risk_variable_data <- risk_demographic_data_merged_trimmed %>% 
-  dplyr::select(c(src_subject_id, eventname, family_id, site_name, sex, interview_age, age_in_years, race_ethnicity, cbcl_scr_dsm5_depress_t, cbcl_scr_dsm5_depress_nm, cbcl_scr_dsm5_anxdisord_t, cbcl_scr_dsm5_anxdisord_nm, cbcl_scr_syn_attention_t, cbcl_scr_syn_attention_nm, cbcl_scr_syn_aggressive_t, cbcl_scr_syn_aggressive_nm, pgbi_p_ss_score, upps_y_ss_negative_urgency, upps_y_ss_negative_urgency_nm, upps_y_ss_positive_urgency, upps_y_ss_positive_urgency_nm, sds_p_ss_total, family_history_depression, famhx_ss_momdad_ma_p, reshist_addr1_coi_z_coi_nat, nsc_p_ss_mean_3_items, nsc_p_ss_mean_3_items_nm, bullying, nihtbx_list_uncorrected, nihtbx_flanker_uncorrected, nihtbx_pattern_uncorrected, ACE_index_sum_score, ACE_index_sum_score_n_missing))
+cat("Creating a dataframe containing columns of interest to the clustering process", "\n")
+risk_variable_data <- raw_data_baseline_clean_trim %>% 
+  dplyr::select(c(participant_id, session_id, site, age, race_ethnicity, sex, family_id, mh_p_cbcl__dsm__dep_tscore, mh_p_cbcl__dsm__anx_tscore, mh_p_cbcl__synd__attn_tscore, mh_p_cbcl__synd__aggr_tscore, mh_p_gbi_sum, mh_y_upps__nurg_sum, mh_y_upps__purg_sum, le_l_coi__addr1__coi__total__national_zscore, fc_p_nsc__ns_mean, sds_total, family_history_depression, family_history_mania, bullying, nc_y_nihtb__lswmt__uncor_score, nc_y_nihtb__flnkr__uncor_score, nc_y_nihtb__pttcp__uncor_score, ACE_index_sum_score))
 
 #2. Retain only subjects with complete data in columns of interest
-#2.1 Transform any scores that were created with missing questions/data into NA values
-#2.11 CBCL DSM-Oriented Depression Problems
-risk_variable_data <- risk_variable_data %>%
-  mutate(cbcl_scr_dsm5_depress_t = ifelse(cbcl_scr_dsm5_depress_nm > 0, NA, cbcl_scr_dsm5_depress_t))
-
-#2.12 CBCL DSM-Oriented Anxiety Problems
-risk_variable_data <- risk_variable_data %>%
-  mutate(cbcl_scr_dsm5_anxdisord_t = ifelse(cbcl_scr_dsm5_anxdisord_nm > 0, NA, cbcl_scr_dsm5_anxdisord_t))
-
-#2.13 CBCL Attention Problems
-risk_variable_data <- risk_variable_data %>%
-  mutate(cbcl_scr_syn_attention_t = ifelse(cbcl_scr_syn_attention_nm > 0, NA, cbcl_scr_syn_attention_t))
-
-#2.14 CBCL Aggression Problems
-risk_variable_data <- risk_variable_data %>%
-  mutate(cbcl_scr_syn_aggressive_t = ifelse(cbcl_scr_syn_aggressive_nm > 0, NA, cbcl_scr_syn_aggressive_t))
-
-#2.15 UPPS-P Negative Urgency 
-risk_variable_data <- risk_variable_data %>%
-  mutate(upps_y_ss_negative_urgency = ifelse(upps_y_ss_negative_urgency_nm > 0, NA, upps_y_ss_negative_urgency))
-
-#2.16 UPPS-P Positive Urgency
-risk_variable_data <- risk_variable_data %>%
-  mutate(upps_y_ss_positive_urgency = ifelse(upps_y_ss_positive_urgency_nm > 0, NA, upps_y_ss_positive_urgency))
-
-#2.17 Neighborhood Safety Index
-risk_variable_data <- risk_variable_data %>%
-  mutate(nsc_p_ss_mean_3_items = ifelse(nsc_p_ss_mean_3_items_nm > 0, NA, nsc_p_ss_mean_3_items))
-
-#2.18 ACE Index Sum Score
-risk_variable_data <- risk_variable_data %>%
-  mutate(ACE_index_sum_score = ifelse(ACE_index_sum_score_n_missing > 0, NA, ACE_index_sum_score))
-
-#2.2 Further subset the data to contain only columns of interest to clustering
-risk_variable_data <- risk_variable_data %>% 
-  dplyr::select(c(src_subject_id, eventname, family_id, site_name, sex, interview_age, age_in_years, race_ethnicity, cbcl_scr_dsm5_depress_t, cbcl_scr_dsm5_anxdisord_t, cbcl_scr_syn_attention_t, cbcl_scr_syn_aggressive_t, pgbi_p_ss_score, upps_y_ss_negative_urgency, upps_y_ss_positive_urgency, sds_p_ss_total, family_history_depression, famhx_ss_momdad_ma_p, reshist_addr1_coi_z_coi_nat, nsc_p_ss_mean_3_items, bullying, nihtbx_list_uncorrected, nihtbx_flanker_uncorrected, nihtbx_pattern_uncorrected, ACE_index_sum_score))
-
-#2.3 Remove rows with missing data
+cat("Creating a copy of the data which only contains subjects who have complete data (i.e., can be clustered)", "\n")
 risk_variable_data_clean <- risk_variable_data %>% 
   filter(complete.cases(.) & !if_any(everything(), ~ . == ""))
 
-#3. Summarize final dataset
+#3. Create a function ("validate_cluster_vars") to verify all derived clustering variables
+cat("Cross checking (using a distinct function) whether any secondary variables created herein were done so correctly", "\n")
+validate_cluster_vars <- function(raw_clean, final_data) {
+  
+  #3.1 Family history of depression
+  expected_fhd <- with(raw_clean, case_when(
+    replace_na(mh_p_famhx__dep__fath_001 == 1, FALSE) |
+      replace_na(mh_p_famhx__dep__moth_001 == 1, FALSE) |
+      replace_na(mh_p_famhx__dep__full__young_001 == 1, FALSE) |
+      replace_na(mh_p_famhx__dep__full__young_002 == 1, FALSE) |
+      replace_na(mh_p_famhx__dep__full__young_003 == 1, FALSE) |
+      replace_na(mh_p_famhx__dep__full__young_004 == 1, FALSE) |
+      replace_na(mh_p_famhx__dep__full__young_005 == 1, FALSE) |
+      replace_na(mh_p_famhx__dep__full__old_001 == 1, FALSE) |
+      replace_na(mh_p_famhx__dep__full__old_002 == 1, FALSE) |
+      replace_na(mh_p_famhx__dep__full__old_003 == 1, FALSE) |
+      replace_na(mh_p_famhx__dep__full__old_004 == 1, FALSE) |
+      replace_na(mh_p_famhx__dep__full__old_005 == 1, FALSE) ~ 1,
+    mh_p_famhx__dep_001 == 1 ~ 0,
+    mh_p_famhx__dep_001 == 0 ~ 0,
+    TRUE ~ NA_real_))
+  mismatches_fhd <- sum(expected_fhd != final_data$family_history_depression, na.rm = TRUE)
+  
+  #3.2 Family history of mania
+  expected_fhm <- with(raw_clean, case_when(
+    replace_na(mh_p_famhx__mania__fath_001 == 1, FALSE) |
+      replace_na(mh_p_famhx__mania__moth_001 == 1, FALSE) |
+      replace_na(mh_p_famhx__mania__full__young_001 == 1, FALSE) |
+      replace_na(mh_p_famhx__mania__full__young_002 == 1, FALSE) |
+      replace_na(mh_p_famhx__mania__full__young_003 == 1, FALSE) |
+      replace_na(mh_p_famhx__mania__full__young_004 == 1, FALSE) |
+      replace_na(mh_p_famhx__mania__full__young_005 == 1, FALSE) |
+      replace_na(mh_p_famhx__mania__full__old_001 == 1, FALSE) |
+      replace_na(mh_p_famhx__mania__full__old_002 == 1, FALSE) |
+      replace_na(mh_p_famhx__mania__full__old_003 == 1, FALSE) |
+      replace_na(mh_p_famhx__mania__full__old_004 == 1, FALSE) |
+      replace_na(mh_p_famhx__mania__full__old_005 == 1, FALSE) ~ 1,
+    mh_p_famhx__mania_001 == 1 ~ 0,
+    mh_p_famhx__mania_001 == 0 ~ 0,
+    TRUE ~ NA_real_))
+  mismatches_fhm <- sum(expected_fhm != final_data$family_history_mania, na.rm = TRUE)
+  
+  #3.3 Bullying endorsement (parent or youth)
+  expected_bully <- with(raw_clean, case_when(
+    mh_p_kbi__bully_001 == 1 | mh_y_kbi__bully_001 == 1 ~ 1,
+    (is.na(mh_p_kbi__bully_001) & is.na(mh_y_kbi__bully_001)) ~ NA_real_,
+    (mh_p_kbi__bully_001 == "" & mh_y_kbi__bully_001 == "") ~ NA_real_,
+    TRUE ~ 0))
+  mismatches_bully <- sum(expected_bully != final_data$bullying, na.rm = TRUE)
+  
+  #3.4 ACE index sum
+  #3.4.1 Recompute each ACE component
+  ace_components <- raw_clean %>%
+    transmute(
+      ACE_1 = if_else(mh_p_famhx__troub_001 == 1, 1, 0, missing = NA_real_),
+      ACE_2 = if_else(fc_y_crpbi__cg1_005 %in% c(1,2), 1, 0, missing = NA_real_),
+      ACE_3 = if_else(mh_p_famhx__suic_001 == 1 | mh_p_famhx__dep_001 == 1, 1, 0, missing = NA_real_),
+      ACE_4 = if_else(mh_p_famhx__alc_001 == 1 | mh_p_famhx__drg_001 == 1, 1, 0, missing = NA_real_),
+      ACE_5 = if_else(ksads_ptsd_raw_766_p == 1 | fc_y_fes__confl_006 == 1 | fc_y_fes__confl_003 == 1, 1, 0, missing = NA_real_),
+      ACE_6 = if_else(ab_p_demo__marital__slf_001 %in% c(2,3,4), 1, 0, missing = NA_real_),
+      ACE_7 = if_else(ksads_ptsd_raw_762_p == 1 | ksads_ptsd_raw_763_p == 1, 1, 0, missing = NA_real_),
+      ACE_8 = if_else(fc_y_pm_001 %in% c(1,2) | fc_y_pm_003 %in% c(1,2), 1, 0, missing = NA_real_),
+      ACE_9 = if_else(ksads_ptsd_raw_767_p == 1 | ksads_ptsd_raw_768_p == 1, 1, 0, missing = NA_real_))
+  
+  #3.4.2 Count missing ACE components
+  missing_count <- raw_clean %>%
+    transmute(n_miss = rowSums(across(c(
+      mh_p_famhx__troub_001, fc_y_crpbi__cg1_005, mh_p_famhx__suic_001,
+      mh_p_famhx__dep_001, mh_p_famhx__alc_001, mh_p_famhx__drg_001,
+      ksads_ptsd_raw_766_p, fc_y_fes__confl_006, fc_y_fes__confl_003,
+      ab_p_demo__marital__slf_001, ksads_ptsd_raw_762_p, ksads_ptsd_raw_763_p,
+      fc_y_pm_001, fc_y_pm_003, ksads_ptsd_raw_767_p, ksads_ptsd_raw_768_p
+    ), ~ . %in% c(NA, "", 999, 7, 777))))
+  
+  #3.4.3 Compute expected ACE index
+  expected_ace_index <- if_else(
+    missing_count$n_miss >= 1, NA_real_,
+    rowSums(ace_components, na.rm = TRUE))
+  mismatches_ace <- sum(expected_ace_index != final_data$ACE_index_sum_score, na.rm = TRUE)
+  
+  #3.5 SDSC total score
+  #3.5.1 Identify SDSC items and missing rows
+  sds_cols <- c(
+    "ph_p_sds__da_001","ph_p_sds__da_002","ph_p_sds__da_003",
+    "ph_p_sds__dims_001","ph_p_sds__dims_002","ph_p_sds__dims_003",
+    "ph_p_sds__dims_004","ph_p_sds__dims_005","ph_p_sds__dims_006",
+    "ph_p_sds__dims_007","ph_p_sds__does_001","ph_p_sds__does_002",
+    "ph_p_sds__does_003","ph_p_sds__does_004","ph_p_sds__does_005",
+    "ph_p_sds__hyphy_001","ph_p_sds__hyphy_002","ph_p_sds__sbd_001",
+    "ph_p_sds__sbd_002","ph_p_sds__sbd_003","ph_p_sds__swtd_001",
+    "ph_p_sds__swtd_002","ph_p_sds__swtd_003","ph_p_sds__swtd_004",
+    "ph_p_sds__swtd_005","ph_p_sds__swtd_006")
+  
+  #3.5.2 Recompute SDSC and compare
+  has_missing_sds <- apply(raw_clean[sds_cols], 1, function(r) any(is.na(r)))
+  expected_sds <- ifelse(has_missing_sds, NA_real_, rowSums(raw_clean[sds_cols], na.rm = TRUE))
+  mismatches_sds <- sum(expected_sds != final_data$sds_total, na.rm = TRUE)
+  
+  #3.6 CBCL, UPPS, and NS mean cleaning
+  expected_dep_t <- if_else(raw_clean$mh_p_cbcl__dsm__dep_nm >= 1, NA_real_, raw_clean$mh_p_cbcl__dsm__dep_tscore)
+  expected_anx_t <- if_else(raw_clean$mh_p_cbcl__dsm__anx_nm >= 1, NA_real_, raw_clean$mh_p_cbcl__dsm__anx_tscore)
+  expected_attn_t <- if_else(raw_clean$mh_p_cbcl__synd__attn_nm >= 1, NA_real_, raw_clean$mh_p_cbcl__synd__attn_tscore)
+  expected_aggr_t <- if_else(raw_clean$mh_p_cbcl__synd__aggr_nm >= 1, NA_real_, raw_clean$mh_p_cbcl__synd__aggr_tscore)
+  expected_nurg <- if_else(raw_clean$mh_y_upps__nurg_nm >= 1, NA_real_, raw_clean$mh_y_upps__nurg_sum)
+  expected_purg <- if_else(raw_clean$mh_y_upps__purg_nm >= 1, NA_real_, raw_clean$mh_y_upps__purg_sum)
+  expected_ns_mean <- if_else(raw_clean$fc_p_nsc__ns_nm >= 1, NA_real_, raw_clean$fc_p_nsc__ns_mean)
+  
+  mismatches_cont <- tibble(
+    Variable = c(
+      "mh_p_cbcl__dsm__dep_tscore","mh_p_cbcl__dsm__anx_tscore",
+      "mh_p_cbcl__synd__attn_tscore","mh_p_cbcl__synd__aggr_tscore",
+      "mh_y_upps__nurg_sum","mh_y_upps__purg_sum","fc_p_nsc__ns_mean"),
+    Mismatches = c(
+      sum(expected_dep_t != final_data$mh_p_cbcl__dsm__dep_tscore, na.rm = TRUE),
+      sum(expected_anx_t != final_data$mh_p_cbcl__dsm__anx_tscore, na.rm = TRUE),
+      sum(expected_attn_t != final_data$mh_p_cbcl__synd__attn_tscore, na.rm = TRUE),
+      sum(expected_aggr_t != final_data$mh_p_cbcl__synd__aggr_tscore, na.rm = TRUE),
+      sum(expected_nurg != final_data$mh_y_upps__nurg_sum, na.rm = TRUE),
+      sum(expected_purg != final_data$mh_y_upps__purg_sum, na.rm = TRUE),
+      sum(expected_ns_mean != final_data$fc_p_nsc__ns_mean, na.rm = TRUE))
+    )
+  
+  #3.7 Direct continuous variables (no transformation expected)
+  #3.7.1 Specify direct variables
+  direct_vars <- c(
+    "mh_p_gbi_sum","le_l_coi__addr1__coi__total__national_zscore",
+    "nc_y_nihtb__lswmt__uncor_score","nc_y_nihtb__flnkr__uncor_score",
+    "nc_y_nihtb__pttcp__uncor_score"
+    )
+  
+  #3.7.2 Compare raw vs final
+  mismatches_direct <- tibble(
+    Variable   = direct_vars,
+    Mismatches = sapply(direct_vars, function(v) {
+      sum(raw_clean[[v]] != final_data[[v]], na.rm = TRUE)})
+    )
+  
+  #3.8 Combine all mismatch counts into a single summary
+  mismatch_summary <- bind_rows(
+    tibble(Variable = "family_history_depression", Mismatches = mismatches_fhd),
+    tibble(Variable = "family_history_mania", Mismatches = mismatches_fhm),
+    tibble(Variable = "bullying", Mismatches = mismatches_bully),
+    tibble(Variable = "ACE_index_sum_score", Mismatches = mismatches_ace),
+    tibble(Variable = "sds_total", Mismatches = mismatches_sds),
+    mismatches_cont,
+    mismatches_direct
+  )
+  
+  #3.9 Return the mismatch summary
+  return(mismatch_summary)
+}
+
+#3.10 Call the function with your pre- and post-wrangled data
+validation_results <- validate_cluster_vars(
+  raw_clean = raw_data_baseline_clean,
+  final_data = risk_variable_data
+)
+
+#3.11 View the mismatch summary
+kable(validation_results) %>%
+  kable_styling(bootstrap_options = c("striped","hover","condensed","responsive"))
+
+#3.12 Optionally, assert that all mismatches are zero
+if (all(validation_results$Mismatches == 0)) {
+  cat("All derived variables match expected values.\n")
+} else {
+  cat("Some mismatches detected; inspect 'validation_results' for details.\n")
+}
+
+#4. Summarize final cleaned dataset
+cat("Summarizing the properties of the final dataset via EDA functions from skimr", "\n")
 skimr::skim(risk_variable_data_clean)
 
 ```
@@ -424,8 +490,10 @@ skimr::skim(risk_variable_data_clean)
 
 ## Output ##
 
-#1. Write the cleaned risk variable data as a csv file to be used in clustering
+#1. Write the cleaned and filtered risk variable data as a csv file to be used in clustering
 write.csv(risk_variable_data_clean, "../../data/data_processed/risk_variable_data.csv", row.names = FALSE)
 
-```
+#2. Write the cleaned and not filtered (i.e., subjects w/o complete data not excluded) as a csv file to be used later in missignness analyses
+write.csv(risk_variable_data, "../../data/data_processed/risk_variable_data_unfiltered.csv", row.names = FALSE)
 
+```

@@ -40,10 +40,10 @@ library(plotly)
 options(scipen = 999, digits = 8)
 
 # Read in risk variable data to be used in clustering
-risk_variable_data <- read.csv("../../data/data_processed/risk_variable_data.csv")
+risk_variable_data <- read.csv("../../data/preliminary_analysis/data_processed/risk_variable_data.csv")
 
 # Read in the results of the k validation / optimization procedure
-k_optimization_indices <- readRDS(file = "../../results/main_analysis/k_optimization_indices.rds")
+k_optimization_indices <- readRDS(file = "../../results/preliminary_analysis/main_analysis/k_optimization_indices.rds")
 
 ```
 
@@ -273,21 +273,35 @@ silhouette_plot <- ggplot(silhouette_data, aes(x = silhouette_width, fill = fact
   theme_minimal() +
   theme(
     legend.position = "bottom", 
-    strip.text = element_text(size = 12)
-  )
+    strip.text = element_text(size = 14),
+    panel.grid = element_blank(), 
+    axis.line.x = element_line(color = "black"),     
+    axis.line.y = element_line(color = "black"))
 
 #4.13 Display the silhouette density/mean plot
 print(silhouette_plot)
+
+#4.14 Save the silhouette density/mean plot
+ggsave("../../results/main_analysis/silhouette_plot.png", dpi = 720, width = 10.5, height = 7, bg = "white")
 
 #4.21 Generate and print the Elbow Plot
 elbow_plot <- ggplot(elbow_plot_data, aes(x = k, y = Tot_WithinSS)) +
   geom_line() +
   geom_point() +
   labs(title = "Elbow Plot", x = "Number of Clusters (k)", y = "Total Within Sum of Squares") +
-  theme_minimal()
+  scale_x_continuous(breaks = seq(2, 12, by = 2)) +
+  theme_minimal() + 
+  theme(
+    strip.text = element_text(size = 14),
+    panel.grid = element_blank(), 
+    axis.line.x = element_line(color = "black"),     
+    axis.line.y = element_line(color = "black"))
 
 #4.22 Print the Elbow Plot
 print(elbow_plot)
+
+#4.23 Save the Elbow Plot
+ggsave("../../results/main_analysis/elbow_plot.png", dpi = 720, width = 10.5, height = 7, bg = "white")
 
 #5. Save Results for Future Use
 #5.1 k prototypes clusters

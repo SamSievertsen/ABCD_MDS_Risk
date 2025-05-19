@@ -39,7 +39,7 @@ library(ggplot2)
 options(scipen = 999, digits = 8)
 
 # Read in risk variable data to be used in clustering
-risk_variable_data <- read.csv("../../data/data_processed/risk_variable_data.csv")
+risk_variable_data <- read.csv("../../data/preliminary_analysis/data_processed/risk_variable_data.csv")
 
 ```
 

@@ -34,13 +34,14 @@ library(lmtest)
 library(sandwich)
 library(car)
 library(emmeans)
+library(ggsignif)
 options(scipen = 999, digits = 8)
 
 # Read in clustered risk variable + outcome data for analysis
-bipolar_suicidality_risk_data <- read.csv("../../data/data_processed/bipolar_suicidality_risk_analysis_data.csv")
+bipolar_suicidality_risk_data <- read.csv("../../data/preliminary_analysis/data_processed/bipolar_suicidality_risk_analysis_data.csv")
 
 # Read in family ID data for determining subjects' age in years at 4-year follow-up
-year_4_age_data <- read.csv("../../data/data_raw/abcd_y_lt.csv") %>% 
+year_4_age_data <- read.csv("../../data/preliminary_analysis/data_raw/abcd_y_lt.csv") %>% 
   filter(eventname == "4_year_follow_up_y_arm_1") %>% 
   dplyr::select(c(src_subject_id, interview_age)) %>% 
   mutate(year_4_age_in_years = (interview_age / 12)) %>% 
@@ -162,27 +163,31 @@ binary_variable_labels <- c(
 
 #2.13 Wrangle data for plotting
 binary_plot_data <- bipolar_suicidality_risk_data %>%
-  filter(
-        if_all(all_of(c("Y4_bipolar_I_dx", "Y4_bipolar_II_dx", "Y4_any_bipolar_dx",
-                        "Y4_suicidal_thinking", "Y4_suicide_attempt", "Y4_nssi")), 
-               ~ !is.na(.x))) %>%
+  filter(if_all(all_of(c("Y4_bipolar_I_dx", "Y4_bipolar_II_dx", "Y4_any_bipolar_dx",
+                         "Y4_suicidal_thinking", "Y4_suicide_attempt", "Y4_nssi")),
+                ~ !is.na(.x))) %>%
   dplyr::select(cluster, family_history_depression, famhx_ss_momdad_ma_p, bullying) %>%
   pivot_longer(-cluster, names_to = "variable", values_to = "value") %>%
   group_by(cluster, variable, value) %>%
-  summarise(count = n(), .groups = "drop")
+  summarise(count = n(), .groups = "drop") %>%
+  group_by(cluster, variable) %>%
+  mutate(
+    total = sum(count),
+    percent = round((count / total) * 100, 1),
+    value_label = ifelse(value == 1, "Yes", "No"))
 
 #2.14 Create the binary variable plot
-binary_plot_stacked <- binary_plot_data_pct %>%
+binary_plot_stacked <- binary_plot_data %>%
   ggplot(aes(x = as.factor(cluster), y = percent, fill = value_label)) +
   geom_bar(stat = "identity") +
   geom_text(aes(label = paste0(count)),
             position = position_stack(vjust = 0.5), size = 3, color = "black") +
   facet_wrap(~variable, labeller = as_labeller(binary_variable_labels)) +
   labs(x = "Cluster", y = "Percentage (%)", fill = "Endorsement",
-       title = "Proportions of Categorical Risk Variable Endorsement by Cluster") +
+       title = "") +
   theme_minimal() +
-  theme(strip.text = element_text(size = 12),
-        axis.text = element_text(size = 10),
+  theme(strip.text = element_text(size = 14),
+        axis.text = element_text(size = 12),
         panel.grid.minor.y = element_blank(),
         panel.grid.major.y = element_blank(),
         panel.grid.major.x = element_blank(),
@@ -194,8 +199,11 @@ binary_plot_stacked <- binary_plot_data_pct %>%
 #2.15 Print the binary risk variable plot
 print(binary_plot_stacked)
 
+#2.16 Save the binary risk variable plot to the SOBP results folder for use in poster
+ggsave("../../results/sobp_2025/binary_risk_var_plot.png", dpi = 720, width = 10.5, height = 7, bg = "white")
+
 #2.2 Characterize the Clusters According to Continuous Risk Variables with Violin Boxplots
-#2.21 Define the continuous variables and descriptions
+#2.211 Define the continuous variables and descriptions
 continuous_vars <- c("cbcl_scr_dsm5_depress_t", "cbcl_scr_dsm5_anxdisord_t",
                      "cbcl_scr_syn_attention_t", "cbcl_scr_syn_aggressive_t",
                      "pgbi_p_ss_score", "upps_y_ss_negative_urgency",
@@ -204,7 +212,7 @@ continuous_vars <- c("cbcl_scr_dsm5_depress_t", "cbcl_scr_dsm5_anxdisord_t",
                      "nihtbx_list_uncorrected", "nihtbx_flanker_uncorrected",
                      "nihtbx_pattern_uncorrected", "ACE_index_sum_score")
 
-#2.22 Define labels for each continuous variable
+#2.212 Define labels for each continuous variable
 continuous_variable_labels <- c(
   cbcl_scr_dsm5_depress_t = "CBCL DSM-5 Depression T-Score",
   cbcl_scr_dsm5_anxdisord_t = "CBCL DSM-5 Anxiety T-Score",
@@ -216,25 +224,45 @@ continuous_variable_labels <- c(
   sds_p_ss_total = "Sleep Disturbance Score",
   reshist_addr1_coi_z_coi_nat = "COI Z-Score",
   nsc_p_ss_mean_3_items = "Mean Neighborhood Safety",
-  nihtbx_list_uncorrected = "NIHTB Uncorrected List Sorting Score",
-  nihtbx_flanker_uncorrected = "NIHTB Uncorrected Flanker Task Score",
-  nihtbx_pattern_uncorrected = "NIHTB Uncorrected Pattern Comparison Score",
+  nihtbx_list_uncorrected = "NIHTB List Sorting Score",
+  nihtbx_flanker_uncorrected = "NIHTB Flanker Score",
+  nihtbx_pattern_uncorrected = "NIHTB Pattern Comparison Score",
   ACE_index_sum_score = "ACE Index Sum Score")
 
-#2.23 Calculate y-axis limits for each variable
+#2.213 Create a dataframe for plotting the continuous risk variables
+continuous_plot_data <- bipolar_suicidality_risk_data %>%
+  dplyr::select(cluster, cbcl_scr_dsm5_depress_t, 
+                cbcl_scr_dsm5_anxdisord_t, cbcl_scr_syn_attention_t, 
+                cbcl_scr_syn_aggressive_t, pgbi_p_ss_score, 
+                upps_y_ss_negative_urgency, upps_y_ss_positive_urgency, 
+                sds_p_ss_total, reshist_addr1_coi_z_coi_nat, 
+                nsc_p_ss_mean_3_items, nihtbx_list_uncorrected, 
+                nihtbx_flanker_uncorrected, nihtbx_pattern_uncorrected, 
+                ACE_index_sum_score) %>%
+  pivot_longer(-cluster, names_to = "variable", values_to = "value")
+
+#2.22 Calculate y-axis limits for each variable
 y_limits <- continuous_plot_data %>%
   group_by(variable) %>%
   summarise(
     y_min = min(value, na.rm = TRUE),
     y_max = max(value, na.rm = TRUE)
   ) %>%
-  #2.231 Add a small buffer to the limits
+  #2.221 Add a small buffer to the limits
   mutate(
     y_min = y_min - 0.1 * (y_max - y_min),
     y_max = y_max + 0.1 * (y_max - y_min)
   ) %>%
-  #2.232 Add a dummy cluster column to match the plot data
+  #2.222 Add a dummy cluster column to match the plot data
   mutate(cluster = "1")
+
+#2.23 Define custom colors for clusters
+continuous_var_cluster_custom_colors <- c(
+  "1" = "#440154FF",
+  "2" = "#3B528BFF",
+  "3" = "#21908CFF",
+  "4" = "#5DC863FF",
+  "5" = "#F06043FF")
 
 #2.24 Create the violin boxplot
 continuous_plot <- continuous_plot_data %>%
@@ -246,30 +274,36 @@ continuous_plot <- continuous_plot_data %>%
     scales = "free_y",
     labeller = as_labeller(continuous_variable_labels)
   ) +
+  
   #2.241 Apply y-axis limits for each facet
   geom_blank(data = y_limits, aes(y = y_min)) +
   geom_blank(data = y_limits, aes(y = y_max)) +
   labs(x = "Cluster", y = "Value", fill = "Cluster",
-       title = "Distributions of Continuous Risk Variables by Cluster") +
+       title = "") +
   theme_minimal() +
   theme(
     strip.text = element_text(size = 10),
-    axis.text = element_text(size = 8),
+    xis.text = element_text(size = 7.8),
     legend.position = "top",
-    #2.2411 Remove y-axis minor gridlines
+    
+    #2.2411 Remove gridlines
     panel.grid.minor.y = element_blank(),
-    #2.2412 Customize major gridlines to only show above x-axis
     panel.grid.major.y = element_blank(),
-    # Ensure x-axis gridlines remain
     panel.grid.major.x = element_blank(),
-    #2.2413 Add bolded lines for y and x axes
+    
+    #2.2412 Add lines for y and x axes
     axis.line.y.left = element_line(),
     axis.line.x.bottom = element_line()
   ) +
-  scale_fill_brewer(palette = "Set3")
+  
+  #2.242 Use the custom color palette
+  scale_fill_manual(values = continuous_var_cluster_custom_colors)
 
 #2.25 Print the continuous violin boxplot
 print(continuous_plot)
+
+#2.26 Save the continuous violin box-plot 
+ggsave("../../results/sobp_2025/continuous_risk_var_plot.png", dpi = 720, width = 10.5, height = 7, bg = "white")
 
 ```
 
@@ -477,7 +511,7 @@ primary_analysis_results_table %>%
 
 ### Plotting Primary Analysis Results
 
-```{r primary analysis plots, echo = FALSE, warning = FALSE, fig.width = 10, fig.height = 6}
+```{r primary analysis plots, echo = FALSE, warning = FALSE, fig.width = 10.5, fig.height = 7}
 
 ## Plot the Results of the Primary Logistic Regression Analyses ##
 
@@ -494,65 +528,111 @@ primary_analysis_plot_data <- primary_cluster_analysis_results %>%
     Cluster = paste("Cluster", Cluster),
     
     #1.3 Flag significant odds ratios (using p < 0.05 as the threshold)
-    Significant = if_else(P_Value < 0.05, "Significant p<0.05", "Not Significant p>0.05")
+    Significance = if_else(P_Value < 0.05, "Significant p<0.05", "Not Significant p>0.05")
   ) %>%
   
   #1.3 For rows with a missing lower CI (e.g., bipolar II dx, Cluster 4), set Odds_Ratio to NA.
   mutate(Odds_Ratio = ifelse(is.na(CI_Lower), NA, Odds_Ratio))
 
 #2. Plot the primary analysis results (OR)
-#2.1 Create the odds ratio forest plot of primary analysis results
-primary_analysis_plot <- ggplot(primary_analysis_plot_data, aes(x = Odds_Ratio, y = Cluster, color = Cluster, shape = Significant)) +
-  geom_point(size = 3) +
+#2.1 Create the odds ratio plot of primary analysis results
+#2.11 Reshape the data such that all OR values can be printed on a single plot
+#2.111 Create a consistent ordering for clusters
+cluster_levels <- c("Cluster 1", "Cluster 2", "Cluster 4", "Cluster 5")
+primary_analysis_plot_data <- primary_analysis_plot_data %>%
+  filter(grepl("^Cluster [1-5]$", Cluster)) %>%
+  mutate(
+    Outcome = factor(Outcome, levels = rev(c("bipolar I dx", "bipolar II dx", "any bipolar dx", 
+                                             "suicidal thinking", "suicide attempt", "nssi"))),
+    Cluster = factor(Cluster, levels = cluster_levels)
+  )
+
+#2.112 Assign y-axis numeric values (1 per Outcome)
+y_map <- data.frame(Outcome = levels(primary_analysis_plot_data$Outcome)) %>%
+  mutate(y_base = seq(from = 1, by = 0.8, length.out = n()))
+
+#2.113 Update y_map with new plot labels for each outcome
+y_map <- y_map %>%
+  mutate(
+    Outcome = as.character(Outcome),
+    Outcome_Label = case_when(
+      Outcome == "bipolar I dx" ~ "BD-I",
+      Outcome == "bipolar II dx" ~ "BD-II",
+      Outcome == "any bipolar dx" ~ "Any BSD",
+      Outcome == "suicidal thinking" ~ "SI",
+      Outcome == "suicide attempt" ~ "SA",
+      Outcome == "nssi" ~ "NSSI",
+      TRUE ~ Outcome
+    )
+  )
+
+#2.114 Offset y base values for Cluster within each and then merge base y-values into plot data
+primary_analysis_plot_data <- primary_analysis_plot_data %>%
+  mutate(Outcome = as.character(Outcome))
+primary_analysis_plot_data <- primary_analysis_plot_data %>%
+  left_join(y_map, by = "Outcome") %>% 
+  mutate(y = y_base + (2.5 - match(Cluster, cluster_levels)) * 0.175)
+
+#2.115 Define custom colors with a better visible alternative for cluster 5
+primary_plot_custom_colors <- c(
+  "Cluster 1" = "#440154FF",
+  "Cluster 2" = "#3B528BFF",
+  "Cluster 4" = "#5DC863FF",
+  "Cluster 5" = "#F06043FF"
+)
+
+#2.12 Plot OR's with 95% CI values
+primary_analysis_plot <- ggplot(filter(primary_analysis_plot_data, !is.na(CI_Lower)), aes(x = Odds_Ratio, y = y, color = Cluster, shape = Significance)) +
+  geom_rect(data = y_map %>% mutate(ymin = y_base - 0.3, ymax = y_base + 0.3),
+          aes(xmin = -Inf, xmax = Inf, ymin = ymin, ymax = ymax),
+          inherit.aes = FALSE,
+          fill = "grey95") +
+  geom_point(size = 3.5) +
+  geom_errorbarh(aes(xmin = CI_Lower, xmax = CI_Upper), height = 0.1, linewidth = 0.9) +
   
-  #2.12 Only draw error bars where the lower confidence bound is available
-  geom_errorbarh(data = filter(primary_analysis_plot_data, !is.na(CI_Lower)),
-                 aes(xmin = CI_Lower, xmax = CI_Upper), height = 0.2) +
+  #2.13 Add reference line at OR = 1
+  geom_vline(xintercept = 1, linetype = "dashed", color = "black", size = 0.6) +
   
-  #2.13 Facet by Outcome with free x scales for interpretability
-  facet_wrap(~ Outcome, scales = "free_x", ncol = 3) +
+  #2.14 Scale the x axis such that every 2.5th value is shown
+  scale_x_continuous(breaks = c(0, 2.5, 5, 7.5, 10, 12.5)) +
   
-  #2.14 Add a vertical dashed line at 1.0 that stands out in red
-  geom_vline(xintercept = 1, linetype = "dashed", color = "red", size = 1) +
+  #2.15 Use a manual variation of the viridis color palette
+  scale_color_manual(values = primary_plot_custom_colors) + 
   
-  #2.15 Set x-axis on log scale with the specified breaks
-  #scale_x_log10(breaks = c(0.5, 1, 2, 5, 10)) +
-  labs(
-    x = "Odds Ratio",
-    y = "Cluster",
-    title = "Odds Ratios for Diagnostic Outcomes by Cluster (Relative to Cluster 3)"
+  #2.16 Map shapes: use circles (16) for non-significant and triangles (17) for significant estimates
+  scale_shape_manual(values = c("Not Significant p>0.05" = 16, "Significant p<0.05" = 17)) +
+  scale_y_continuous(
+    breaks = y_map$y_base,
+    labels = y_map$Outcome_Label,
+    expand = expansion(mult = c(0.01, 0.01))
   ) +
   
-  #2.16 Use the viridis color palette for a deep and vibrant scheme
-  scale_color_viridis_d(option = "viridis") +
+  #2.17 Set the x-axis title 
+  labs(
+    x = "Odds Ratio (95% CI)",
+    y = "")+
   
-  #2.17 Map shapes: use circles (16) for non-significant and triangles (17) for significant estimates
-  scale_shape_manual(values = c("Not Significant p>0.05" = 16, "Significant p<0.05" = 17)) +
-  theme_bw(base_size = 12) +
+  #2.18 Set thematic options
+  theme_bw(base_size = 13) +
   theme(
-    
-    #2.181 Bold axis titles and text
-    axis.title = element_text(face = "bold", size = 12),
-    axis.text = element_text(face = "bold", size = 10),
-    
-    #2.182 Only show major vertical gridlines (x-axis) at the specified breaks
-    panel.grid.major.x = element_line(color = "grey80", size = 0.5),
+    axis.title.x = element_text(face = "bold", size = 16, margin = margin(t = 5)),
+    axis.text.x = element_text(face = "bold", size = 14),
+    axis.text.y = element_text(face = "bold", size = 14),
+    panel.grid.major.x = element_blank(),
     panel.grid.minor = element_blank(),
     panel.grid.major.y = element_blank(),
-    
-    #2.183 Add a clear border around each facet panel
-    panel.border = element_rect(color = "black", fill = NA, size = 1),
-    
-    #2.184 Bold the facet strip text and add a white background with a black border
-    strip.background = element_rect(fill = "white", color = "black", size = 1),
-    strip.text = element_text(face = "bold", size = 12),
-    
-    #2.185 Center and bold the plot title
-    plot.title = element_text(size = 14, face = "bold", hjust = 0.5)
-  )
+    panel.grid.minor.y = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA, size = 0.6),
+    legend.position = "top",
+    legend.justification = "center",
+    legend.margin = margin(t = 0, b = 0),
+    legend.box.margin = margin(t = 0, b = -5, l = -10))
 
 #2.2 Print the primary analysis results plot
 print(primary_analysis_plot)
+
+#2.3 Save the plot to the SOBP results folder for use in poster
+ggsave("../../results/sobp_2025/primary_or_analysis_plot.png", dpi = 720, width = 10.5, height = 7, bg = "white")
 
 ```
 
@@ -560,13 +640,7 @@ print(primary_analysis_plot)
 
 **Rationale for Secondary Continuous Outcome Modeling Methods**
 
-For the secondary analyses, continuous measures of psychopathology - specifically, DSM‑5 Oriented Depression Problems, DSM‑5 Oriented Anxiety Problems, Attention Problems, and Aggression Problems (as measured by CBCL scores)—were modeled using linear mixed‐effects regression. Each model regressed the outcome on cluster membership, the corresponding baseline CBCL score (included because baseline scores contributed to the derivation of the risk clusters), and sex. Importantly, a random intercept for **family_id** was incorporated to account for the within-family correlation - which is different than the previous primary analyses and discussed below. 
-
-The use of the `lmer()` model framework was due to the successful inclusion of **family_id** as a random effect, as it effectively partitioned between-family variance, especially in comparison to the logistic regression models above. This structure ensured that individual-level variability was not over-absorbed by the random effects, thereby preserving the interpretability and stability of the fixed effect estimates (in a way that the use of a mixed effects logistic regression model for the primary analyses did not).
-
-Following model fitting with `lmer()`, an ANCOVA (Type II) was conducted using `car::Anova()` to assess the omnibus effect of cluster on each outcome metric. When the omnibus effect was significant (p < 0.05), post-hoc pairwise contrasts were computed using `emmeans` with FDR adjustment.
-
-TL;DR: Linear mixed-effects models with a random intercept for family_id were chosen to robustly account for within-family correlations in continuous CBCL outcomes. The models controlled for baseline scores and sex, and subsequent ANCOVA and post-hoc tests provided nuanced insight into how cluster membership relates to dimensional psychopathology measures.
+Linear mixed-effects models with a random intercept for family_id were chosen to robustly account for within-family correlations in continuous CBCL outcomes. The models controlled for baseline scores and sex, and subsequent ANCOVA and post-hoc tests provided nuanced insight into how cluster membership relates to dimensional psychopathology measures.
 
 ```{r secondary analyses, echo = FALSE, warning = FALSE}
 
@@ -746,6 +820,7 @@ posthoc_results_table %>%
 ## Plot the Results of the Secondary Linear Mixed Effects Regression Analyses ##
 
 #1. Prepare the data for plotting
+#1.1 Pivot the secondary analysis data to longer format and clean column names for plotting
 secondary_analysis_plot_data <- dimensional_psychopathology_risk_secondary_analysis_data %>%
   pivot_longer(
     cols = all_of(secondary_outcome_vars), 
@@ -759,31 +834,51 @@ secondary_analysis_plot_data <- dimensional_psychopathology_risk_secondary_analy
     Cluster = paste("Cluster", cluster)
   )
 
-#2 Generate a faceted boxplot of secondary continuous outcomes
+#1.2 #2.Define custom colors with a better visible alternative for cluster 5
+secondary_plot_custom_colors <- c(
+  "#440154FF",
+  "#3B528BFF",
+  "#21908CFF",
+  "#5DC863FF",
+  "#F06043FF"
+)
+
+#2. Generate a faceted boxplot of secondary continuous outcomes
 #2.1 Create the facet boxplot
 secondary_analysis_plot <- ggplot(secondary_analysis_plot_data, aes(x = Cluster, y = Score, fill = Cluster)) +
-  geom_boxplot(alpha = 0.8, outlier.shape = NA) +
-  facet_wrap(~ Outcome, scales = "free_y", ncol = 2) +
-  scale_fill_viridis_d(option = "viridis") +
-  # Remove the redundant "Cluster" prefix from x-axis labels.
-  scale_x_discrete(labels = function(x) gsub("Cluster ", "", x)) +
+  geom_violin(trim = FALSE, alpha = 0.5, scale = "width", color = NA) +
+  geom_boxplot(width = 0.15, outlier.shape = NA, alpha = 0.9, color = "black", linewidth = 0.4) +
+  facet_wrap(~ Outcome, scales = "free_y", ncol = 2,
+             labeller = labeller(Outcome = c("dsm5 depress t" = "",
+                                             "dsm5 anxdisord t" = "",
+                                             " attention t" = "",
+                                             " aggressive t" = ""))) +
+  scale_fill_manual(values = secondary_plot_custom_colors) +
+  scale_x_discrete(labels = function(x) gsub("Cluster cluster_", "", x)) +
   labs(
     x = "Cluster",
-    y = "Score",
-    title = "Continuous CBCL Outcomes by Cluster"
+    y = "CBCL T-score"
   ) +
   theme_bw(base_size = 12) +
   theme(
-    axis.title = element_text(face = "bold", size = 12),
-    axis.text = element_text(face = "bold", size = 10),
-    strip.background = element_rect(fill = "white", color = "black", size = 1),
-    strip.text = element_text(face = "bold", size = 12),
-    panel.border = element_rect(color = "black", fill = NA, size = 1),
-    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    axis.title = element_text(face = "bold", size = 16),
+    axis.text = element_text(face = "bold", size = 12),
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold", size = 12, margin = margin(b = 20)), # space under titles
+    panel.spacing = unit(4, "lines"), 
+    panel.border = element_blank(),
+    axis.line.x = element_line(color = "black", linewidth = 0.6),
+    axis.line.y = element_line(color = "black", linewidth = 0.6),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.title = element_blank(),
     legend.position = "none"
   )
 
 #2.2 Print the secondary analysis plot
 print(secondary_analysis_plot)
+
+#2.3 Save the plot to the SOBP results folder for use in poster
+ggsave("../../results/sobp_2025/secondary_analysis_plot.png", dpi = 720, width = 10.5, height = 7, bg = "white")
 
 ```

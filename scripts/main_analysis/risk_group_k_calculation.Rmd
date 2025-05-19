@@ -1,0 +1,97 @@
+---
+title: "Mood Disorder & Suicidality Risk Group Clustering Calculation, Optimization, & Validation"
+author: "Sam A. Sievertsen"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    self_contained: true
+---
+
+```{r global, include = FALSE}
+
+# Set global env variables
+knitr::opts_chunk$set(warning = FALSE, message = NA, comment = "")
+
+```
+
+```{r environment, echo = FALSE, include = FALSE, warning = FALSE}
+
+# Load necessary packages + environmental variables
+library(knitr)
+library(dplyr)
+library(tidyr)
+library(DescTools)
+library(skimr)
+library(easystats)
+library(cluster)
+library(clustMixType)
+library(factoextra)
+library(NbClust)
+library(clValid) 
+library(ClusterR) 
+library(clusterSim)
+library(clustertend)
+library(hopkins)
+library(tidymodels)
+library(tidyclust)
+library(tidyquant)
+library(ggplot2)
+options(scipen = 999, digits = 8)
+
+# Read in risk variable data to be used in clustering
+risk_variable_data <- read.csv("../../data/data_processed/risk_variable_data.csv")
+
+```
+
+## Data Prep for Analysis 
+
+```{r data prep, warning = FALSE}
+
+## Data Prep ## 
+
+#1. Z-score continuous data for clustering
+#1.1 Create a list of continuous variables to z-score
+variables_to_scale <- c(
+  "mh_p_cbcl__dsm__anx_tscore", 
+  "mh_p_cbcl__synd__attn_tscore",
+  "mh_p_cbcl__synd__aggr_tscore",
+  "mh_p_gbi_sum",
+  "mh_y_upps__nurg_sum",
+  "mh_y_upps__purg_sum",
+  "le_l_coi__addr1__coi__total__national_zscore",
+  "fc_p_nsc__ns_mean",
+  "sds_total",
+  "nc_y_nihtb__lswmt__uncor_score",
+  "nc_y_nihtb__flnkr__uncor_score",
+  "nc_y_nihtb__pttcp__uncor_score",
+  "ACE_index_sum_score")
+
+#1.2 Z-score all continuous variables to be used in clustering
+risk_variable_data <- risk_variable_data %>%
+  mutate(across(
+    all_of(variables_to_scale),
+    ~ as.numeric(scale(.)),
+    .names = "{.col}_scaled"))
+
+#2. Ensure dichotimization of categorical data for clustering
+risk_variable_data <- risk_variable_data %>% 
+  mutate(across(c("family_history_depression", "family_history_mania", "bullying"), as.factor))
+
+#3. Retain only columns of interest for clustering
+risk_variable_data_scaled <- risk_variable_data %>% 
+  dplyr::select(c(participant_id, session_id, site, age, race_ethnicity, sex, family_id, family_history_depression, family_history_mania, bullying, mh_p_cbcl__dsm__anx_tscore_scaled, mh_p_cbcl__synd__attn_tscore_scaled, mh_p_cbcl__synd__aggr_tscore_scaled, mh_p_gbi_sum_scaled, mh_y_upps__nurg_sum_scaled, mh_y_upps__purg_sum_scaled, le_l_coi__addr1__coi__total__national_zscore_scaled, fc_p_nsc__ns_mean_scaled, sds_total_scaled, nc_y_nihtb__lswmt__uncor_score_scaled, nc_y_nihtb__flnkr__uncor_score_scaled, nc_y_nihtb__pttcp__uncor_score_scaled, ACE_index_sum_score_scaled))
+
+#4. Retain subject IDs as row names while removing variables that will not be clustered 
+#4.1 Remove all variables except subject ID from the dataframe for clustering
+risk_variable_clustering_data <- risk_variable_data_scaled %>%
+  dplyr::select(-session_id, -family_id, -site, -sex, -age, -race_ethnicity)
+
+#4.2 Set subject IDs as row names
+row.names(risk_variable_clustering_data) <- risk_variable_clustering_data$participant_id
+
+#4.3 Remove 'participant_id' column from data
+risk_variable_clustering_data <- risk_variable_clustering_data %>%
+  dplyr::select(-participant_id)
+str(risk_variable_clustering_data)
+```
+

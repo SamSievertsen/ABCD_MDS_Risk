@@ -39,13 +39,13 @@ library(moments)
 options(scipen = 999, digits = 8)
 
 # Read in parent report ksads-comp data
-parent_ksads_data <- read.csv("../../data/data_raw/mh_p_ksads_ss.csv")
+parent_ksads_data <- read.csv("../../data/preliminary_analysis/data_raw/mh_p_ksads_ss.csv")
 
 # Read in youth report ksads-comp data
-youth_ksads_data <- read.csv("../../data/data_raw/mh_y_ksads_ss.csv")
+youth_ksads_data <- read.csv("../../data/preliminary_analysis/data_raw/mh_y_ksads_ss.csv")
 
 # Read in cbcl data
-cbcl_data <- read.csv("../../data/data_raw/mh_p_cbcl.csv")
+cbcl_data <- read.csv("../../data/preliminary_analysis/data_raw/mh_p_cbcl.csv")
 
 ```
 

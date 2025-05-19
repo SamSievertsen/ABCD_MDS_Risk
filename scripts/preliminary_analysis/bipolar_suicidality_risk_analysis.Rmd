@@ -37,7 +37,7 @@ library(emmeans)
 options(scipen = 999, digits = 8)
 
 # Read in clustered risk variable + outcome data for analysis
-bipolar_suicidality_risk_data <- read.csv("../../data/data_processed/bipolar_suicidality_risk_analysis_data.csv")
+bipolar_suicidality_risk_data <- read.csv("../../data/preliminary_analysis/data_processed/bipolar_suicidality_risk_analysis_data.csv")
 
 ```
 

@@ -26,19 +26,19 @@ library(ggplot2)
 options(scipen = 999, digits = 8)
 
 # Read in clustered risk variable data
-clustered_risk_variable_data <- read.csv("../../data/data_processed/clustered_risk_variable_data.csv") %>%
+clustered_risk_variable_data <- read.csv("../../data/preliminary_analysis/data_processed/clustered_risk_variable_data.csv") %>%
   dplyr::select(-ends_with("_scaled"), -eventname) %>%
   rename_with(~ sub("^cbcl_", "baseline_cbcl_", .), starts_with("cbcl_"))
 
 # Read in outcome variable data
 # Parent report ksads-comp data
-parent_ksads_data <- read.csv("../../data/data_raw/mh_p_ksads_ss.csv")
+parent_ksads_data <- read.csv("../../data/preliminary_analysis/data_raw/mh_p_ksads_ss.csv")
 
 # Youth report ksads-comp data
-youth_ksads_data <- read.csv("../../data/data_raw/mh_y_ksads_ss.csv")
+youth_ksads_data <- read.csv("../../data/preliminary_analysis/data_raw/mh_y_ksads_ss.csv")
 
 # cbcl data
-cbcl_data <- read.csv("../../data/data_raw/mh_p_cbcl.csv")
+cbcl_data <- read.csv("../../data/preliminary_analysis/data_raw/mh_p_cbcl.csv")
 
 ```
 
@@ -673,7 +673,7 @@ Also TBD pending conversations surrounding feasability with Beka.
 ```{r output, warning = FALSE}
 
 # Write the merged clustered + outcome data as a csv
-write.csv(bipolar_suicidality_risk_analysis_data, "../../data/data_processed/bipolar_suicidality_risk_analysis_data.csv", row.names = FALSE)
+write.csv(bipolar_suicidality_risk_analysis_data, "../../data/preliminary_analysis/data_processed/bipolar_suicidality_risk_analysis_data.csv", row.names = FALSE)
 
 ```
 

@@ -41,19 +41,19 @@ library(plotly)
 options(scipen = 999, digits = 8)
 
 # Read in risk variable data
-risk_variable_data <- read.csv("../../data/data_processed/risk_variable_data.csv")
+risk_variable_data <- read.csv("../../data/preliminary_analysis/data_processed/risk_variable_data.csv")
 
 # Read in clustering results
-kproto_results <- readRDS(file = "../../results/main_analysis/kproto_clustering_results.rds")
+kproto_results <- readRDS(file = "../../results/preliminary_analysis/kproto_clustering_results.rds")
 
 # Read in individual silhouette scores
-silhouette_data <- read.csv("../../results/main_analysis/kproto_individual_silhouette_scores.csv")
+silhouette_data <- read.csv("../../results/preliminary_analysis/kproto_individual_silhouette_scores.csv")
 
 # Read in k grouped silhouette means
-silhouette_scores <- read.csv("../../results/main_analysis/kproto_silhouette_means.csv")
+silhouette_scores <- read.csv("../../results/preliminary_analysis/kproto_silhouette_means.csv")
 
 # Read in elbow plot data
-elbow_plot_data <- read.csv("../../results/main_analysis/kproto_elbow_plot_data.csv")
+elbow_plot_data <- read.csv("../../results/preliminary_analysis/kproto_elbow_plot_data.csv")
 
 ```
 
@@ -195,7 +195,7 @@ subject_cluster_values <- subject_cluster_values %>%
 clustered_risk_variable_data <- left_join(risk_variable_data, subject_cluster_values)
 
 #3. Output the merged risk variable + cluster data
-write.csv(clustered_risk_variable_data, "../../data/data_processed/clustered_risk_variable_data.csv", row.names = FALSE)
+write.csv(clustered_risk_variable_data, "../../preliminary_analysis/data/data_processed/clustered_risk_variable_data.csv", row.names = FALSE)
 
 ```
 
@@ -249,6 +249,29 @@ binary_plot <- binary_plot_data %>%
 
 #1.4 Print the binary values plot
 print(binary_plot)
+
+#2. Create a summary statistics table for the categorical variables
+#2.1 Wrangle data for summary statistics
+binary_summary_data <- binary_plot_data %>%
+  filter(value == 1) %>%
+  dplyr::select(cluster, variable, count, total, percent) %>%
+  rename(n_endorsed = count, 
+         n_total = total, 
+         percent_endorsed = percent) %>%
+  mutate(percent_endorsed = round(percent_endorsed, 1),
+         display = paste0(n_endorsed, " (", percent_endorsed, "%)"))
+
+#2.2 Create the summary statistics table
+binary_summary_data %>%
+  dplyr::select(cluster, variable, n_endorsed, n_total, percent_endorsed, display) %>%
+  pivot_wider(
+    id_cols = variable,
+    names_from = cluster,
+    values_from = display,
+    names_prefix = "Cluster "
+  ) %>%
+  kbl(caption = "Percentage of Subjects with Endorsed Binary Risk Variables by Cluster") %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover", "condensed"))
 
 ```
 
@@ -340,7 +363,6 @@ continuous_summary_data %>%
   kbl(col.names = c("Cluster", "Variable", "Mean", "SD", "Median", "Range"),
       caption = "Summary Statistics for Continuous Risk Variables by Cluster") %>%
   kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover", "condensed"))
-
 
 ```
 

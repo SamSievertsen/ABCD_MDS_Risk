@@ -1,0 +1,181 @@
+---
+title: "Mood Disorder & Suicidality Outcome Variable EDA"
+author: "Sam A. Sievertsen"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    self_contained: true
+---
+
+```{r global, include = FALSE}
+
+# Set global env variables
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, comment = "")
+
+```
+
+# Exploratory Data Analysis (EDA) of variables to be used as outcome metrics related to mood disorders and suicidality in the ABCD dataset
+
+The most up to date list of variables to used as outcomes in the current study, including their role, domain, details of each variable as it relates to the ABCD dataset, etc., can be [found here](https://ohsuitg-my.sharepoint.com/:x:/r/personal/sievertsen_ohsu_edu/Documents/Huber_Lab/FYP/Project_Planning/ABCD_Mood_Disorder_Risk_Model_Variables_010624_SS.xlsx?d=w286583f8914b4ab5a402e36ce8c36291&csf=1&web=1&e=ieCAKt&nav=MTVfezIxMDEwOEMxLTFFMjktNERDMi1CQTE4LTM0QTE2NzA0MEQ2RX0). 
+
+The following report contains information regarding the: 
+
+  1. Integrity of the data
+  
+  2. Assessment of outliers in the data
+  
+  3. Skewness + appropriateness of the mean as the measure of central tendency for continuous variables
+  
+  4. Shape of each variables' distribution
+
+```{r environment, echo = FALSE, include = FALSE, warning = FALSE}
+
+# Load necessary packages + environmental variables
+library(knitr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(moments)
+options(scipen = 999, digits = 8)
+
+# Read in raw data generated in DEAP
+raw_data <- read.csv("../../data/data_raw/dataset.csv")
+
+```
+
+## Data Wrangling 
+
+This section prepares the data for EDA of outcomes 
+
+```{r data wrangling, echo = FALSE, include = FALSE, warning = FALSE}
+
+## Data Wrangling ##
+
+#1. Clean the outcome data 
+#1.1 Retain only columns of interest
+raw_data_trimmed <- raw_data %>% 
+  dplyr::select(c(participant_id, session_id, mh_p_cbcl__dsm__anx_tscore, mh_p_cbcl__dsm__dep_tscore, mh_p_cbcl__synd__aggr_tscore, mh_p_cbcl__synd__attn_tscore, mh_p_ksads__suic__pass__past_dx, mh_p_ksads__suic__actv__past_dx, mh_p_ksads__suic__actv__mthd__past_dx, mh_p_ksads__suic__actv__int__past_dx, mh_p_ksads__suic__actv__plan__past_dx, mh_p_ksads__suic__pass__pres_dx, mh_p_ksads__suic__actv__pres_dx, mh_p_ksads__suic__actv__mthd__pres_dx, mh_p_ksads__suic__actv__int__pres_dx, mh_p_ksads__suic__actv__plan__pres_dx, mh_y_ksads__suic__pass__past_dx, mh_y_ksads__suic__actv__past_dx, mh_y_ksads__suic__actv__mthd__past_dx, mh_y_ksads__suic__actv__int__past_dx, mh_y_ksads__suic__actv__plan__past_dx, mh_y_ksads__suic__pass__pres_dx, mh_y_ksads__suic__actv__pres_dx, mh_y_ksads__suic__actv__mthd__pres_dx, mh_y_ksads__suic__actv__int__pres_dx, mh_y_ksads__suic__actv__plan__pres_dx, mh_p_ksads__suic__atmpt__intr__past_dx, mh_p_ksads__suic__atmpt__abrt__past_dx, mh_p_ksads__suic__atmpt__past_dx, mh_p_ksads__suic__atmpt__intr__pres_dx, mh_p_ksads__suic__atmpt__abrt__pres_dx, mh_p_ksads__suic__atmpt__pres_dx, mh_y_ksads__suic__atmpt__intr__past_dx, mh_y_ksads__suic__atmpt__abrt__past_dx, mh_y_ksads__suic__atmpt__past_dx, mh_y_ksads__suic__atmpt__intr__pres_dx, mh_y_ksads__suic__atmpt__abrt__pres_dx, mh_y_ksads__suic__atmpt__pres_dx, mh_p_ksads__suic__slfinj__nosi__pres_dx, mh_p_ksads__suic__slfinj__nosi__past_dx, mh_y_ksads__suic__slfinj__nosi__pres_dx, mh_y_ksads__suic__slfinj__nosi__past_dx, mh_p_ksads__bpd__bpd1__curdep__partrem_dx, mh_p_ksads__bpd__bpd1__rcnt__manicmix__pres_dx, mh_p_ksads__bpd__bpd1__curmanic__pres_dx, mh_p_ksads__bpd__bpd1__curdep__pres_dx, mh_y_ksads__bpd__bpd1__curmanic__pres_dx, mh_y_ksads__bpd__bpd1__curdep__pres_dx, mh_y_ksads__bpd__bpd1__rcnt__manic__pres_dx, mh_p_ksads__bpd__bpd1__curhypo__pres_dx, mh_p_ksads__bpd__bpd1__rcnt__dep__pres_dx, mh_p_ksads__bpd__bpd1__rcnt__manic__pres_dx, mh_y_ksads__bpd__bpd1__rcnt__dep__pres_dx, mh_y_ksads__bpd__bpd1__curhypo__pres_dx, mh_y_ksads__bpd__bpd1__rcnt__manicmix__pres_dx, mh_y_ksads__bpd__bpd1__curdep__partrem_dx, mh_p_ksads__bpd__bpd2__curhypo__pres_dx, mh_p_ksads__bpd__bpd2__rcnt__hypo__pres_dx, mh_p_ksads__bpd__bpd2__curdep__pres_dx, mh_p_ksads__bpd__bpd2__curdep__partrem_dx, mh_y_ksads__bpd__bpd2__curdep__pres_dx, mh_y_ksads__bpd__bpd2__curdep__partrem_dx, mh_y_ksads__bpd__bpd2__rcnt__hypo__pres_dx, mh_y_ksads__bpd__bpd2__curhypo__pres_dx, mh_p_ksads__bpd__bpd2__rcnt__hypomix__pres_dx, mh_y_ksads__bpd__bpd2__rcnt__hypomix__pres_dx, mh_p_ksads__bpd__bpd2__oth__mindur_dx, mh_p_ksads__bpd__oth__mindur_dx, mh_y_ksads__bpd__bpd2__oth__mindur_dx, mh_y_ksads__bpd__oth__mindur_dx, mh_p_ksads__bpd__unspec__pres_dx, mh_p_ksads__bpd__unspec__past_dx, mh_y_ksads__bpd__unspec__pres_dx, mh_y_ksads__bpd__unspec__past_dx))
+
+#1.2 Turn all instances of empty, missing, 555, and 999 to NA; and 888 to 0 in KSADS columns
+raw_data_trimmed <- raw_data_trimmed %>%
+  mutate(across(starts_with("mh_"), ~ na_if(replace(., . %in% c(555, 999, ""), NA), 888) %>% replace_na(0)))
+
+#2. Preliminarily create relevant outcome variables of interest
+#2.1 Disorder Variables 
+#2.11 Lifetime Bipolar I Disorder
+# Create the bipolar_I_dx variable
+outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>%
+  mutate(
+    bipolar_I_dx = case_when(
+      rowSums(select(., c(
+        "ksads2_2_937_p", "ksads2_2_800_p", "ksads2_2_798_p", 
+        "ksads2_2_799_p", "ksads2_2_798_t", "ksads2_2_799_t", 
+        "ksads2_2_800_t", "ksads2_2_937_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1, # Any variable == 1
+      rowSums(!is.na(select(., c(
+        "ksads2_2_937_p", "ksads2_2_800_p", "ksads2_2_798_p", 
+        "ksads2_2_799_p", "ksads2_2_798_t", "ksads2_2_799_t", 
+        "ksads2_2_800_t", "ksads2_2_937_t"
+      )))) == 0 ~ NA_real_, # All variables are NA
+      TRUE ~ 0               # All variables == 0
+    )
+  )
+
+#2.12 Lifetime Bipolar II Disorder
+outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>%
+  mutate(
+    bipolar_II_dx = case_when(
+      rowSums(select(., c(
+        "ksads2_2_801_p", "ksads2_2_802_p", "ksads2_2_931_p",
+        "ksads2_2_936_p", "ksads2_2_931_t", "ksads2_2_936_t",
+        "ksads2_2_802_t", "ksads2_2_801_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1, # Any variable == 1
+      rowSums(!is.na(select(., c(
+        "ksads2_2_801_p", "ksads2_2_802_p", "ksads2_2_931_p",
+        "ksads2_2_936_p", "ksads2_2_931_t", "ksads2_2_936_t",
+        "ksads2_2_802_t", "ksads2_2_801_t"
+      )))) == 0 ~ NA_real_, # All variables are NA
+      TRUE ~ 0               # All variables == 0
+    )
+  )
+
+#2.13 Lifetime Any Bipolar Disorder
+outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>%
+  mutate(
+    any_bipolar_dx = case_when(
+      rowSums(select(., c(
+        "bipolar_I_dx", "bipolar_II_dx", "ksads2_2_803_p",
+        "ksads2_2_933_p", "ksads2_2_803_t", "ksads2_2_933_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1, # Any variable == 1
+      rowSums(!is.na(select(., c(
+        "bipolar_I_dx", "bipolar_II_dx", "ksads2_2_803_p",
+        "ksads2_2_933_p", "ksads2_2_803_t", "ksads2_2_933_t"
+      )))) == 0 ~ NA_real_, # All variables are NA
+      TRUE ~ 0               # All variables == 0
+    )
+  )
+
+#2.2 Suicide & self-harm related variables
+#2.21 Lifetime Suicidal Thinking
+outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>%
+  mutate(
+    suicidal_ideation = case_when(
+      rowSums(select(., c(
+        "ksads2_23_917_p", "ksads2_23_918_p", "ksads2_23_919_p", 
+        "ksads2_23_920_p", "ksads2_23_921_p", "ksads2_23_906_p", 
+        "ksads2_23_907_p", "ksads2_23_908_p", "ksads2_23_909_p", 
+        "ksads2_23_910_p", "ksads2_23_917_t", "ksads2_23_918_t", 
+        "ksads2_23_919_t", "ksads2_23_920_t", "ksads2_23_921_t", 
+        "ksads2_23_906_t", "ksads2_23_907_t", "ksads2_23_908_t", 
+        "ksads2_23_909_t", "ksads2_23_910_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1, # Any variable == 1
+      rowSums(!is.na(select(., c(
+        "ksads2_23_917_p", "ksads2_23_918_p", "ksads2_23_919_p", 
+        "ksads2_23_920_p", "ksads2_23_921_p", "ksads2_23_906_p", 
+        "ksads2_23_907_p", "ksads2_23_908_p", "ksads2_23_909_p", 
+        "ksads2_23_910_p", "ksads2_23_917_t", "ksads2_23_918_t", 
+        "ksads2_23_919_t", "ksads2_23_920_t", "ksads2_23_921_t", 
+        "ksads2_23_906_t", "ksads2_23_907_t", "ksads2_23_908_t", 
+        "ksads2_23_909_t", "ksads2_23_910_t"
+      )))) == 0 ~ NA_real_, # All variables are NA
+      TRUE ~ 0               # All variables == 0
+    )
+  )
+
+#2.22 Lifetime Suicide Attempt (i.e., Suicidal Behavior)
+outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>%
+  mutate(
+    suicide_attempt = case_when(
+      rowSums(select(., c(
+        "ksads2_23_923_p", "ksads2_23_924_p", "ksads2_23_925_p", 
+        "ksads2_23_912_p", "ksads2_23_913_p", "ksads2_23_914_p", 
+        "ksads2_23_923_t", "ksads2_23_924_t", "ksads2_23_925_t", 
+        "ksads2_23_912_t", "ksads2_23_913_t", "ksads2_23_914_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1, # Any variable == 1
+      rowSums(!is.na(select(., c(
+        "ksads2_23_923_p", "ksads2_23_924_p", "ksads2_23_925_p", 
+        "ksads2_23_912_p", "ksads2_23_913_p", "ksads2_23_914_p", 
+        "ksads2_23_923_t", "ksads2_23_924_t", "ksads2_23_925_t", 
+        "ksads2_23_912_t", "ksads2_23_913_t", "ksads2_23_914_t"
+      )))) == 0 ~ NA_real_, # All variables are NA
+      TRUE ~ 0               # All variables == 0
+    )
+  )
+
+#2.23 Lifetime Non-Suicidal Self Injury
+outcome_data_merged_trimmed <- outcome_data_merged_trimmed %>%
+  mutate(
+    nssi = case_when(
+      rowSums(select(., c(
+        "ksads2_23_905_p", "ksads2_23_916_p", "ksads2_23_905_t",
+        "ksads2_23_916_t"
+      )) == 1, na.rm = TRUE) > 0 ~ 1, # Any variable == 1
+      rowSums(!is.na(select(., c(
+        "ksads2_23_905_p", "ksads2_23_916_p", "ksads2_23_905_t",
+        "ksads2_23_916_t"
+      )))) == 0 ~ NA_real_, # All variables are NA
+      TRUE ~ 0               # All variables == 0
+    )
+  )
+
+```

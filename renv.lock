@@ -164,6 +164,17 @@
       ],
       "Hash": "7a29697b75e027767a53fde6c903eca7"
     },
+    "GPArotation": {
+      "Package": "GPArotation",
+      "Version": "2024.3-1",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R",
+        "stats"
+      ],
+      "Hash": "b8b658ec0d7a6a55d9d01e00e3cafd20"
+    },
     "GPfit": {
       "Package": "GPfit",
       "Version": "1.0-8",
@@ -2131,6 +2142,16 @@
       ],
       "Hash": "785ef8e22389d4a7634c6c944f2dc07d"
     },
+    "mnormt": {
+      "Package": "mnormt",
+      "Version": "2.1.1",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R"
+      ],
+      "Hash": "c83992ef63553d1e4b97162a4a753470"
+    },
     "modelbased": {
       "Package": "modelbased",
       "Version": "0.8.9",
@@ -2644,6 +2665,24 @@
         "utils"
       ],
       "Hash": "e0ef355c12942cf7a6b91a6cfaea8b3e"
+    },
+    "psych": {
+      "Package": "psych",
+      "Version": "2.5.3",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "GPArotation",
+        "grDevices",
+        "graphics",
+        "lattice",
+        "methods",
+        "mnormt",
+        "nlme",
+        "parallel",
+        "stats"
+      ],
+      "Hash": "9af228e78c8f79d2ddf52203792ad85b"
     },
     "purrr": {
       "Package": "purrr",
