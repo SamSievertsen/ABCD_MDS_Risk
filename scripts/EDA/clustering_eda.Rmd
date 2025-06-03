@@ -1,0 +1,581 @@
+---
+title: "Mood Disorder & Suicidality Clustering EDA"
+author: "Sam A. Sievertsen"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    self_contained: true
+---
+
+```{r global, include = FALSE}
+
+# Set global env variables
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, comment = "")
+
+```
+
+```{r environment, echo = FALSE, include = FALSE, warning = FALSE}
+
+# Load necessary packages + environmental variables
+library(knitr)
+library(kableExtra)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(GGally)
+library(plotly)
+library(effsize)
+library(mclust)
+library(skimr)
+options(scipen = 999, digits = 8)
+
+# Read in risk variable data
+risk_variable_data <- read.csv("../../data/data_processed/risk_variable_data.csv")
+
+# Read in outcome variable data
+outcome_variable_data <- read.csv("../../data/data_processed/outcome_variable_data.csv")
+
+```
+
+## Data Wrangling for Risk Clustering & Outcome Variables
+
+```{r data wrangling, warning = FALSE}
+
+## Data Wrangling ## 
+
+#1. Create a version of the data containing baseline risk variables and longitudinal outcome variables for clustering EDA
+clustering_eda_data <- full_join(risk_variable_data, outcome_variable_data) %>% 
+  dplyr::select(-site, -age, -race_ethnicity, -sex, -family_id)
+
+#2. Display distribution of data
+clustering_eda_data %>% 
+  skimr::skim()
+
+```
+
+## Euclidean Separability of Risk Variables - is Clustering Appropriate?
+
+Before employing clustering methods to identify meaningful latent groupings related to bipolar disorder and suicidality outcomes, it is critical to visually assess whether baseline risk variables demonstrate meaningful Euclidean separability. In other words, we must verify whether the baseline risk variables, both continuous (e.g., CBCL DSM-5 depression scores) and binary (e.g., family history of depression), form distinct, visually identifiable groups when plotted in pairs and colored according to longitudinal outcomes across assessment timepoints (baseline through 6-year follow-up).
+
+This initial visual evaluation is foundational, as it determines whether clustering methods, which rely heavily on Euclidean or similar distance measures, are suitable for capturing latent risk groups that meaningfully predict clinical outcomes.
+
+We will thus generate bi-plots of the 5 baseline risk variables most associated (assessed via point-biserial correlation) with each color-coded outcome variable (i.e., binary diagnostic outcomes and continuous CBCL scores) at every assessment timepoint for which they are available: 
+
+```{r most correlated risk biplots by wave, echo = FALSE, warning = FALSE}
+
+#1. Rename and define all baseline risk columns to friendly names
+#1.1 Rename baseline risk variables
+clustering_eda_data <- clustering_eda_data %>%
+  rename(
+    `CBCL Depression T` = mh_p_cbcl__dsm__dep_tscore,
+    `CBCL Anxiety T` = mh_p_cbcl__dsm__anx_tscore,
+    `CBCL Attention T` = mh_p_cbcl__synd__attn_tscore,
+    `CBCL Aggression T` = mh_p_cbcl__synd__aggr_tscore,
+    `GBI Mania Score` = mh_p_gbi_sum,
+    `UPPS Neg Urgency` = mh_y_upps__nurg_sum,
+    `UPPS Pos Urgency` = mh_y_upps__purg_sum,
+    `Child Opportunity Z` = le_l_coi__addr1__coi__total__national_zscore,
+    `Neighborhood Safety` = fc_p_nsc__ns_mean,
+    `Sleep Disturbance` = sds_total,
+    `Fam Hx Dep` = family_history_depression,
+    `Fam Hx Mania` = family_history_mania,
+    Bullying = bullying,
+    `NIHTB Working Mem` = nc_y_nihtb__lswmt__uncor_score,
+    `NIHTB Flanker` = nc_y_nihtb__flnkr__uncor_score,
+    `NIHTB Proc Speed` = nc_y_nihtb__pttcp__uncor_score,
+    `ACE Index` = ACE_index_sum_score
+  )
+
+#1.2 Define baseline risk variables using the friendly names
+risk_vars <- c(
+  "CBCL Depression T", "CBCL Anxiety T",
+  "CBCL Attention T", "CBCL Aggression T",
+  "GBI Mania Score", "UPPS Neg Urgency", "UPPS Pos Urgency",
+  "Child Opportunity Z", "Neighborhood Safety", "Sleep Disturbance",
+  "Fam Hx Dep", "Fam Hx Mania", "Bullying",
+  "NIHTB Working Mem", "NIHTB Flanker", "NIHTB Proc Speed",
+  "ACE Index"
+)
+
+#2. Pull baseline risk data
+base_df <- clustering_eda_data %>%
+  filter(session_id == "ses-00A") %>%
+  dplyr::select(participant_id, all_of(risk_vars))
+
+#3. Identify follow-up waves
+waves <- setdiff(unique(clustering_eda_data$session_id), "ses-00A")
+
+#4. Create a vector of binary outcomes
+binary_outcomes <- c("bipolar_I", "bipolar_II", "si_passive", "si_active", "sa", "nssi")
+
+#5. Loop over each timepoint & outcome to bi-plot risk variables by outcome of interest
+#5.1 Define a custom jittered points function
+jitter_points <- function(data, mapping, ...) {
+  ggplot(data = data, mapping = mapping) +
+    geom_jitter(width = 0.2, height = 0.2, size = 0.75, alpha = 0.6, ...)
+}
+
+#5.2 Plot each timepoint & outcome
+for (w in waves) {
+  
+  #5.2.1 Prepare wave-specific binary data
+  wave_df <- clustering_eda_data %>%
+    filter(session_id == w) %>%
+    dplyr::select(participant_id, all_of(binary_outcomes)) %>%
+    drop_na()
+  if (nrow(wave_df) == 0) next
+  
+  for (outcome in binary_outcomes) {
+    
+    #5.2.2Factorize and drop NA for this outcome
+    odf <- wave_df %>%
+      filter(!is.na(.data[[outcome]])) %>%
+      mutate(
+        !!outcome := factor(
+          .data[[outcome]],
+          levels = c(0, 1),
+          labels = c("No", "Yes")))
+    if (nrow(odf) == 0) next
+    
+    #5.2.3 Merge with baseline risk
+    merged <- inner_join(base_df, odf, by = "participant_id")
+    if (nrow(merged) == 0) next
+    
+    #5.2.4 Compute point-biserial correlations and pick top 5
+    cors <- sapply(risk_vars, function(v) {
+      cor(merged[[v]], as.numeric(merged[[outcome]]),
+          use = "pairwise.complete.obs")
+    })
+    
+      #5.2.4.1 Store the 5 most correlated features
+      top5 <- names(sort(abs(cors), decreasing = TRUE))[1:5]
+    
+    #5.2.5 Plot pairwise scatterplot matrix for top 5
+    p <- ggpairs(
+      merged,
+      columns = top5,
+      mapping = aes_string(color = outcome),
+      upper = "blank",
+      lower = list(continuous = jitter_points),
+      diag = list(continuous = wrap("densityDiag", alpha = 0.5)),
+      legend = c(2,1)) +
+      labs(
+        title = paste0("Top 5 Risks × ", outcome, " at ", w),
+        color = paste(outcome, "@", w)) +
+      theme_minimal(base_size = 8) +
+      theme(
+        strip.text = element_text(size = 6),
+        axis.text = element_text(size = 5),
+        legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5, face = "bold"))
+    
+    #5.2.6 Print the bi-plot
+    print(p)
+  }
+}
+
+#6. Loop over each CBCL quintile outcome × assessment timepoint and bi-plot the risk factors by CBCL outcome
+#6.1 Create a vector of CBCL outcomes
+cbcl_vars <- c(
+  "CBCL Depression T", "CBCL Anxiety T",
+  "CBCL Attention T", "CBCL Aggression T"
+)
+
+#6.2 Exclude CBCL from risk list for correlation
+risk_vars_no_cbcl <- setdiff(risk_vars, cbcl_vars)
+
+#6.3 Plot each baseline risk variable by CBCL outcome at each assessment timepoint
+for (w in waves) {
+  for (cbcl in cbcl_vars) {
+    
+    #6.3.1 Pull wave-specific CBCL, compute quintiles
+    qdf <- clustering_eda_data %>%
+      filter(session_id == w) %>%
+      dplyr::select(participant_id, all_of(cbcl)) %>%
+      drop_na() %>%
+      mutate(
+        quintile = ntile(.data[[cbcl]], 5),
+        quintile = factor(quintile, labels = paste0("Q", 1:5))
+      )
+    if (nrow(qdf) == 0) next
+    
+    #6.3.2 Merge with baseline risk
+    merged <- inner_join(base_df, qdf, by = "participant_id")
+    if (nrow(merged) == 0) next
+    
+    #6.3.3 Compute correlation with numeric quintile
+    cors <- sapply(risk_vars_no_cbcl, function(v) {
+      x <- as.numeric(merged[[v]])
+      y <- as.numeric(merged$quintile)
+      if (length(unique(y)) < 2) return(NA_real_)
+      cor(x, y, use = "pairwise.complete.obs")
+    })
+      
+      #6.3.3.1 Store the 5 most correlated features
+      top5 <- names(sort(abs(cors), decreasing = TRUE))[1:5]
+    
+    #6.3.4 Plot top 5 vs. CBCL quintile
+    p <- ggpairs(
+      merged,
+      columns = top5,
+      mapping = aes(color = quintile),
+      upper = "blank",
+      lower = list(continuous = jitter_points),
+      diag = list(continuous = wrap("densityDiag", alpha = 0.5)),
+      legend = c(2,1)) +
+      labs(
+        title = paste0("Top 5 Risks × ", cbcl, " Quintile @ ", w),
+        color = paste(cbcl, "Quintile @", w)) +
+      theme_minimal(base_size = 8) +
+      theme(
+        strip.text = element_text(size = 6),
+        axis.text = element_text(size = 5),
+        legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5, face = "bold"))
+    
+    #6.3.5 Print the bi-plot
+    print(p)
+  }
+}
+
+```
+
+## Follow-Up Tests to Further Assess Optimization Feature Separability Before Landing on Clustering
+
+Before committing to any clustering solution, we want to further assess (beyond biplots) whether our 16 baseline risk variables can meaningfully distinguish outcome groups in Euclidean space. Two questions from Matt Sullivan addressed herein guide this process:
+
+  1. Univariate separability: Does a single feature (e.g., Sleep Disturbance) alone already classify “No” vs “Yes” for diagnoses of interest?
+
+  2. Feature ranking: Which variables show the strongest separation and warrant emphasis?
+
+### 1. Sleep Disturbance Univariate Separability Test
+
+**Goal**
+
+Demonstrate on a concrete example (i.e., baseline Sleep Disturbance vs. bipolar_I at the 6-year follow-up) that a single feature can or cannot already separate outcome groups. If it does:
+
+  - Formal test confirms group means differ
+
+  - Two modes become the natural 1-D cluster centroids
+
+**Why bipolar_I @ 6Y?**
+I picked this wave and outcome because bipolar_I at year 6 is our longest-term key clinical endpoint with good sample size and data quality. "Success" here means Sleep Disturbance has predictive value for future mania onset (exactly the kind of univariate signal clustering would leverage)
+
+**Steps & Rationale**
+
+  1. Normality check → test choice
+  
+    - Shapiro–Wilk in each group → if both p > .05 use Welch t-test; else Mann–Whitney U
+    
+    - Cohen’s d quantifies effect size (how far apart the “No” vs “Yes” means really are)
+
+  2. One normal vs two normals?
+  
+    - Fit Gaussian mixture models (GMMs) with 1, 2, 3 components on the pooled Sleep Disturbance scores
+    
+    - ΔBIC + likelihood-ratio test tells us if two modes are statistically justified
+    
+    - The two-component GMM’s means are exactly where a 1-D k-means (k = 2) algorithm would place its centroids
+
+  3. Connection to clustering
+  
+    - In 1-D, k-means/GMM centroids land at the two modes; the decision boundary is the midpoint
+    
+    - Thus, if Sleep Disturbance alone separates “No” vs “Yes,” it already behaves as a near-perfect univariate classifier
+
+*To note, the same workflow (Shapiro → test → Cohen’s d → GMM → 1-D centroids) can be applied to any other risk feature and any other follow-up outcome/timepoint*
+    
+```{r question 1, echo= FALSE, warning = FALSE}
+
+## Sleep Disturbance Univariate Separability ## 
+
+#1. Specify outcome and wave to examine
+#1.1 Choose the binary outcome for separability test
+outcome_var <- "bipolar_I"
+#1.2 Choose the follow-up wave of interest
+wave_id <- "ses-06A"
+
+#2. Assemble Sleep Disturbance + outcome data
+#2.1 Pull baseline Sleep Disturbance and participant ID
+sleep_dat <- clustering_eda_data %>%
+  filter(session_id == "ses-00A") %>%
+  transmute(
+    participant_id,
+    SleepDist = `Sleep Disturbance`) %>%
+  
+  #2.2 Join to follow-up bipolar_I status at selected wave
+  inner_join(
+    clustering_eda_data %>%
+      filter(session_id == wave_id) %>%
+      dplyr::select(participant_id, !!outcome_var),
+    by = "participant_id") %>%
+  
+  #2.3 Drop any rows with missing values
+  drop_na() %>%
+  
+  #2.4 Create a factor grouping for the outcome
+  mutate(
+    Group = factor(
+      .data[[outcome_var]],
+      levels = c(0,1),
+      labels = c("No","Yes"))
+  )
+
+#3. Check normality in each outcome group (Shapiro max n=5000)
+#3.1 Extract raw vectors
+no_vec  <- sleep_dat$SleepDist[sleep_dat$Group=="No"]
+yes_vec <- sleep_dat$SleepDist[sleep_dat$Group=="Yes"]
+
+#3.2 Subsample down to 5000 if needed (Shapiro limit), otherwise use all
+no_test  <- if (length(no_vec)  > 5000) sample(no_vec, 5000)  else no_vec
+yes_test <- if (length(yes_vec) > 5000) sample(yes_vec, 5000) else yes_vec
+
+#3.3 If too few (<3) to test, assume non-normal; otherwise run Shapiro
+sh_no  <- if (length(no_test)  >= 3) shapiro.test(no_test)  else list(p.value = 0)
+sh_yes <- if (length(yes_test) >= 3) shapiro.test(yes_test) else list(p.value = 0)
+
+#3.4 Determine if both groups pass normality (p>0.05)
+normal_ok <- (sh_no$p.value > 0.05) & (sh_yes$p.value > 0.05)
+
+#4. Run two‐group test and compute Cohen’s d
+#4.1 Choose Welch t‐test if normal, otherwise Mann–Whitney U
+if (normal_ok) {
+  test_out <- t.test(SleepDist ~ Group, data = sleep_dat, var.equal = FALSE)
+  test_label <- "Welch t-test"
+} else {
+  test_out <- wilcox.test(SleepDist ~ Group, data = sleep_dat)
+  test_label <- "Mann-Whitney U"
+}
+
+#4.2 Absolute Cohen’s d for effect size
+d_val <- abs(effsize::cohen.d(SleepDist ~ Group, data = sleep_dat)$estimate)
+
+#5. Fit Gaussian mixture models (GMMs) with 1–3 components
+#5.1 One component (null model)
+cat("Fit GMM with 1 component (null model)\n")
+g1 <- densityMclust(sleep_dat$SleepDist, G = 1)
+
+#5.2 Two components (alternative)
+cat("Fit GMM with 2 components (alternative model)\n")
+g2 <- densityMclust(sleep_dat$SleepDist, G = 2)
+
+#5.3 Three components (for BIC comparison)
+cat("Fit GMM with 3 components (for BIC comparison)\n")
+g3 <- densityMclust(sleep_dat$SleepDist, G = 3)
+
+#6. Compare model fits to test for two modes
+#6.1 Extract the chosen‐model BIC (the max over all covariance structures)
+bic1 <- max(g1$BIC)
+bic2 <- max(g2$BIC)
+bic_diff <- bic2 - bic1
+
+#6.2 Likelihood‐ratio statistic (2× Δlog‐lik)
+llr_stat <- 2 * (g2$loglik - g1$loglik)
+
+#6.3 p‐value for LRT (df = Δparameters)
+df_diff <- g2$df - g1$df
+p_llr <- pchisq(llr_stat, df = df_diff, lower.tail = FALSE)
+
+#7. Summarize and render results
+#7.1 Build a tibble of test stats and interpretations
+results_tbl <- tibble(
+  Test = c(test_label, "Cohen's d", "ΔBIC (2−1)", "LRT p-value"),
+  Value = c(
+          round(as.numeric(test_out$statistic), 3),
+          round(d_val, 2),
+          round(bic_diff, 1),
+          signif(p_llr, 3)),
+  Interpretation = c(
+                   ifelse(test_out$p.value < .001, "p<.001: groups differ", "ns"),
+                   ifelse(d_val >= .8, "large effect", "mod/small"),
+                   ifelse(bic_diff > 10, "strong support 2 modes", "weak support"),
+                   ifelse(p_llr < .05, "prefer 2-component", "no evidence"))
+)
+
+#7.2 Print nicely
+kable(results_tbl, col.names = c("", "Value", "Comment")) %>%
+  kable_styling(bootstrap_options = c("striped","hover","condensed"))
+
+#8. Visualize histogram, densities, and GMM centroids
+#8.1 Create a grid of x values across the observed range
+x_seq <- seq(
+  min(sleep_dat$SleepDist),
+  max(sleep_dat$SleepDist),
+  length = 300
+)
+
+#8.2 Compute densities under 1- and 2-component GMMs
+dens1 <- predict(g1, x_seq, what = "dens")  # one-component density
+dens2 <- predict(g2, x_seq, what = "dens")  # two-component density
+
+#8.3 Put into a data frame for plotting
+dens_df <- tibble(
+  x      = x_seq,
+  single = dens1,
+  two    = dens2
+)
+
+#8.4 Plot
+ggplot(sleep_dat, aes(x = SleepDist, fill = Group)) +
+  
+  #8.4.1 Plot histogram
+  geom_histogram(aes(y = ..density..),
+                 bins     = 30,
+                 position = "identity",
+                 alpha    = .4,
+                 color    = "black") +
+  
+  #8.4.2 Plot density lines
+  geom_line(data = dens_df,
+            aes(x = x, y = single),
+            color = "darkgray",
+            size        = .8,
+            inherit.aes = FALSE) +
+  geom_line(data = dens_df,
+            aes(x = x, y = two),
+            color = "firebrick",
+            size = .8,
+            inherit.aes = FALSE) +
+  
+  #8.4.3 Plot v lines
+  geom_vline(xintercept = g2$parameters$mean,
+             linetype = "dashed",
+             color = "firebrick",
+             inherit.aes = FALSE) +
+  
+  #8.4.4 Theme and text descriptors
+  scale_fill_manual(values = c("steelblue","firebrick")) +
+  labs(
+    title = paste0("Sleep Disturbance at baseline (for subs w complete bipolar data @ 6-year; n = ", nrow(sleep_dat), ")"),
+    subtitle = paste0(
+      outcome_var, " @ ", wave_id,
+      " → ", test_label,
+      " p = ", signif(test_out$p.value, 3),
+      " |d| = ", round(d_val, 2)
+    ),
+    x = "Sleep Disturbance score",
+    y = "Density",
+    fill = outcome_var
+  ) +
+  theme_minimal(base_size = 9) +
+  theme(legend.position = "bottom")
+
+```
+
+Plot breakdown: Youth who develop BD-I by 6-year follow-up (“Yes,” red) show a modest rightward shift in Sleep Disturbance at baseline relative to those who do not (“No,” blue). A Mann–Whitney U test confirms the groups differ (p < .001) with Cohen’s d ≈ 0.3. Fitting a two-component Gaussian mixture uncovers two distinct modes (dashed lines) that serve as the natural 1-D k-means centroids, demonstrating that Sleep Disturbance alone yields a somewhat intuitive univariate clustering boundary
+
+**Answer to Q1: Sleep Disturbance Univariate Separability** 
+
+Formal group‐difference test:
+
+  - Mann–Whitney U p < .001 confirms the “Yes” vs “No” groups differ on baseline Sleep Disturbance
+
+  - Cohen’s d ≈ 0.3 indicates a small‐to‐moderate mean shift, matching the partial overlap in the histograms
+
+Normal vs two‐normal comparison:
+
+  - A two‐component Gaussian mixture is strongly preferred (ΔBIC ≈ 2381; LRT p ≈ 0), so there truly are two modes
+
+  - Those component means (dashed lines) coincide with where a 1-D k-means (k=2) would place its centroids
+
+Clustering interpretation in 1-D:
+
+  - In one dimension, k-means/GMM centroids sit at the two modes and classify cases by the midpoint.
+
+  - Thus Sleep Disturbance alone already yields a natural 2-cluster solution—an almost-perfect univariate classifier, though with only modest discrimination (d≈0.3)
+  
+### 2. Feature Ranking by Univariate Effect Size
+
+**Goal**
+
+Identify which baseline risk features show at least medium univariate association with our key outcome (here, bipolar_I at 6 years), so we know which variables carry the strongest marginal signal. We still retain all 16 features in the master set—this ranking only tells us which deserve a closer look first.
+
+*Why bipolar_I @ 6 Y?* 
+
+This is our longest‐term clinical endpoint with the largest sample and best data completeness. A variable that shows even a medium effect here is a strong candidate for driving cluster structure.
+
+**Steps & Rationale**
+
+  1. Compute Cohen’s d for each baseline risk variable comparing “No” vs “Yes.”
+  
+    – |d| > 0.5 flag ⇒ medium effect; > 0.8 ⇒ large effect
+
+  2. Rank all features by |d|
+
+  3. Short-list those with |d| > 0.5 for further 2-D checks (but keep the full set for clustering)
+
+*Note: the same pattern (compute |d| for binary, η² for CBCL‐quintiles) can be applied to any other outcome or to continuous outcomes turned into quintile groups*
+
+```{r question 2, echo = FALSE, warning = FALSE}
+
+## Univariate Effect‐Size Ranking for bipolar_I at 6 Y ##
+
+#1 Specify outcome and wave  
+#1.1 Binary outcome of interest  
+outcome_var <- "bipolar_I"  
+
+#1.2 Follow‐up timepoint  
+wave_id <- "ses-06A"  
+
+#2. Assemble baseline risk + outcome  
+#2.1 Pull baseline risk features and participant ID  
+base_risk <- clustering_eda_data %>%  
+  filter(session_id == "ses-00A") %>%  
+  dplyr::select(participant_id, all_of(risk_vars))  
+
+#2.2 Pull bipolar_I at 6 Y and merge  
+effect_data <- clustering_eda_data %>%  
+  filter(session_id == wave_id) %>%  
+  dplyr::select(participant_id, !!outcome_var) %>%  
+  inner_join(base_risk, by = "participant_id") %>%  
+  drop_na(!!sym(outcome_var)) %>%  
+  mutate( 
+    
+    #2.2.1 Create factor grouping for the outcome  
+    Group = factor(.data[[outcome_var]],  
+                   levels = c(0,1),  
+                   labels = c("No","Yes"))  
+  )  
+
+#3. Compute Cohen’s d for each risk variable (dropping NAs manually)
+#3.1 For each variable, subset to non-missing then call cohen.d(d,f)
+d_vals <- sapply(risk_vars, function(var) {
+  effsize::cohen.d(
+    d = effect_data[[var]],
+    f = effect_data$Group,
+    hedges.correction = TRUE,
+    na.rm = TRUE
+  )$estimate
+})
+
+#4. Build and rank a results table  
+#4.1 Assemble, compute absolute d, and categorize importance  
+effect_tbl <- tibble(  
+  Variable = risk_vars,  
+  Cohens_d = d_vals) %>%  
+  mutate(  
+    Abs_d = abs(Cohens_d),  
+    Importance = case_when(  
+      Abs_d >= 0.8 ~ "large",  
+      Abs_d >= 0.5 ~ "medium",  
+      TRUE ~ "small")) %>%  
+  arrange(desc(Abs_d))
+
+#4.2 Render the effect‐size table  
+kable(  
+  effect_tbl,  
+  digits = c(NA,2,2,NA),  
+  col.names = c("Risk Variable","Cohen's d"," Abs. Value d","Effect Size")) %>%  
+  kable_styling(  
+    bootstrap_options = c("striped","hover","condensed")  
+  )
+
+```
+
+Only baseline CBCL Depression T shows a medium univariate effect (|d| = 0.52) for associations with future Bipolar I at 6-year follow-up; every other baseline risk factor ranks in the small range (|d| from 0.39 down to 0.02), with ACE Index (|d| = 0.39) and Sleep Disturbance (|d| = 0.30) as the next strongest
+
+This tells me two things:
+
+  1. No single predictor can strongly separate “No” vs “Yes” cases on its own; every variable carries modest signal
+
+  2. A multivariate approach like clustering in the full 16-dimensional risk space (I think) can likely harness the combined power of these small‐effect variables (and their interactions) to form more discriminative risk groupings than any one variable alone; and the bi-plots above show that this may be possible to some degree

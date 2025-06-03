@@ -164,6 +164,31 @@
       ],
       "Hash": "7a29697b75e027767a53fde6c903eca7"
     },
+    "GGally": {
+      "Package": "GGally",
+      "Version": "2.2.1",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R",
+        "RColorBrewer",
+        "dplyr",
+        "ggplot2",
+        "ggstats",
+        "grDevices",
+        "grid",
+        "gtable",
+        "lifecycle",
+        "magrittr",
+        "plyr",
+        "progress",
+        "rlang",
+        "scales",
+        "tidyr",
+        "utils"
+      ],
+      "Hash": "b11ac45c916608b7d1374ff87da053d5"
+    },
     "GPArotation": {
       "Package": "GPArotation",
       "Version": "2024.3-1",
@@ -983,6 +1008,17 @@
       ],
       "Hash": "33698c4b3127fc9f506654607fb73676"
     },
+    "diptest": {
+      "Package": "diptest",
+      "Version": "0.77-1",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "graphics",
+        "stats"
+      ],
+      "Hash": "882c35d95d13cdf1cd331008b8402420"
+    },
     "doBy": {
       "Package": "doBy",
       "Version": "4.6.24",
@@ -1111,6 +1147,13 @@
         "utils"
       ],
       "Hash": "b289af101f62cb7b46c53d1a45ed5198"
+    },
+    "effsize": {
+      "Package": "effsize",
+      "Version": "0.8.1",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Hash": "8d00cc615bfe85d56071542db9d94db9"
     },
     "ellipse": {
       "Package": "ellipse",
@@ -1249,6 +1292,26 @@
       ],
       "Hash": "e799e7b8ccd7dc7265f474db3a27c102"
     },
+    "flexmix": {
+      "Package": "flexmix",
+      "Version": "2.3-20",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R",
+        "grDevices",
+        "graphics",
+        "grid",
+        "lattice",
+        "methods",
+        "modeltools",
+        "nnet",
+        "stats",
+        "stats4",
+        "utils"
+      ],
+      "Hash": "cc36eeb02b1fa33001c1421e7731bfef"
+    },
     "fontawesome": {
       "Package": "fontawesome",
       "Version": "0.5.3",
@@ -1316,6 +1379,31 @@
         "zoo"
       ],
       "Hash": "7bcbf8c17ac848d9593bebc182b5195a"
+    },
+    "fpc": {
+      "Package": "fpc",
+      "Version": "2.2-13",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "MASS",
+        "R",
+        "class",
+        "cluster",
+        "diptest",
+        "flexmix",
+        "grDevices",
+        "graphics",
+        "kernlab",
+        "mclust",
+        "methods",
+        "parallel",
+        "prabclus",
+        "robustbase",
+        "stats",
+        "utils"
+      ],
+      "Hash": "cf26d796ca5904f23581d8c5ab644c67"
     },
     "fracdiff": {
       "Package": "fracdiff",
@@ -1486,6 +1574,29 @@
         "ggplot2"
       ],
       "Hash": "a57f0f5dbcfd0d77ad4ff33032f5dc79"
+    },
+    "ggstats": {
+      "Package": "ggstats",
+      "Version": "0.9.0",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R",
+        "cli",
+        "dplyr",
+        "forcats",
+        "ggplot2",
+        "lifecycle",
+        "patchwork",
+        "purrr",
+        "rlang",
+        "scales",
+        "stats",
+        "stringr",
+        "tidyr",
+        "utils"
+      ],
+      "Hash": "7970feac45e807dabb5f53add546afcc"
     },
     "gld": {
       "Package": "gld",
@@ -1866,6 +1977,20 @@
       ],
       "Hash": "532d16304274c23c8563f94b79351c86"
     },
+    "kernlab": {
+      "Package": "kernlab",
+      "Version": "0.9-33",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R",
+        "grDevices",
+        "graphics",
+        "methods",
+        "stats"
+      ],
+      "Hash": "97d266249d6c3b4f40e34e1ceaf9c558"
+    },
     "knitr": {
       "Package": "knitr",
       "Version": "1.49",
@@ -2081,6 +2206,20 @@
         "R"
       ],
       "Hash": "7ce2733a9826b3aeb1775d56fd305472"
+    },
+    "mclust": {
+      "Package": "mclust",
+      "Version": "6.1.1",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R",
+        "grDevices",
+        "graphics",
+        "stats",
+        "utils"
+      ],
+      "Hash": "aa9cfd45e2c3297213e270d000d80655"
     },
     "memoise": {
       "Package": "memoise",
@@ -2582,6 +2721,18 @@
         "R"
       ],
       "Hash": "d0bb8a425a213bc38f2cf8f14ded8941"
+    },
+    "prabclus": {
+      "Package": "prabclus",
+      "Version": "2.3-4",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "MASS",
+        "R",
+        "mclust"
+      ],
+      "Hash": "ecec5b486bd8b9e629f893cb06eb4461"
     },
     "prettyunits": {
       "Package": "prettyunits",

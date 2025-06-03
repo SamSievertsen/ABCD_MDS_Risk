@@ -1,0 +1,659 @@
+---
+title: "Mood Disorder & Suicidality Outcome Variable EDA"
+author: "Sam A. Sievertsen"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    self_contained: true
+---
+
+```{r global, include = FALSE}
+
+# Set global env variables
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, comment = "")
+
+```
+
+# Exploratory Data Analysis (EDA) of variables to be used as outcome metrics related to mood disorders and suicidality in the ABCD dataset
+
+The most up to date list of variables to used as outcomes in the current study, including their role, domain, details of each variable as it relates to the ABCD dataset, etc., can be [found here](https://ohsuitg-my.sharepoint.com/:x:/r/personal/sievertsen_ohsu_edu/Documents/Huber_Lab/FYP/Project_Planning/ABCD_Mood_Disorder_Risk_Model_Variables_010624_SS.xlsx?d=w286583f8914b4ab5a402e36ce8c36291&csf=1&web=1&e=ieCAKt&nav=MTVfezIxMDEwOEMxLTFFMjktNERDMi1CQTE4LTM0QTE2NzA0MEQ2RX0). 
+
+The following report contains information regarding the: 
+
+  1. Integrity of the data
+  
+  2. Assessment of outliers in the data
+  
+  3. Skewness + appropriateness of the mean as the measure of central tendency for continuous variables
+  
+  4. Shape of each variables' distribution
+
+```{r environment, echo = FALSE, include = FALSE, warning = FALSE}
+
+# Load necessary packages + environmental variables
+library(knitr)
+library(kableExtra)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(patchwork)
+library(purrr)
+library(moments)
+options(scipen = 999, digits = 8)
+
+# Read in raw data generated in DEAP
+raw_data <- read.csv("../../data/data_raw/dataset.csv")
+
+```
+
+## Data Wrangling 
+
+This section prepares the data for EDA of outcomes via the following process:
+
+| Step | Purpose |
+|------|---------|
+| **1 – Define raw KSADS™ columns** | For every outcome (passive/active suicidal ideation, suicide attempt, NSSI, Bipolar I, Bipolar II, Any-BSD) we list all relevant parent- and youth-report “current” and “past” diagnostic flags. |
+| **2 – Create binary variables** | Using `dplyr::case_when()` we mark a variable as 1 if any constituent flag = 1, 0 if at least one flag = 0 but none are 1, and NA only when every constituent column is missing. guarantees NA only when true data absence, not when zeros are present |
+| **3 – Define depression qualifiers** | Collect all parent + youth Major Depressive Disorder and Persistent Depressive Disorder (current, past, partial-remission) flags |
+| **4 – Identify “past mania/hypomania only” flags** | `bd1_past_mania_vars` (BD-I recent past manic) and `bd2_past_mania_vars` (BD-II recent past hypomanic) |
+| **5 – Rescore Bipolar I & II at baseline (ses-00A) and 2-year (ses-02A)** | If a row shows past manic/hypomanic episode and the youth has any depressive-disorder flag → keep diagnosis = 1. If past manic/hypomanic but no depression history → force diagnosis = 0. All other rows (different sessions or current episodes) keep their original value |
+
+**Why we rescore Bipolar I/II “past episode manic/hypomanic” flags**
+      
+The ABCD Study’s KSADS-COMP v1.0 over-diagnoses Lifetime Bipolar-I by allowing a *single* past manic flag to qualify. [Barch et al. (2021)](https://doi.org/10.1016/j.dcn.2021.101031) note:
+      
+      > “The computerized KSADS 1.0 shows **higher than expected rates** of caregiver- and youth-reported *past manic episodes* (e.g., caregiver-reported prevalence of Bipolar I Disorder, most recent past episode manic is 2.6 %). We recommend rescoring such cases so that the youth must also meet criteria for a current or past depressive disorder to satisfy diagnostic criteria.”
+    
+Following this recommendation we:
+      
+  - restrict rescoring to baseline and 2-year follow-up waves (those using KSADS-v1 past-episode items);
+
+  - require any lifetime MDD/PDD flag alongside past mania/hypomania before endorsing Bipolar I or II.
+    
+This likely yields more realistic prevalence estimates while keeping current-episode diagnoses intact and preserving the longitudinal structure needed for survival and mixed-effects models.
+
+```{r data wrangling, echo = FALSE, include = FALSE, warning = FALSE}
+
+## Data Wrangling ##
+
+#1. Clean the outcome data 
+#1.1 Clean the KSADS-COMP Diagnosis Data
+#1.11 Retain only columns of interest
+raw_data_trimmed <- raw_data %>% 
+  dplyr::select(c(participant_id, session_id, mh_p_ksads__suic__pass__past_dx, mh_p_ksads__suic__actv__past_dx, mh_p_ksads__suic__actv__mthd__past_dx, mh_p_ksads__suic__actv__int__past_dx, mh_p_ksads__suic__actv__plan__past_dx, mh_p_ksads__suic__pass__pres_dx, mh_p_ksads__suic__actv__pres_dx, mh_p_ksads__suic__actv__mthd__pres_dx, mh_p_ksads__suic__actv__int__pres_dx, mh_p_ksads__suic__actv__plan__pres_dx, mh_y_ksads__suic__pass__past_dx, mh_y_ksads__suic__actv__past_dx, mh_y_ksads__suic__actv__mthd__past_dx, mh_y_ksads__suic__actv__int__past_dx, mh_y_ksads__suic__actv__plan__past_dx, mh_y_ksads__suic__pass__pres_dx, mh_y_ksads__suic__actv__pres_dx, mh_y_ksads__suic__actv__mthd__pres_dx, mh_y_ksads__suic__actv__int__pres_dx, mh_y_ksads__suic__actv__plan__pres_dx, mh_p_ksads__suic__atmpt__intr__past_dx, mh_p_ksads__suic__atmpt__abrt__past_dx, mh_p_ksads__suic__atmpt__past_dx, mh_p_ksads__suic__atmpt__intr__pres_dx, mh_p_ksads__suic__atmpt__abrt__pres_dx, mh_p_ksads__suic__atmpt__pres_dx, mh_y_ksads__suic__atmpt__intr__past_dx, mh_y_ksads__suic__atmpt__abrt__past_dx, mh_y_ksads__suic__atmpt__past_dx, mh_y_ksads__suic__atmpt__intr__pres_dx, mh_y_ksads__suic__atmpt__abrt__pres_dx, mh_y_ksads__suic__atmpt__pres_dx, mh_p_ksads__suic__slfinj__nosi__pres_dx, mh_p_ksads__suic__slfinj__nosi__past_dx, mh_y_ksads__suic__slfinj__nosi__pres_dx, mh_y_ksads__suic__slfinj__nosi__past_dx, mh_p_ksads__bpd__bpd1__curdep__partrem_dx, mh_p_ksads__bpd__bpd1__rcnt__manicmix__pres_dx, mh_p_ksads__bpd__bpd1__curmanic__pres_dx, mh_p_ksads__bpd__bpd1__curdep__pres_dx, mh_y_ksads__bpd__bpd1__curmanic__pres_dx, mh_y_ksads__bpd__bpd1__curdep__pres_dx, mh_y_ksads__bpd__bpd1__rcnt__manic__pres_dx, mh_p_ksads__bpd__bpd1__curhypo__pres_dx, mh_p_ksads__bpd__bpd1__rcnt__dep__pres_dx, mh_p_ksads__bpd__bpd1__rcnt__manic__pres_dx, mh_y_ksads__bpd__bpd1__rcnt__dep__pres_dx, mh_y_ksads__bpd__bpd1__curhypo__pres_dx, mh_y_ksads__bpd__bpd1__rcnt__manicmix__pres_dx, mh_y_ksads__bpd__bpd1__curdep__partrem_dx, mh_p_ksads__bpd__bpd2__curhypo__pres_dx, mh_p_ksads__bpd__bpd2__rcnt__hypo__pres_dx, mh_p_ksads__bpd__bpd2__curdep__pres_dx, mh_p_ksads__bpd__bpd2__curdep__partrem_dx, mh_y_ksads__bpd__bpd2__curdep__pres_dx, mh_y_ksads__bpd__bpd2__curdep__partrem_dx, mh_y_ksads__bpd__bpd2__rcnt__hypo__pres_dx, mh_y_ksads__bpd__bpd2__curhypo__pres_dx, mh_p_ksads__bpd__bpd2__rcnt__hypomix__pres_dx, mh_y_ksads__bpd__bpd2__rcnt__hypomix__pres_dx, mh_p_ksads__bpd__bpd2__oth__mindur_dx, mh_p_ksads__bpd__oth__mindur_dx, mh_y_ksads__bpd__bpd2__oth__mindur_dx, mh_y_ksads__bpd__oth__mindur_dx, mh_p_ksads__bpd__unspec__pres_dx, mh_p_ksads__bpd__unspec__past_dx, mh_y_ksads__bpd__unspec__pres_dx, mh_y_ksads__bpd__unspec__past_dx, mh_p_ksads__dep__mdd__partrem_dx, mh_p_ksads__dep__mdd__past_dx, mh_p_ksads__dep__mdd__pres_dx, mh_p_ksads__dep__pdd__oth__pres_dx, mh_p_ksads__dep__pdd__partrem_dx, mh_p_ksads__dep__pdd__past_dx, mh_p_ksads__dep__pdd__pres_dx, mh_y_ksads__dep__mdd__partrem_dx, mh_y_ksads__dep__mdd__past_dx, mh_y_ksads__dep__mdd__pres_dx, mh_y_ksads__dep__pdd__oth__pres_dx, mh_y_ksads__dep__pdd__partrem_dx, mh_y_ksads__dep__pdd__past_dx, mh_y_ksads__dep__pdd__pres_dx, mh_p_cbcl__dsm__dep_tscore, mh_p_cbcl__dsm__dep_nm, mh_p_cbcl__dsm__anx_tscore, mh_p_cbcl__dsm__anx_nm, mh_p_cbcl__synd__attn_tscore, mh_p_cbcl__synd__attn_nm, mh_p_cbcl__synd__aggr_tscore, mh_p_cbcl__synd__aggr_nm))
+
+#1.12 Turn all instances of empty, missing, 555, and 999 to NA; and 888 to 0 in KSADS columns
+raw_data_trimmed <- raw_data_trimmed %>%
+  mutate(across(starts_with("mh_") & contains("ksads"),
+    ~ case_when(. == 888 ~ 0, . %in% c(555, 999, "") | is.na(.) ~ NA, TRUE ~ .)))
+
+#1.2 Clean the Continuous CBCL Outcomes of Interest
+raw_data_trimmed <- raw_data_trimmed %>% 
+  mutate(
+    
+    #1.21 Remove any depression t scores created with missing values
+    mh_p_cbcl__dsm__dep_tscore = if_else(mh_p_cbcl__dsm__dep_nm >= 1, NA_real_, mh_p_cbcl__dsm__dep_tscore),
+    
+    #1.22 Remove any anxiety t scores created with missing values
+    mh_p_cbcl__dsm__anx_tscore = if_else(mh_p_cbcl__dsm__anx_nm >= 1, NA_real_, mh_p_cbcl__dsm__anx_tscore), 
+    
+    #1.23 Remove any attention t scores created with missing values
+    mh_p_cbcl__synd__attn_tscore = if_else(mh_p_cbcl__synd__attn_nm >= 1, NA_real_, mh_p_cbcl__synd__attn_tscore),
+    
+    #1.24 Remove any aggression t scores created with missing values
+    mh_p_cbcl__synd__aggr_tscore = if_else(mh_p_cbcl__synd__aggr_nm >= 1, NA_real_, mh_p_cbcl__synd__aggr_tscore))
+
+#2. Preliminarily create relevant outcome variables of interest
+#2.1 Define KSADS-COMP columns for each outcome
+#2.1.1 Suicidal Ideation – passive (past or present; parent or youth report)
+si_passive_vars <- c(
+  "mh_p_ksads__suic__pass__past_dx",
+  "mh_p_ksads__suic__pass__pres_dx",
+  "mh_y_ksads__suic__pass__past_dx",
+  "mh_y_ksads__suic__pass__pres_dx"
+)
+
+#2.1.2 Suicidal Ideation – active (all subtypes; past or present; parent or youth)
+si_active_vars <- c(
+  "mh_p_ksads__suic__actv__past_dx",
+  "mh_p_ksads__suic__actv__mthd__past_dx",
+  "mh_p_ksads__suic__actv__int__past_dx",
+  "mh_p_ksads__suic__actv__plan__past_dx",
+  "mh_p_ksads__suic__actv__pres_dx",
+  "mh_p_ksads__suic__actv__mthd__pres_dx",
+  "mh_p_ksads__suic__actv__int__pres_dx",
+  "mh_p_ksads__suic__actv__plan__pres_dx",
+  "mh_y_ksads__suic__actv__past_dx",
+  "mh_y_ksads__suic__actv__mthd__past_dx",
+  "mh_y_ksads__suic__actv__int__past_dx",
+  "mh_y_ksads__suic__actv__plan__past_dx",
+  "mh_y_ksads__suic__actv__pres_dx",
+  "mh_y_ksads__suic__actv__mthd__pres_dx",
+  "mh_y_ksads__suic__actv__int__pres_dx",
+  "mh_y_ksads__suic__actv__plan__pres_dx"
+)
+
+#2.1.3 Suicide Attempt – interrupted, aborted, or completed (past or present; parent or youth)
+sa_vars <- c(
+  "mh_p_ksads__suic__atmpt__intr__past_dx",
+  "mh_p_ksads__suic__atmpt__abrt__past_dx",
+  "mh_p_ksads__suic__atmpt__past_dx",
+  "mh_p_ksads__suic__atmpt__intr__pres_dx",
+  "mh_p_ksads__suic__atmpt__abrt__pres_dx",
+  "mh_p_ksads__suic__atmpt__pres_dx",
+  "mh_y_ksads__suic__atmpt__intr__past_dx",
+  "mh_y_ksads__suic__atmpt__abrt__past_dx",
+  "mh_y_ksads__suic__atmpt__past_dx",
+  "mh_y_ksads__suic__atmpt__intr__pres_dx",
+  "mh_y_ksads__suic__atmpt__abrt__pres_dx",
+  "mh_y_ksads__suic__atmpt__pres_dx"
+)
+
+#2.1.4 Non-Suicidal Self-Injury (NSSI; past or present; parent or youth)
+nssi_vars <- c(
+  "mh_p_ksads__suic__slfinj__nosi__pres_dx",
+  "mh_p_ksads__suic__slfinj__nosi__past_dx",
+  "mh_y_ksads__suic__slfinj__nosi__pres_dx",
+  "mh_y_ksads__suic__slfinj__nosi__past_dx"
+)
+
+#2.1.5 Bipolar I Disorder – any current or recent past episode (parent or youth)
+bd1_vars <- c(
+  "mh_p_ksads__bpd__bpd1__curdep__partrem_dx",
+  "mh_p_ksads__bpd__bpd1__rcnt__manicmix__pres_dx",
+  "mh_p_ksads__bpd__bpd1__curmanic__pres_dx",
+  "mh_p_ksads__bpd__bpd1__curdep__pres_dx",
+  "mh_y_ksads__bpd__bpd1__curmanic__pres_dx",
+  "mh_y_ksads__bpd__bpd1__curdep__pres_dx",
+  "mh_y_ksads__bpd__bpd1__rcnt__manic__pres_dx",
+  "mh_p_ksads__bpd__bpd1__curhypo__pres_dx",
+  "mh_p_ksads__bpd__bpd1__rcnt__dep__pres_dx",
+  "mh_p_ksads__bpd__bpd1__rcnt__manic__pres_dx",
+  "mh_y_ksads__bpd__bpd1__rcnt__dep__pres_dx",
+  "mh_y_ksads__bpd__bpd1__curhypo__pres_dx",
+  "mh_y_ksads__bpd__bpd1__rcnt__manicmix__pres_dx",
+  "mh_y_ksads__bpd__bpd1__curdep__partrem_dx"
+)
+
+#2.1.6 Bipolar II Disorder – any current or recent past hypomanic/depressive episode (parent or youth)
+bd2_vars <- c(
+  "mh_p_ksads__bpd__bpd2__curhypo__pres_dx",
+  "mh_p_ksads__bpd__bpd2__rcnt__hypo__pres_dx",
+  "mh_p_ksads__bpd__bpd2__curdep__pres_dx",
+  "mh_p_ksads__bpd__bpd2__curdep__partrem_dx",
+  "mh_y_ksads__bpd__bpd2__curdep__pres_dx",
+  "mh_y_ksads__bpd__bpd2__curdep__partrem_dx",
+  "mh_y_ksads__bpd__bpd2__rcnt__hypo__pres_dx",
+  "mh_y_ksads__bpd__bpd2__curhypo__pres_dx",
+  "mh_p_ksads__bpd__bpd2__rcnt__hypomix__pres_dx",
+  "mh_y_ksads__bpd__bpd2__rcnt__hypomix__pres_dx"
+)
+
+#2.1.7 Any Bipolar Disorder – combine Bipolar I, II, OS & unspecified (parent or youth)
+any_bsd_vars <- c(
+  bd1_vars, bd2_vars,
+  "mh_p_ksads__bpd__bpd2__oth__mindur_dx",
+  "mh_p_ksads__bpd__oth__mindur_dx",
+  "mh_y_ksads__bpd__bpd2__oth__mindur_dx",
+  "mh_y_ksads__bpd__oth__mindur_dx",
+  "mh_p_ksads__bpd__unspec__pres_dx",
+  "mh_p_ksads__bpd__unspec__past_dx",
+  "mh_y_ksads__bpd__unspec__pres_dx",
+  "mh_y_ksads__bpd__unspec__past_dx"
+)
+
+# 2.1.8 Depression qualifiers for rescoring bipolar past mania/hypomania
+dep_vars <- c(
+  "mh_p_ksads__dep__mdd__partrem_dx",
+  "mh_p_ksads__dep__mdd__past_dx",
+  "mh_p_ksads__dep__mdd__pres_dx",
+  "mh_y_ksads__dep__mdd__partrem_dx",
+  "mh_y_ksads__dep__mdd__past_dx",
+  "mh_y_ksads__dep__mdd__pres_dx",
+  "mh_p_ksads__dep__pdd__oth__pres_dx",
+  "mh_p_ksads__dep__pdd__partrem_dx",
+  "mh_p_ksads__dep__pdd__past_dx",
+  "mh_p_ksads__dep__pdd__pres_dx",
+  "mh_y_ksads__dep__pdd__oth__pres_dx",
+  "mh_y_ksads__dep__pdd__partrem_dx",
+  "mh_y_ksads__dep__pdd__past_dx",
+  "mh_y_ksads__dep__pdd__pres_dx"
+)
+
+#2.1.9 Bipolar I past mania vars for rescoring
+bd1_past_mania_vars <- c(
+  "mh_p_ksads__bpd__bpd1__rcnt__manic__pres_dx",
+  "mh_y_ksads__bpd__bpd1__rcnt__manic__pres_dx"
+)
+
+#2.1.10 Bipolar II past hypomania vars for rescoring
+bd2_past_mania_vars <- c(
+  "mh_p_ksads__bpd__bpd2__rcnt__hypo__pres_dx",
+  "mh_y_ksads__bpd__bpd2__rcnt__hypo__pres_dx"
+)
+
+#2.2 Create binary outcomes according to the plan
+prelim_outcome_data <- raw_data_trimmed %>%
+  mutate(
+    
+    #2.2.1 Suicidal ideation – passive
+    si_passive = case_when(
+      rowSums(select(., all_of(si_passive_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(select(., all_of(si_passive_vars)))) == 0 ~ NA_real_,
+      TRUE ~ 0),
+    
+    #2.2.2 Suicidal ideation – active
+    si_active = case_when(
+      rowSums(select(., all_of(si_active_vars))  == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(select(., all_of(si_active_vars)))) == 0 ~ NA_real_,
+      TRUE ~ 0),
+    
+    #2.2.3 Suicide Attempt
+    sa = case_when(
+      rowSums(select(., all_of(sa_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(select(., all_of(sa_vars)))) == 0 ~ NA_real_,
+      TRUE ~ 0),
+    
+    #2.2.4 Non-Suicidal Self-Injury (NSSI)
+    nssi = case_when(
+      rowSums(select(., all_of(nssi_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(select(., all_of(nssi_vars)))) == 0 ~ NA_real_,
+      TRUE ~ 0),
+    
+    #2.2.5 Bipolar I Disorder
+    bipolar_I = case_when(
+      rowSums(select(., all_of(bd1_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(select(., all_of(bd1_vars)))) == 0 ~ NA_real_,
+      TRUE ~ 0),
+    
+    #2.2.6 Bipolar II Disorder
+    bipolar_II = case_when(
+      rowSums(select(., all_of(bd2_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(select(., all_of(bd2_vars)))) == 0 ~ NA_real_,
+      TRUE ~ 0),
+    
+    #2.2.7 Rescore Bipolar I at baseline & 2-year: past mania requires depression
+    bipolar_I = case_when(
+      session_id %in% c("ses-00A","ses-02A") &
+        rowSums(select(., all_of(bd1_past_mania_vars)) == 1, na.rm = TRUE) > 0 ~
+          if_else(rowSums(select(., all_of(dep_vars)) == 1, na.rm = TRUE) > 0, 1, 0),
+      TRUE ~ bipolar_I),
+    
+    #2.2.8 Rescore Bipolar II at baseline & 2-year: past hypomania requires depression
+    bipolar_II = case_when(
+      session_id %in% c("ses-00A","ses-02A") &
+        rowSums(select(., all_of(bd2_past_mania_vars)) == 1, na.rm = TRUE) > 0 ~
+          if_else(rowSums(select(., all_of(dep_vars)) == 1, na.rm = TRUE) > 0, 1, 0),
+      TRUE ~ bipolar_II),
+    
+    #2.2.9 Any Bipolar Spectrum Disorder
+    any_bsd = case_when(
+      rowSums(select(., all_of(any_bsd_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(select(., all_of(any_bsd_vars)))) == 0 ~ NA_real_,
+      TRUE ~ 0)
+  )
+
+#2.3 Retain only the columns of interest to EDA of outcome data
+prelim_outcome_data_trimmed <- prelim_outcome_data %>% 
+  dplyr::select(c(participant_id, session_id, si_passive, si_active, sa, nssi, bipolar_I, bipolar_II, any_bsd, mh_p_cbcl__dsm__dep_tscore, mh_p_cbcl__dsm__anx_tscore, mh_p_cbcl__synd__attn_tscore, mh_p_cbcl__synd__aggr_tscore))
+
+```
+
+## 1. Integrity of the Data
+
+The purpose of this section is to complete the following: 
+
+| Step | Purpose |
+|------|---------|
+| **1 – Specify columns** | Identify the categorical diagnostic outcomes (`bipolar_I`, `bipolar_II`, etc.) and a small set of continuous CBCL scores whose completeness we want to inspect at the 4-year visit |
+| **2 – Build helper functions** | Two small functions compute: **`n_non_na`** – how many rows have a usable value (non-missing, non-empty). **`percent_non_na`** – percent of the sample that is non-missing. **`range_or_unique`** – either the min–max range (continuous) or the set of unique values present (categorical) |
+| **3 – Apply functions** | `lapply()` runs the helper across every categorical and continuous column, then collapses the results into one tidy data-frame |
+| **4 – Display results** | A `kable()` table prints, showing for each variable: how many 4-year cases are usable, what proportion of the cohort that represents, and either the value range (CBCL T-scores) or the actual categories present (0/1 for diagnoses) |
+
+Why we do this:
+
+  - Quickly spot variables with excessive missingness (e.g., 70% complete) before they enter survival or mixed-effects models
+  
+  - Ensure CBCL scores are within valid T-score bounds (~20–80) and that binary outcomes only contain 0/1
+
+```{r EDA 1, echo = FALSE, warning = FALSE}
+
+## Exploratory Data Analysis ##
+
+#1. Define the N, percent, and range of outcome variables of interest at the 4Y assessment timepoint
+#1.1 Define the columns to analyze
+#1.11 Categorical columns to analyze
+categorical_columns <- c("bipolar_I", "bipolar_II", "any_bsd", "si_passive", "si_active", "sa", "nssi")
+
+#1.12 Continuous columns to analyze
+continuous_columns <- c("mh_p_cbcl__dsm__dep_tscore", "mh_p_cbcl__dsm__anx_tscore", "mh_p_cbcl__synd__attn_tscore", "mh_p_cbcl__synd__aggr_tscore")
+
+#1.2 Create a function to compute EDA metrics for both categorical and continuous columns
+get_missingness_metrics <- function(data, categorical_columns, continuous_columns) {
+  
+  #1.21 Helper function for categorical columns
+  get_categorical_metrics <- function(column_name) {
+    column_data <- data[[column_name]]
+    n_non_na <- sum(!is.na(column_data) & column_data != "")
+    percent_non_na <- (n_non_na / nrow(data)) * 100
+    unique_values <- unique(column_data[!is.na(column_data) & column_data != ""])
+    list(
+      column = column_name,
+      n_non_na = n_non_na,
+      percent_non_na = percent_non_na,
+      range_or_unique = unique_values
+    )
+  }
+  
+  #1.22 Helper function for continuous columns
+  get_continuous_metrics <- function(column_name) {
+    column_data <- data[[column_name]]
+    n_non_na <- sum(!is.na(column_data) & column_data != "")
+    percent_non_na <- (n_non_na / nrow(data)) * 100
+    value_range <- range(column_data, na.rm = TRUE)
+    list(
+      column = column_name,
+      n_non_na = n_non_na,
+      percent_non_na = percent_non_na,
+      range_or_unique = value_range
+    )
+  }
+  
+  #1.23 Process categorical columns
+  categorical_metrics <- lapply(categorical_columns, get_categorical_metrics)
+  
+  #1.24 Process continuous columns
+  continuous_metrics <- lapply(continuous_columns, get_continuous_metrics)
+  
+  #1.25 Combine results into a single list
+  metrics <- c(categorical_metrics, continuous_metrics)
+  
+  #1.26 Convert to a dataframe for printing in output
+  outcome_integrity_metrics <- do.call(rbind, lapply(metrics, function(x) {
+    data.frame(
+      column = x$column,
+      n_non_na = x$n_non_na,
+      percent_non_na = x$percent_non_na,
+      range_or_unique = I(list(x$range_or_unique))
+    )
+  }))
+  
+  return(outcome_integrity_metrics)
+}
+
+#1.3 Apply the function to compute EDA metrics for both categorical and continuous columns to the outcome variable data
+outcome_variable_integrity <- get_missingness_metrics(prelim_outcome_data_trimmed, categorical_columns, continuous_columns)
+
+# Print the results
+kable(outcome_variable_integrity, col.names = c("Variable", "N Non-Missing", "Percent Non-Missing", "Range/Unique Values"), digits = 3, row.names = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped","hover","condensed","responsive"))
+
+```
+
+## 2. Visually and Quantitatively Assess for any Outliers in the Data
+
+The purpose of this section is to: 
+
+| Step | Purpose |
+|------|---------|
+| **1 – Gather continuous outcomes** | Select the four CBCL T-score variables from the trimmed data and pivot them into long format (`Variable`, `Value`) |
+| **2 – Draw faceted box-plots** | `ggplot2` generates a separate box-plot for each T-score, showing the median, IQR, whiskers (1.5×IQR), and any points beyond as potential outliers. Faceting keeps y-scales free so each distribution is shown in its own natural range |
+| **3 – Visual inspection** | The resulting panel lets you quickly spot: extreme low/high T-scores (data entry issues?) skew/heavy-tail distributions that might influence clustering or regression |
+
+Why we do this: 
+
+  - Box-plots give an immediate visual flag for values that lie well outside the typical CBCL range (e.g., < 30 or > 100).
+  
+  - Faceting four plots in one view is an efficient QC step before deciding on transformations or winsorisation.  
+
+```{r EDA 2, echo = FALSE, warning = FALSE}
+
+## Exploratory Data Analysis ##
+
+#2. Visually and Quantitatively Assess for any Outliers in the Data
+#2.1 Create boxplots with outlier indicators for continuous variables in the dataset
+#2.11 Filter only continuous variables
+continuous_outcome_variables <- prelim_outcome_data_trimmed %>%
+  dplyr::select(mh_p_cbcl__dsm__dep_tscore, mh_p_cbcl__dsm__anx_tscore, mh_p_cbcl__synd__attn_tscore, mh_p_cbcl__synd__aggr_tscore) %>%
+  gather(key = "Variable", value = "Value")
+
+#2.12 Create boxplot with facets for continuous variables
+continuous_outcome_variables_boxplot <- ggplot(continuous_outcome_variables, aes(x = Variable, y = Value)) + 
+  geom_boxplot(fill = "lightblue", color = "darkblue") + 
+  facet_wrap(~ Variable, scales = "free") + 
+  theme_minimal() + 
+  theme(axis.text.x = element_blank(),
+        strip.text = element_text(size = 6, face = "bold")) +
+  labs(title = "Boxplots of Continuous Outcome Variables",
+       y = "Values",
+       x = "")
+
+#2.13 Print the plot
+print(continuous_outcome_variables_boxplot)
+
+```
+
+Based on the boxplots of the continuous (secondary) outcome variables, it does not appear as though any values are out of range or otherwise unexpected outliers. However, it does appear as if the data is not normally distributed, and this should be thoroughly assessed in subsequent steps.
+
+## 3. Appropriateness of the Mean as a Measure of Central Tendency
+
+While clustering methods used in this study do not require parametric assumptions, the secondary continuous outcome measures - `cbcl_scr_dsm5_depress_t`, `cbcl_scr_dsm5_anxdisord_t`, `cbcl_scr_syn_attention_t`, and `cbcl_scr_syn_aggressive_t` - will serve as dependent variables in statistical models that do. Therefore, examining kurtosis & skewness provides information about the asymmetry of these variable distributions, which may help identify variables with extreme outliers or long tails (and therefore any adaptations that should be made to our statistical analysis pipeline). 
+
+Below, skewness & kurtosis values for the four secondary outcome measures are presented.
+
+```{r EDA 3, echo = FALSE, warning = FALSE}
+
+## Exploratory Data Analysis ##
+
+#3.1 Calculate skewness & kurtosis for continuous variables
+outcome_data_continuous_variables_skewness_kurtosis_table <- prelim_outcome_data_trimmed %>%
+  dplyr::select(
+    mh_p_cbcl__dsm__dep_tscore,
+    mh_p_cbcl__dsm__anx_tscore,
+    mh_p_cbcl__synd__attn_tscore,
+    mh_p_cbcl__synd__aggr_tscore) %>%
+  summarise(
+    
+  #3.1.1 Calculate skewness & kurtosis for each variable
+    across(everything(), list(
+      skewness = ~ skewness(.x, na.rm = TRUE),
+      kurtosis = ~ kurtosis(.x, na.rm = TRUE)))) %>%
+  
+  #3.1.2 Reshape from wide to long format
+  pivot_longer(
+    cols = everything(),
+    names_to = c("Variable", "Statistic"),
+    names_pattern = "(.*)_(skewness|kurtosis)",
+    values_to = "Value") %>%
+  
+  #3.1.3 Reshape back to have skewness and kurtosis as separate columns
+  pivot_wider(names_from = Statistic, values_from = Value)
+
+#3.2 Display the skewness & kurtosis table
+kable(outcome_data_continuous_variables_skewness_kurtosis_table, caption = "Skewness & Kurtosis Values for Continuous Variables", digits = 2) %>%
+  kable_styling(bootstrap_options = c("striped","hover","condensed","responsive"))
+
+```
+
+**All four outcomes show the typical CBCL pattern; strong positive skew and heavy tails, because most community youth score low while a small clinical subgroup stretches the right tail**
+
+Implications for the longitudinal mixed-effects models: 
+
+| Option | When to choose | Quick note |
+|--------|----------------|------------|
+| **Keep raw T-scores + robust / bootstrap SEs** | Large sample, focus on mean differences | Central-limit theorem handles skew; report Satterthwaite or bootstrap CIs |
+| **Mild transform (√ or log)** | Residual QQ-plots still show heavy tail or heteroscedasticity | Transform, refit LMM, compare AIC/BIC |
+| **Non-Gaussian GLMM (e.g., gamma)** | Skew remains problematic after transforms or transforms don't make sense | Fit with `glmmTMB` |
+
+Suggested workflow for analyses: 
+
+  1. Fit the base LMM on raw T-scores with robust SEs
+  
+  2. Inspect residual QQ-plots and variance-vs-fitted
+  
+  3. If diagnostics are poor, apply √/log transform and refit; record any change in inference
+  
+  4. Document choice and likely include GLMM sensitivity in the supplement anyway
+
+## 4. Shape of Each Variables' Distribution
+
+The shape of the distribution for each continuous variable and frequency distribution of each categorical variable is outlined below, both in terms of summary statistics derived from and a graphical histogram with density overlay of relevant data:
+
+```{r EDA 4, echo = FALSE, warning = FALSE, fig.height=10, fig.width=10}
+
+## Exploratory Data Analysis ##
+
+#4. Create summary tables and visualizations for the distributions of categorical and continuous variables included as outcomes by timepoint
+#4.1 Create a summary table for continuous and categorical variables by timepoint
+summarize_data_by_timepoint <- function(data, continuous_cols, categorical_cols) {
+  summary_list <- list()
+  
+  # Get unique timepoints
+  timepoints <- unique(data$session_id)
+  timepoints <- timepoints[!is.na(timepoints)]
+  
+  for (tp in timepoints) {
+    tp_data <- data[data$session_id == tp, ]
+    
+    #4.11 Continuous variables summary by timepoint
+    for (col in continuous_cols) {
+      column_data <- tp_data[[col]]
+      valid_values <- column_data[!is.na(column_data)]
+      
+      if (length(valid_values) > 0) {
+        summary_list[[paste0(col, "_", tp)]] <- data.frame(
+          Timepoint = tp,
+          Variable = col,
+          Type = "Continuous",
+          N = length(valid_values),
+          Mean = mean(valid_values, na.rm = TRUE),
+          Median = median(valid_values, na.rm = TRUE),
+          SD = sd(valid_values, na.rm = TRUE),
+          Min = min(valid_values, na.rm = TRUE),
+          Max = max(valid_values, na.rm = TRUE),
+          Levels = NA,
+          Frequencies = NA,
+          stringsAsFactors = FALSE
+        )
+      }
+    }
+    
+    #4.12 Categorical variables summary by timepoint
+    for (col in categorical_cols) {
+      column_data <- tp_data[[col]]
+      freq_table <- table(column_data, useNA = "no")
+      
+      if (length(freq_table) > 0) {
+        summary_list[[paste0(col, "_", tp)]] <- data.frame(
+          Timepoint = tp,
+          Variable = col,
+          Type = "Categorical",
+          N = sum(freq_table),
+          Mean = NA,
+          Median = NA,
+          SD = NA,
+          Min = NA,
+          Max = NA,
+          Levels = paste(names(freq_table), collapse = ", "),
+          Frequencies = paste(freq_table, collapse = ", "),
+          stringsAsFactors = FALSE
+        )
+      }
+    }
+  }
+  
+  do.call(rbind, summary_list)
+}
+
+#4.2 Generate the summary table by timepoint
+summary_table_by_timepoint <- summarize_data_by_timepoint(prelim_outcome_data_trimmed, continuous_columns, categorical_columns)
+
+#4.3 Print the summary table in the RMD
+kable(summary_table_by_timepoint, caption = "Summary Statistics for Outcome Model Variables by Assessment Timepoint", row.names = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped","hover","condensed","responsive")) %>%
+  column_spec(1, bold = TRUE) %>%  # Make timepoint column bold
+  pack_rows(index = table(summary_table_by_timepoint$Timepoint))  # Group by timepoint
+
+#4.4 Create plots visualizing distributions of variables by timepoint
+#4.4.1 Prepare long data for continuous variables
+cont_list <- map(continuous_columns, function(col) {
+  prelim_outcome_data_trimmed %>%
+    select(Value = !!sym(col), session_id) %>%
+    filter(!is.na(Value)) %>%
+    mutate(Type = "Continuous",
+           Variable = col,
+           Timepoint = session_id)
+})
+
+#4.4.2 Prepare long data for categorical variables
+cat_list <- map(categorical_columns, function(col) {
+  prelim_outcome_data_trimmed %>%
+    select(Value = !!sym(col), session_id) %>%
+    filter(!is.na(Value)) %>%
+    mutate(Type      = "Categorical",
+           Variable  = col,
+           Timepoint = session_id)
+})
+
+#4.4.3 Combine continuous and categorical data into single frame
+plot_data_by_timepoint <- bind_rows(cont_list, cat_list)
+
+#4.4.4 Loop over each assessment timepoint to plot distributions
+for (tp in sort(unique(plot_data_by_timepoint$Timepoint))) {
+
+  #4.4.4.1 Filter data for current timepoint
+  tp_data <- plot_data_by_timepoint %>%
+    filter(Timepoint == tp)
+
+  #4.4.4.2 Generate histogram + density for continuous variables
+  cont_plot <- ggplot(tp_data %>% filter(Type == "Continuous"),
+                      aes(x = Value)) +
+    geom_histogram(aes(y = ..density..),
+                   binwidth = 1,
+                   fill = "steelblue",
+                   alpha = 0.5,
+                   color = "black") +
+    geom_density(color = "firebrick",
+                 size = 0.8,
+                 adjust = 1.5) +
+    facet_wrap(~ Variable, ncol = 3, scales = "free") +
+    theme_minimal(base_size = 9) +
+    labs(subtitle = paste("Timepoint:", tp),
+         y = "Density",
+         x = NULL) +
+    theme(strip.text = element_text(size = 7),
+          axis.text.x = element_text(angle = 30, hjust = 1, size = 6),
+          plot.subtitle = element_text(hjust = 0.5, face = "bold"))
+
+  #4.4.4.3 Generate bar plot for categorical variables
+  cat_plot <- ggplot(tp_data %>% filter(Type == "Categorical"),
+                     aes(x = factor(Value))) +
+    geom_bar(fill = "skyblue",
+             color = "black",
+             alpha = 0.8) +
+    geom_text(stat = "count",
+              aes(label = ..count..),
+              vjust = -0.3,
+              size = 3) +
+    facet_wrap(~ Variable, ncol = 3, scales = "free_y") +
+    scale_x_discrete(labels = c("0" = "No", "1" = "Yes")) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+    theme_minimal(base_size = 9) +
+    labs(y = "Count", x = NULL) +
+    theme(strip.text = element_text(size = 7),
+          axis.text.x = element_text(size = 6),
+          plot.subtitle = element_text(hjust = 0.5, face = "bold"))
+
+  #4.4.4.4 Stack continuous above categorical and print plots
+  print(
+    cont_plot / cat_plot +
+    plot_annotation(title = "Distributions by Assessment Timepoint") &
+    theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+  )
+}
+
+```
+
+Distributions of continuous variables and rates of categorical variables by timepoint are shown above. While continuous variables exhibit noticeable skew & kurtosis, and the CBCL aggression problem scale results will need to be interpreted with caution/re-evaluated during modeling as described in section 3 above, no other problems are not noted herein. 
+
+## 

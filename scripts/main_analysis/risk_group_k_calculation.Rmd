@@ -24,11 +24,14 @@ library(DescTools)
 library(skimr)
 library(easystats)
 library(cluster)
+library(fpc)
 library(clustMixType)
 library(factoextra)
+library(FactoMineR)
 library(NbClust)
 library(clValid) 
 library(ClusterR) 
+library(mclust)
 library(clusterSim)
 library(clustertend)
 library(hopkins)
@@ -93,5 +96,166 @@ row.names(risk_variable_clustering_data) <- risk_variable_clustering_data$partic
 risk_variable_clustering_data <- risk_variable_clustering_data %>%
   dplyr::select(-participant_id)
 str(risk_variable_clustering_data)
+
 ```
+
+```{r}
+
+# Define variables for clustering
+cluster_vars <- c(
+  "mh_p_cbcl__dsm__dep_tscore",
+  "ACE_index_sum_score", 
+  "sds_total",
+  "mh_p_cbcl__dsm__anx_tscore",
+  "mh_p_cbcl__synd__attn_tscore",
+  "family_history_depression"
+)
+
+# Prepare data for clustering
+cluster_data <- risk_variable_data %>%
+  dplyr::select(participant_id, all_of(cluster_vars)) %>%
+  drop_na()  # Remove rows with any missing values
+
+# Set subject IDs as row names
+row.names(cluster_data) <- cluster_data$participant_id
+
+# Check data structure
+str(cluster_data[, -1])  # Exclude participant_id
+summary(cluster_data[, -1])
+
+# Remove participant ID 
+cluster_data <- cluster_data[,-1]
+
+# Identify variable types for k-prototypes
+# Assuming family_history_depression is categorical (0/1 or factor)
+# and the rest are continuous
+continuous_vars <- c(
+  "mh_p_cbcl__dsm__dep_tscore",
+  "ACE_index_sum_score", 
+  "sds_total",
+  "mh_p_cbcl__dsm__anx_tscore",
+  "mh_p_cbcl__synd__attn_tscore"
+)
+
+categorical_vars <- c("family_history_depression")
+
+# Ensure categorical variables are factors
+cluster_data <- cluster_data %>%
+  mutate(family_history_depression = as.factor(family_history_depression))
+
+# Min-max scale continuous variables (0 to 1 range)
+scale_minmax <- function(x) {
+  (x - min(x, na.rm = TRUE)) / (max(x, na.rm = TRUE) - min(x, na.rm = TRUE))
+}
+
+# Apply min-max scaling to continuous variables
+cluster_data_scaled <- cluster_data %>%
+  mutate(
+    across(all_of(continuous_vars), scale_minmax, .names = "{.col}")
+  )
+
+# Run k-prototypes clustering with k=2
+set.seed(123)  # For reproducibility
+kprot_result <- kproto(
+  x = cluster_data,
+  k = 3,
+  lambda = NULL,  # Let algorithm determine lambda automatically
+  nstart = 10,  # Multiple random starts for stability
+  max.iter = 100,
+  verbose = TRUE
+)
+
+# Add cluster assignments to original data
+cluster_data$cluster <- as.factor(kprot_result$cluster)
+
+# Basic cluster summary
+table(cluster_data$cluster)
+
+# Cluster centers/prototypes
+print("Cluster Centers:")
+kprot_result$centers
+
+# Within-cluster sum of squares
+print(paste("Total within-cluster sum of squares:", round(kprot_result$tot.withinss, 2)))
+
+# Cluster validation metrics
+cluster_stats <- cluster.stats(
+  d = daisy(cluster_data[, cluster_vars], metric = "gower"),
+  clustering = kprot_result$cluster
+)
+
+print(paste("Average silhouette width:", round(cluster_stats$avg.silwidth, 3)))
+print(paste("Dunn index:", round(cluster_stats$dunn, 3)))
+
+# Visualize clusters - continuous variables
+continuous_data <- cluster_data %>% 
+  dplyr::select(all_of(continuous_vars), cluster)
+
+# Pairwise scatter plot matrix
+jitter_points <- function(data, mapping, ...) {
+  ggplot(data = data, mapping = mapping) +
+    geom_jitter(width = 0.2, height = 0.2, size = 0.75, alpha = 0.6, ...)
+}
+p1 <- ggpairs(
+  continuous_data,
+  mapping = aes(color = cluster, alpha = 0.6),
+  upper = "blank",
+      lower = list(continuous = jitter_points),
+      diag = list(continuous = wrap("densityDiag", alpha = 0.5))
+) +
+  labs(title = "K-Prototypes Clusters: Continuous Variables") +
+  theme(
+        strip.text = element_text(size = 6),
+        axis.text = element_text(size = 5),
+        plot.title = element_text(hjust = 0.5, face = "bold"))
+
+print(p1)
+
+# Boxplots for continuous variables by cluster
+continuous_long <- cluster_data %>%
+  dplyr::select(all_of(continuous_vars), cluster) %>%
+  pivot_longer(cols = all_of(continuous_vars), 
+               names_to = "variable", 
+               values_to = "value")
+
+p2 <- ggplot(continuous_long, aes(x = cluster, y = value, fill = cluster)) +
+  geom_boxplot(alpha = 0.7) +
+  facet_wrap(~variable, scales = "free_y") +
+  labs(title = "Continuous Variables by Cluster",
+       x = "Cluster", y = "Value") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+print(p2)
+
+# Bar plot for categorical variable by cluster
+p3 <- ggplot(cluster_data, aes(x = cluster, fill = family_history_depression)) +
+  geom_bar(position = "fill") +
+  labs(title = "Family History Depression by Cluster",
+       x = "Cluster", y = "Proportion",
+       fill = "Family History\nDepression") +
+  theme_minimal()
+
+print(p3)
+
+# Cluster profiling table
+cluster_profile <- cluster_data %>%
+  group_by(cluster) %>%
+  summarise(
+    n = n(),
+    mean_depression = mean(mh_p_cbcl__dsm__dep_tscore, na.rm = TRUE),
+    mean_ACE = mean(ACE_index_sum_score, na.rm = TRUE),
+    mean_sds = mean(sds_total, na.rm = TRUE),
+    mean_anxiety = mean(mh_p_cbcl__dsm__anx_tscore, na.rm = TRUE),
+    mean_attention = mean(mh_p_cbcl__synd__attn_tscore, na.rm = TRUE),
+    prop_fam_hist_dep = mean(as.numeric(family_history_depression) - 1, na.rm = TRUE),
+    .groups = 'drop'
+  )
+
+print("Cluster Profiles:")
+print(cluster_profile)
+
+```
+
+
 
