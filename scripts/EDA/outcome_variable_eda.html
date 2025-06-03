@@ -11,7 +11,7 @@
 
 <meta name="author" content="Sam A. Sievertsen" />
 
-<meta name="date" content="2025-05-26" />
+<meta name="date" content="2025-06-03" />
 
 <title>Mood Disorder &amp; Suicidality Outcome Variable EDA</title>
 
@@ -577,7 +577,7 @@ display: none;
 <h1 class="title toc-ignore">Mood Disorder &amp; Suicidality Outcome
 Variable EDA</h1>
 <h4 class="author">Sam A. Sievertsen</h4>
-<h4 class="date">2025-05-26</h4>
+<h4 class="date">2025-06-03</h4>
 
 </div>
 
@@ -615,30 +615,30 @@ process:</p>
 </thead>
 <tbody>
 <tr class="odd">
-<td><strong>1 – Define raw KSADS™ columns</strong></td>
+<td><strong>1 - Define raw KSADS™ columns</strong></td>
 <td>For every outcome (passive/active suicidal ideation, suicide
 attempt, NSSI, Bipolar I, Bipolar II, Any-BSD) we list all relevant
 parent- and youth-report “current” and “past” diagnostic flags.</td>
 </tr>
 <tr class="even">
-<td><strong>2 – Create binary variables</strong></td>
+<td><strong>2 - Create binary variables</strong></td>
 <td>Using <code>dplyr::case_when()</code> we mark a variable as 1 if any
 constituent flag = 1, 0 if at least one flag = 0 but none are 1, and NA
 only when every constituent column is missing. guarantees NA only when
 true data absence, not when zeros are present</td>
 </tr>
 <tr class="odd">
-<td><strong>3 – Define depression qualifiers</strong></td>
+<td><strong>3 - Define depression qualifiers</strong></td>
 <td>Collect all parent + youth Major Depressive Disorder and Persistent
 Depressive Disorder (current, past, partial-remission) flags</td>
 </tr>
 <tr class="even">
-<td><strong>4 – Identify “past mania/hypomania only” flags</strong></td>
+<td><strong>4 - Identify “past mania/hypomania only” flags</strong></td>
 <td><code>bd1_past_mania_vars</code> (BD-I recent past manic) and
 <code>bd2_past_mania_vars</code> (BD-II recent past hypomanic)</td>
 </tr>
 <tr class="odd">
-<td><strong>5 – Rescore Bipolar I &amp; II at baseline (ses-00A) and
+<td><strong>5 - Rescore Bipolar I &amp; II at baseline (ses-00A) and
 2-year (ses-02A)</strong></td>
 <td>If a row shows past manic/hypomanic episode and the youth has any
 depressive-disorder flag → keep diagnosis = 1. If past manic/hypomanic
@@ -680,29 +680,29 @@ structure needed for survival and mixed-effects models.</p>
 </thead>
 <tbody>
 <tr class="odd">
-<td><strong>1 – Specify columns</strong></td>
+<td><strong>1 - Specify columns</strong></td>
 <td>Identify the categorical diagnostic outcomes
 (<code>bipolar_I</code>, <code>bipolar_II</code>, etc.) and a small set
 of continuous CBCL scores whose completeness we want to inspect at the
 4-year visit</td>
 </tr>
 <tr class="even">
-<td><strong>2 – Build helper functions</strong></td>
+<td><strong>2 - Build helper functions</strong></td>
 <td>Two small functions compute: <strong><code>n_non_na</code></strong>
-– how many rows have a usable value (non-missing, non-empty).
-<strong><code>percent_non_na</code></strong> – percent of the sample
-that is non-missing. <strong><code>range_or_unique</code></strong> –
-either the min–max range (continuous) or the set of unique values
+- how many rows have a usable value (non-missing, non-empty).
+<strong><code>percent_non_na</code></strong> - percent of the sample
+that is non-missing. <strong><code>range_or_unique</code></strong> -
+either the min-max range (continuous) or the set of unique values
 present (categorical)</td>
 </tr>
 <tr class="odd">
-<td><strong>3 – Apply functions</strong></td>
+<td><strong>3 - Apply functions</strong></td>
 <td><code>lapply()</code> runs the helper across every categorical and
 continuous column, then collapses the results into one tidy
 data-frame</td>
 </tr>
 <tr class="even">
-<td><strong>4 – Display results</strong></td>
+<td><strong>4 - Display results</strong></td>
 <td>A <code>kable()</code> table prints, showing for each variable: how
 many 4-year cases are usable, what proportion of the cohort that
 represents, and either the value range (CBCL T-scores) or the actual
@@ -714,7 +714,7 @@ categories present (0/1 for diagnoses)</td>
 <ul>
 <li><p>Quickly spot variables with excessive missingness (e.g., 70%
 complete) before they enter survival or mixed-effects models</p></li>
-<li><p>Ensure CBCL scores are within valid T-score bounds (~20–80) and
+<li><p>Ensure CBCL scores are within valid T-score bounds (~20-80) and
 that binary outcomes only contain 0/1</p></li>
 </ul>
 <table class="table table-striped table-hover table-condensed table-responsive" style="color: black; margin-left: auto; margin-right: auto;">
@@ -909,20 +909,20 @@ Data</h2>
 </thead>
 <tbody>
 <tr class="odd">
-<td><strong>1 – Gather continuous outcomes</strong></td>
+<td><strong>1 - Gather continuous outcomes</strong></td>
 <td>Select the four CBCL T-score variables from the trimmed data and
 pivot them into long format (<code>Variable</code>,
 <code>Value</code>)</td>
 </tr>
 <tr class="even">
-<td><strong>2 – Draw faceted box-plots</strong></td>
+<td><strong>2 - Draw faceted box-plots</strong></td>
 <td><code>ggplot2</code> generates a separate box-plot for each T-score,
 showing the median, IQR, whiskers (1.5×IQR), and any points beyond as
 potential outliers. Faceting keeps y-scales free so each distribution is
 shown in its own natural range</td>
 </tr>
 <tr class="odd">
-<td><strong>3 – Visual inspection</strong></td>
+<td><strong>3 - Visual inspection</strong></td>
 <td>The resulting panel lets you quickly spot: extreme low/high T-scores
 (data entry issues?) skew/heavy-tail distributions that might influence
 clustering or regression</td>
@@ -4111,6 +4111,1513 @@ exhibit noticeable skew &amp; kurtosis, and the CBCL aggression problem
 scale results will need to be interpreted with caution/re-evaluated
 during modeling as described in section 3 above, no other problems are
 not noted herein.</p>
+</div>
+<div id="distribution-of-past-only-vs.-current-diagnoses-by-timepoint" class="section level2">
+<h2>5. Distribution of Past-Only vs. Current Diagnoses by Timepoint</h2>
+<p>In this section, we split each bipolar diagnosis (and the combined
+“Any BSD” flag) into two mutually exclusive categories:</p>
+<ol style="list-style-type: decimal">
+<li><p>Current - youth who meet criteria for a manic/hypomanic or
+depressive episode at that assessment wave.</p></li>
+<li><p>Past‐only - youth who endorse a recent past episode
+(mania/hypomania or “unspecified” bipolar) but do not currently meet
+criteria for a mood episode</p></li>
+</ol>
+<p>By tabulating both raw counts and percentages of “current” versus
+“past‐only” cases at each session, we can see how much of our baseline
+and follow-up prevalence is driven by active illness versus residual
+history. This helps contextualize any inflated “Any BSD” rates at early
+waves and ensures we understand whether “past‐only” cases drop out of
+the bipolar spectrum once they no longer meet full criteria.</p>
+<table class="table" style="color: black; width: auto !important; margin-left: auto; margin-right: auto;">
+<caption>
+Counts &amp; Percentages of Current vs. Past‐Only Diagnoses by Session
+</caption>
+<thead>
+<tr>
+<th style="text-align:left;">
+Session
+</th>
+<th style="text-align:left;">
+Diagnosis
+</th>
+<th style="text-align:left;">
+Timing
+</th>
+<th style="text-align:right;">
+N
+</th>
+<th style="text-align:right;">
+Total N
+</th>
+<th style="text-align:right;">
+Percent
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left;">
+ses-00A
+</td>
+<td style="text-align:left;">
+any_bsd
+</td>
+<td style="text-align:left;">
+current
+</td>
+<td style="text-align:right;">
+234
+</td>
+<td style="text-align:right;">
+11878
+</td>
+<td style="text-align:right;">
+2.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-01A
+</td>
+<td style="text-align:left;">
+any_bsd
+</td>
+<td style="text-align:left;">
+current
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+11877
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-02A
+</td>
+<td style="text-align:left;">
+any_bsd
+</td>
+<td style="text-align:left;">
+current
+</td>
+<td style="text-align:right;">
+126
+</td>
+<td style="text-align:right;">
+11797
+</td>
+<td style="text-align:right;">
+1.1
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-03A
+</td>
+<td style="text-align:left;">
+any_bsd
+</td>
+<td style="text-align:left;">
+current
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+10513
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-04A
+</td>
+<td style="text-align:left;">
+any_bsd
+</td>
+<td style="text-align:left;">
+current
+</td>
+<td style="text-align:right;">
+53
+</td>
+<td style="text-align:right;">
+9799
+</td>
+<td style="text-align:right;">
+0.5
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-05A
+</td>
+<td style="text-align:left;">
+any_bsd
+</td>
+<td style="text-align:left;">
+current
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+9044
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-06A
+</td>
+<td style="text-align:left;">
+any_bsd
+</td>
+<td style="text-align:left;">
+current
+</td>
+<td style="text-align:right;">
+57
+</td>
+<td style="text-align:right;">
+9525
+</td>
+<td style="text-align:right;">
+0.6
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-07A
+</td>
+<td style="text-align:left;">
+any_bsd
+</td>
+<td style="text-align:left;">
+current
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+7182
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-08A
+</td>
+<td style="text-align:left;">
+any_bsd
+</td>
+<td style="text-align:left;">
+current
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+1763
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-00A
+</td>
+<td style="text-align:left;">
+any_bsd
+</td>
+<td style="text-align:left;">
+pastonly
+</td>
+<td style="text-align:right;">
+1563
+</td>
+<td style="text-align:right;">
+11878
+</td>
+<td style="text-align:right;">
+13.2
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-01A
+</td>
+<td style="text-align:left;">
+any_bsd
+</td>
+<td style="text-align:left;">
+pastonly
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+11877
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-02A
+</td>
+<td style="text-align:left;">
+any_bsd
+</td>
+<td style="text-align:left;">
+pastonly
+</td>
+<td style="text-align:right;">
+844
+</td>
+<td style="text-align:right;">
+11797
+</td>
+<td style="text-align:right;">
+7.2
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-03A
+</td>
+<td style="text-align:left;">
+any_bsd
+</td>
+<td style="text-align:left;">
+pastonly
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+10513
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-04A
+</td>
+<td style="text-align:left;">
+any_bsd
+</td>
+<td style="text-align:left;">
+pastonly
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+9799
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-05A
+</td>
+<td style="text-align:left;">
+any_bsd
+</td>
+<td style="text-align:left;">
+pastonly
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+9044
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-06A
+</td>
+<td style="text-align:left;">
+any_bsd
+</td>
+<td style="text-align:left;">
+pastonly
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+9525
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-07A
+</td>
+<td style="text-align:left;">
+any_bsd
+</td>
+<td style="text-align:left;">
+pastonly
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+7182
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-08A
+</td>
+<td style="text-align:left;">
+any_bsd
+</td>
+<td style="text-align:left;">
+pastonly
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+1763
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-00A
+</td>
+<td style="text-align:left;">
+bipolar_I
+</td>
+<td style="text-align:left;">
+current
+</td>
+<td style="text-align:right;">
+80
+</td>
+<td style="text-align:right;">
+11878
+</td>
+<td style="text-align:right;">
+0.7
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-01A
+</td>
+<td style="text-align:left;">
+bipolar_I
+</td>
+<td style="text-align:left;">
+current
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+11877
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-02A
+</td>
+<td style="text-align:left;">
+bipolar_I
+</td>
+<td style="text-align:left;">
+current
+</td>
+<td style="text-align:right;">
+43
+</td>
+<td style="text-align:right;">
+11797
+</td>
+<td style="text-align:right;">
+0.4
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-03A
+</td>
+<td style="text-align:left;">
+bipolar_I
+</td>
+<td style="text-align:left;">
+current
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+10513
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-04A
+</td>
+<td style="text-align:left;">
+bipolar_I
+</td>
+<td style="text-align:left;">
+current
+</td>
+<td style="text-align:right;">
+46
+</td>
+<td style="text-align:right;">
+9799
+</td>
+<td style="text-align:right;">
+0.5
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-05A
+</td>
+<td style="text-align:left;">
+bipolar_I
+</td>
+<td style="text-align:left;">
+current
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+9044
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-06A
+</td>
+<td style="text-align:left;">
+bipolar_I
+</td>
+<td style="text-align:left;">
+current
+</td>
+<td style="text-align:right;">
+50
+</td>
+<td style="text-align:right;">
+9525
+</td>
+<td style="text-align:right;">
+0.5
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-07A
+</td>
+<td style="text-align:left;">
+bipolar_I
+</td>
+<td style="text-align:left;">
+current
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+7182
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-08A
+</td>
+<td style="text-align:left;">
+bipolar_I
+</td>
+<td style="text-align:left;">
+current
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+1763
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-00A
+</td>
+<td style="text-align:left;">
+bipolar_I
+</td>
+<td style="text-align:left;">
+pastonly
+</td>
+<td style="text-align:right;">
+645
+</td>
+<td style="text-align:right;">
+11878
+</td>
+<td style="text-align:right;">
+5.4
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-01A
+</td>
+<td style="text-align:left;">
+bipolar_I
+</td>
+<td style="text-align:left;">
+pastonly
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+11877
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-02A
+</td>
+<td style="text-align:left;">
+bipolar_I
+</td>
+<td style="text-align:left;">
+pastonly
+</td>
+<td style="text-align:right;">
+413
+</td>
+<td style="text-align:right;">
+11797
+</td>
+<td style="text-align:right;">
+3.5
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-03A
+</td>
+<td style="text-align:left;">
+bipolar_I
+</td>
+<td style="text-align:left;">
+pastonly
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+10513
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-04A
+</td>
+<td style="text-align:left;">
+bipolar_I
+</td>
+<td style="text-align:left;">
+pastonly
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+9799
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-05A
+</td>
+<td style="text-align:left;">
+bipolar_I
+</td>
+<td style="text-align:left;">
+pastonly
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+9044
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-06A
+</td>
+<td style="text-align:left;">
+bipolar_I
+</td>
+<td style="text-align:left;">
+pastonly
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+9525
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-07A
+</td>
+<td style="text-align:left;">
+bipolar_I
+</td>
+<td style="text-align:left;">
+pastonly
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+7182
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-08A
+</td>
+<td style="text-align:left;">
+bipolar_I
+</td>
+<td style="text-align:left;">
+pastonly
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+1763
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-00A
+</td>
+<td style="text-align:left;">
+bipolar_II
+</td>
+<td style="text-align:left;">
+current
+</td>
+<td style="text-align:right;">
+38
+</td>
+<td style="text-align:right;">
+11878
+</td>
+<td style="text-align:right;">
+0.3
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-01A
+</td>
+<td style="text-align:left;">
+bipolar_II
+</td>
+<td style="text-align:left;">
+current
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+11877
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-02A
+</td>
+<td style="text-align:left;">
+bipolar_II
+</td>
+<td style="text-align:left;">
+current
+</td>
+<td style="text-align:right;">
+24
+</td>
+<td style="text-align:right;">
+11797
+</td>
+<td style="text-align:right;">
+0.2
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-03A
+</td>
+<td style="text-align:left;">
+bipolar_II
+</td>
+<td style="text-align:left;">
+current
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+10513
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-04A
+</td>
+<td style="text-align:left;">
+bipolar_II
+</td>
+<td style="text-align:left;">
+current
+</td>
+<td style="text-align:right;">
+7
+</td>
+<td style="text-align:right;">
+9799
+</td>
+<td style="text-align:right;">
+0.1
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-05A
+</td>
+<td style="text-align:left;">
+bipolar_II
+</td>
+<td style="text-align:left;">
+current
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+9044
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-06A
+</td>
+<td style="text-align:left;">
+bipolar_II
+</td>
+<td style="text-align:left;">
+current
+</td>
+<td style="text-align:right;">
+7
+</td>
+<td style="text-align:right;">
+9525
+</td>
+<td style="text-align:right;">
+0.1
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-07A
+</td>
+<td style="text-align:left;">
+bipolar_II
+</td>
+<td style="text-align:left;">
+current
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+7182
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-08A
+</td>
+<td style="text-align:left;">
+bipolar_II
+</td>
+<td style="text-align:left;">
+current
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+1763
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-00A
+</td>
+<td style="text-align:left;">
+bipolar_II
+</td>
+<td style="text-align:left;">
+pastonly
+</td>
+<td style="text-align:right;">
+224
+</td>
+<td style="text-align:right;">
+11878
+</td>
+<td style="text-align:right;">
+1.9
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-01A
+</td>
+<td style="text-align:left;">
+bipolar_II
+</td>
+<td style="text-align:left;">
+pastonly
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+11877
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-02A
+</td>
+<td style="text-align:left;">
+bipolar_II
+</td>
+<td style="text-align:left;">
+pastonly
+</td>
+<td style="text-align:right;">
+157
+</td>
+<td style="text-align:right;">
+11797
+</td>
+<td style="text-align:right;">
+1.3
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-03A
+</td>
+<td style="text-align:left;">
+bipolar_II
+</td>
+<td style="text-align:left;">
+pastonly
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+10513
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-04A
+</td>
+<td style="text-align:left;">
+bipolar_II
+</td>
+<td style="text-align:left;">
+pastonly
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+9799
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-05A
+</td>
+<td style="text-align:left;">
+bipolar_II
+</td>
+<td style="text-align:left;">
+pastonly
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+9044
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-06A
+</td>
+<td style="text-align:left;">
+bipolar_II
+</td>
+<td style="text-align:left;">
+pastonly
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+9525
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-07A
+</td>
+<td style="text-align:left;">
+bipolar_II
+</td>
+<td style="text-align:left;">
+pastonly
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+7182
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+ses-08A
+</td>
+<td style="text-align:left;">
+bipolar_II
+</td>
+<td style="text-align:left;">
+pastonly
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+1763
+</td>
+<td style="text-align:right;">
+0.0
+</td>
+</tr>
+</tbody>
+</table>
+<p>In Section 5, we see that both “Any BSD” and individual bipolar
+diagnoses show their highest prevalence at baseline (ses-00A), with a
+substantial proportion of cases being “past-only.” For example, at
+ses-00A, 2.0% of youth (234/11,878) currently met BSD criteria and 13.2%
+(1 563/11,878) had a past-only BSD history. By the 2-year follow-up
+(ses-02A), “Any BSD” current prevalence fell to 1.1% (126/11,797) and
+past-only to 7.2% (844/11,797). From ses-04A onward, no youth met
+criteria for past-only BSD (0%), and current BSD hovered around
+0.5-0.6%.</p>
+<p>A similar pattern holds for Bipolar I: baseline current = 0.7%
+(80/11,878), past-only = 5.4% (645/11,878); at 2 years, current = 0.4%
+(43/11,797), past-only = 3.5 % (413/11,797); by ses-04A and later, all
+“past-only” flags drop to zero, while current rates remain ≈ 0.5%.
+Bipolar II follows the same trajectory but at lower absolute rates
+(baseline current = 0.3%, past-only = 1.9%; 2 years current = 0.2%,
+past-only = 1.3%; zero past-only thereafter, current ≈ 0.1%).</p>
+<p>Note that odd-numbered follow-ups (ses-01A, ses-03A, ses-05A,
+ses-07A, ses-08A) have no diagnostic data, so all counts are zero at
+those waves. Overall, lifetime (past-only) flags decline to zero by
+ses-04A (at least in part due to the shift in KSADS-COMP version), and
+current prevalence remains low (&lt; 1%) at later waves.</p>
+</div>
+<div id="transitions-who-drops-out-vs.-who-converts-in-at-adjacent-timepoints" class="section level2">
+<h2>6. Transitions: Who “Drops Out” vs. Who “Converts In” at Adjacent
+Timepoints</h2>
+<p>Here we examine longitudinal transitions in each bipolar diagnosis
+(and Any BSD) between consecutive assessment waves. Specifically, we
+identify:</p>
+<ul>
+<li><p>Dropped Out: Youth who had the diagnosis at time <em>t</em> but
+no longer meet criteria at time <em>t+1</em></p></li>
+<li><p>New On: Youth who did not have the diagnosis at time <em>t</em>
+but do meet criteria at time <em>t+1</em></p></li>
+<li><p>Still Has / Still No: Youth who either continue to have or
+continue not to have the diagnosis across the two waves</p></li>
+</ul>
+<p>By tabulating raw counts and percentages for each “From → To” pair
+(e.g., ses-00A → ses-02A), we can quantify how many cases resolve or
+emerge over time. This helps clarify the stability versus fluctuation of
+bipolar diagnoses (and combined BSD) across our follow-up waves</p>
+<table class="table" style="color: black; width: auto !important; margin-left: auto; margin-right: auto;">
+<caption>
+Transition Counts &amp; Percentages Between Consecutive Sessions
+</caption>
+<thead>
+<tr>
+<th style="text-align:left;">
+Diagnosis
+</th>
+<th style="text-align:left;">
+From
+</th>
+<th style="text-align:left;">
+To
+</th>
+<th style="text-align:right;">
+N Dropped
+</th>
+<th style="text-align:right;">
+% dropped (of Time1)
+</th>
+<th style="text-align:right;">
+N NewOn
+</th>
+<th style="text-align:right;">
+% new (of Time2)
+</th>
+<th style="text-align:right;">
+Still Has
+</th>
+<th style="text-align:right;">
+Still No
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:left;">
+bipolar_I
+</td>
+<td style="text-align:left;">
+ses-00A
+</td>
+<td style="text-align:left;">
+ses-02A
+</td>
+<td style="text-align:right;">
+100
+</td>
+<td style="text-align:right;">
+95.2
+</td>
+<td style="text-align:right;">
+64
+</td>
+<td style="text-align:right;">
+92.8
+</td>
+<td style="text-align:right;">
+5
+</td>
+<td style="text-align:right;">
+11709
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+bipolar_I
+</td>
+<td style="text-align:left;">
+ses-02A
+</td>
+<td style="text-align:left;">
+ses-04A
+</td>
+<td style="text-align:right;">
+65
+</td>
+<td style="text-align:right;">
+94.2
+</td>
+<td style="text-align:right;">
+129
+</td>
+<td style="text-align:right;">
+97.0
+</td>
+<td style="text-align:right;">
+4
+</td>
+<td style="text-align:right;">
+11680
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+bipolar_I
+</td>
+<td style="text-align:left;">
+ses-04A
+</td>
+<td style="text-align:left;">
+ses-06A
+</td>
+<td style="text-align:right;">
+127
+</td>
+<td style="text-align:right;">
+95.5
+</td>
+<td style="text-align:right;">
+134
+</td>
+<td style="text-align:right;">
+95.7
+</td>
+<td style="text-align:right;">
+6
+</td>
+<td style="text-align:right;">
+11611
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+bipolar_II
+</td>
+<td style="text-align:left;">
+ses-00A
+</td>
+<td style="text-align:left;">
+ses-02A
+</td>
+<td style="text-align:right;">
+31
+</td>
+<td style="text-align:right;">
+96.9
+</td>
+<td style="text-align:right;">
+28
+</td>
+<td style="text-align:right;">
+96.6
+</td>
+<td style="text-align:right;">
+1
+</td>
+<td style="text-align:right;">
+11818
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+bipolar_II
+</td>
+<td style="text-align:left;">
+ses-02A
+</td>
+<td style="text-align:left;">
+ses-04A
+</td>
+<td style="text-align:right;">
+29
+</td>
+<td style="text-align:right;">
+100.0
+</td>
+<td style="text-align:right;">
+45
+</td>
+<td style="text-align:right;">
+100.0
+</td>
+<td style="text-align:right;">
+0
+</td>
+<td style="text-align:right;">
+11804
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+bipolar_II
+</td>
+<td style="text-align:left;">
+ses-04A
+</td>
+<td style="text-align:left;">
+ses-06A
+</td>
+<td style="text-align:right;">
+43
+</td>
+<td style="text-align:right;">
+95.6
+</td>
+<td style="text-align:right;">
+47
+</td>
+<td style="text-align:right;">
+95.9
+</td>
+<td style="text-align:right;">
+2
+</td>
+<td style="text-align:right;">
+11786
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+any_bsd
+</td>
+<td style="text-align:left;">
+ses-00A
+</td>
+<td style="text-align:left;">
+ses-02A
+</td>
+<td style="text-align:right;">
+1477
+</td>
+<td style="text-align:right;">
+82.2
+</td>
+<td style="text-align:right;">
+650
+</td>
+<td style="text-align:right;">
+67.0
+</td>
+<td style="text-align:right;">
+320
+</td>
+<td style="text-align:right;">
+9431
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+any_bsd
+</td>
+<td style="text-align:left;">
+ses-02A
+</td>
+<td style="text-align:left;">
+ses-04A
+</td>
+<td style="text-align:right;">
+911
+</td>
+<td style="text-align:right;">
+93.9
+</td>
+<td style="text-align:right;">
+235
+</td>
+<td style="text-align:right;">
+79.9
+</td>
+<td style="text-align:right;">
+59
+</td>
+<td style="text-align:right;">
+10673
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+any_bsd
+</td>
+<td style="text-align:left;">
+ses-04A
+</td>
+<td style="text-align:left;">
+ses-06A
+</td>
+<td style="text-align:right;">
+255
+</td>
+<td style="text-align:right;">
+86.7
+</td>
+<td style="text-align:right;">
+306
+</td>
+<td style="text-align:right;">
+88.7
+</td>
+<td style="text-align:right;">
+39
+</td>
+<td style="text-align:right;">
+11278
+</td>
+</tr>
+</tbody>
+</table>
+<p>Between each pair of available diagnostic waves, nearly all youth who
+met criteria at the earlier timepoint no longer met criteria at the next
+(“Dropped”—&gt;~95% for Bipolar I/II, ~82–94% for Any BSD), and most of
+those diagnosed at the later timepoint were incident cases
+(“NewOn”—&gt;~68–97% of those with a diagnosis at time t+1 did not have
+it at time t). For example:</p>
+<ul>
+<li><p>Bipolar I:</p>
+<ul>
+<li><p>ses-00A→ses-02A: 100/105 cases (95.2%) dropped, 64/69 cases at
+ses-02A (92.8%) were new onset, only 5 remained stable.</p></li>
+<li><p>ses-02A→ses-04A: 65/69 (94.2%) dropped; 129/133 (97.0%) of
+ses-04A cases were new.</p></li>
+<li><p>ses-04A→ses-06A: 127/133 (95.5%) dropped; 134/140 (95.7%) of
+ses-06A cases were new.</p></li>
+</ul></li>
+<li><p>Bipolar II:</p>
+<ul>
+<li><p>ses-00A→ses-02A: 31/32 (96.9%) dropped; 28/29 (96.6%) of ses-02A
+cases were new.</p></li>
+<li><p>ses-02A→ses-04A: 29/29 (100%) dropped; 45/45 (100%) of ses-04A
+cases were new (no one remained).</p></li>
+<li><p>ses-04A→ses-06A: 43/45 (95.6%) dropped; 47/49 (95.9%) of ses-06A
+cases were new.</p></li>
+</ul></li>
+<li><p>Any BSD:</p>
+<ul>
+<li><p>ses-00A→ses-02A: 1 477/1 797 (82.2%) dropped; 650/970 (67.0%) of
+ses-02A cases were new, and 320 remained stable.</p></li>
+<li><p>ses-02A→ses-04A: 911/970 (93.9%) dropped; 235/294 (79.9%) of
+ses-04A cases were new, and 59 remained stable.</p></li>
+<li><p>ses-04A→ses-06A: 255/294 (86.7%) dropped; 306/345 (88.7%) of
+ses-06A cases were new, and 39 remained stable.</p></li>
+</ul></li>
+</ul>
+<p>In sum, very few youth with Bipolar I/II (or Any BSD) remained
+positive across waves: most earlier cases “dropped out,” and the vast
+majority of later cases were new onset. This underscores substantial
+diagnostic turnover rather than persistence across the available
+follow-ups. (No diagnoses were collected in odd-numbered years, so
+transitions are shown only for even-year intervals.)</p>
 </div>
 </div>
 
