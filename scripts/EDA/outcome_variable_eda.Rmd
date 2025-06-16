@@ -36,8 +36,10 @@ library(kableExtra)
 library(dplyr)
 library(tidyr)
 library(ggplot2)
+library(networkD3)
 library(patchwork)
 library(purrr)
+library(htmltools)
 library(moments)
 options(scipen = 999, digits = 8)
 
@@ -62,7 +64,7 @@ This section prepares the data for EDA of outcomes via the following process:
       
 The ABCD Study’s KSADS-COMP v1.0 over-diagnoses Lifetime Bipolar-I by allowing a *single* past manic flag to qualify. [Barch et al. (2021)](https://doi.org/10.1016/j.dcn.2021.101031) note:
       
-      > “The computerized KSADS 1.0 shows **higher than expected rates** of caregiver- and youth-reported *past manic episodes* (e.g., caregiver-reported prevalence of Bipolar I Disorder, most recent past episode manic is 2.6 %). We recommend rescoring such cases so that the youth must also meet criteria for a current or past depressive disorder to satisfy diagnostic criteria.”
+      > “The computerized KSADS 1.0 shows **higher than expected rates** of caregiver- and youth-reported *past manic episodes* (e.g., caregiver-reported prevalence of Bipolar I Disorder, most recent past episode manic is 2.6%). We recommend rescoring such cases so that the youth must also meet criteria for a current or past depressive disorder to satisfy diagnostic criteria.”
     
 Following this recommendation we:
       
@@ -80,7 +82,7 @@ This likely yields more realistic prevalence estimates while keeping current-epi
 #1.1 Clean the KSADS-COMP Diagnosis Data
 #1.11 Retain only columns of interest
 raw_data_trimmed <- raw_data %>% 
-  dplyr::select(c(participant_id, session_id, mh_p_ksads__suic__pass__past_dx, mh_p_ksads__suic__actv__past_dx, mh_p_ksads__suic__actv__mthd__past_dx, mh_p_ksads__suic__actv__int__past_dx, mh_p_ksads__suic__actv__plan__past_dx, mh_p_ksads__suic__pass__pres_dx, mh_p_ksads__suic__actv__pres_dx, mh_p_ksads__suic__actv__mthd__pres_dx, mh_p_ksads__suic__actv__int__pres_dx, mh_p_ksads__suic__actv__plan__pres_dx, mh_y_ksads__suic__pass__past_dx, mh_y_ksads__suic__actv__past_dx, mh_y_ksads__suic__actv__mthd__past_dx, mh_y_ksads__suic__actv__int__past_dx, mh_y_ksads__suic__actv__plan__past_dx, mh_y_ksads__suic__pass__pres_dx, mh_y_ksads__suic__actv__pres_dx, mh_y_ksads__suic__actv__mthd__pres_dx, mh_y_ksads__suic__actv__int__pres_dx, mh_y_ksads__suic__actv__plan__pres_dx, mh_p_ksads__suic__atmpt__intr__past_dx, mh_p_ksads__suic__atmpt__abrt__past_dx, mh_p_ksads__suic__atmpt__past_dx, mh_p_ksads__suic__atmpt__intr__pres_dx, mh_p_ksads__suic__atmpt__abrt__pres_dx, mh_p_ksads__suic__atmpt__pres_dx, mh_y_ksads__suic__atmpt__intr__past_dx, mh_y_ksads__suic__atmpt__abrt__past_dx, mh_y_ksads__suic__atmpt__past_dx, mh_y_ksads__suic__atmpt__intr__pres_dx, mh_y_ksads__suic__atmpt__abrt__pres_dx, mh_y_ksads__suic__atmpt__pres_dx, mh_p_ksads__suic__slfinj__nosi__pres_dx, mh_p_ksads__suic__slfinj__nosi__past_dx, mh_y_ksads__suic__slfinj__nosi__pres_dx, mh_y_ksads__suic__slfinj__nosi__past_dx, mh_p_ksads__bpd__bpd1__curdep__partrem_dx, mh_p_ksads__bpd__bpd1__rcnt__manicmix__pres_dx, mh_p_ksads__bpd__bpd1__curmanic__pres_dx, mh_p_ksads__bpd__bpd1__curdep__pres_dx, mh_y_ksads__bpd__bpd1__curmanic__pres_dx, mh_y_ksads__bpd__bpd1__curdep__pres_dx, mh_y_ksads__bpd__bpd1__rcnt__manic__pres_dx, mh_p_ksads__bpd__bpd1__curhypo__pres_dx, mh_p_ksads__bpd__bpd1__rcnt__dep__pres_dx, mh_p_ksads__bpd__bpd1__rcnt__manic__pres_dx, mh_y_ksads__bpd__bpd1__rcnt__dep__pres_dx, mh_y_ksads__bpd__bpd1__curhypo__pres_dx, mh_y_ksads__bpd__bpd1__rcnt__manicmix__pres_dx, mh_y_ksads__bpd__bpd1__curdep__partrem_dx, mh_p_ksads__bpd__bpd2__curhypo__pres_dx, mh_p_ksads__bpd__bpd2__rcnt__hypo__pres_dx, mh_p_ksads__bpd__bpd2__curdep__pres_dx, mh_p_ksads__bpd__bpd2__curdep__partrem_dx, mh_y_ksads__bpd__bpd2__curdep__pres_dx, mh_y_ksads__bpd__bpd2__curdep__partrem_dx, mh_y_ksads__bpd__bpd2__rcnt__hypo__pres_dx, mh_y_ksads__bpd__bpd2__curhypo__pres_dx, mh_p_ksads__bpd__bpd2__rcnt__hypomix__pres_dx, mh_y_ksads__bpd__bpd2__rcnt__hypomix__pres_dx, mh_p_ksads__bpd__bpd2__oth__mindur_dx, mh_p_ksads__bpd__oth__mindur_dx, mh_y_ksads__bpd__bpd2__oth__mindur_dx, mh_y_ksads__bpd__oth__mindur_dx, mh_p_ksads__bpd__unspec__pres_dx, mh_p_ksads__bpd__unspec__past_dx, mh_y_ksads__bpd__unspec__pres_dx, mh_y_ksads__bpd__unspec__past_dx, mh_p_ksads__dep__mdd__partrem_dx, mh_p_ksads__dep__mdd__past_dx, mh_p_ksads__dep__mdd__pres_dx, mh_p_ksads__dep__pdd__oth__pres_dx, mh_p_ksads__dep__pdd__partrem_dx, mh_p_ksads__dep__pdd__past_dx, mh_p_ksads__dep__pdd__pres_dx, mh_y_ksads__dep__mdd__partrem_dx, mh_y_ksads__dep__mdd__past_dx, mh_y_ksads__dep__mdd__pres_dx, mh_y_ksads__dep__pdd__oth__pres_dx, mh_y_ksads__dep__pdd__partrem_dx, mh_y_ksads__dep__pdd__past_dx, mh_y_ksads__dep__pdd__pres_dx, mh_p_cbcl__dsm__dep_tscore, mh_p_cbcl__dsm__dep_nm, mh_p_cbcl__dsm__anx_tscore, mh_p_cbcl__dsm__anx_nm, mh_p_cbcl__synd__attn_tscore, mh_p_cbcl__synd__attn_nm, mh_p_cbcl__synd__aggr_tscore, mh_p_cbcl__synd__aggr_nm))
+  dplyr::select(c(participant_id, session_id, mh_p_ksads__suic__pass__past_dx, mh_p_ksads__suic__actv__past_dx, mh_p_ksads__suic__actv__mthd__past_dx, mh_p_ksads__suic__actv__int__past_dx, mh_p_ksads__suic__actv__plan__past_dx, mh_p_ksads__suic__pass__pres_dx, mh_p_ksads__suic__actv__pres_dx, mh_p_ksads__suic__actv__mthd__pres_dx, mh_p_ksads__suic__actv__int__pres_dx, mh_p_ksads__suic__actv__plan__pres_dx, mh_y_ksads__suic__pass__past_dx, mh_y_ksads__suic__actv__past_dx, mh_y_ksads__suic__actv__mthd__past_dx, mh_y_ksads__suic__actv__int__past_dx, mh_y_ksads__suic__actv__plan__past_dx, mh_y_ksads__suic__pass__pres_dx, mh_y_ksads__suic__actv__pres_dx, mh_y_ksads__suic__actv__mthd__pres_dx, mh_y_ksads__suic__actv__int__pres_dx, mh_y_ksads__suic__actv__plan__pres_dx, mh_p_ksads__suic__atmpt__intr__past_dx, mh_p_ksads__suic__atmpt__abrt__past_dx, mh_p_ksads__suic__atmpt__past_dx, mh_p_ksads__suic__atmpt__intr__pres_dx, mh_p_ksads__suic__atmpt__abrt__pres_dx, mh_p_ksads__suic__atmpt__pres_dx, mh_y_ksads__suic__atmpt__intr__past_dx, mh_y_ksads__suic__atmpt__abrt__past_dx, mh_y_ksads__suic__atmpt__past_dx, mh_y_ksads__suic__atmpt__intr__pres_dx, mh_y_ksads__suic__atmpt__abrt__pres_dx, mh_y_ksads__suic__atmpt__pres_dx, mh_p_ksads__suic__slfinj__nosi__pres_dx, mh_p_ksads__suic__slfinj__nosi__past_dx, mh_y_ksads__suic__slfinj__nosi__pres_dx, mh_y_ksads__suic__slfinj__nosi__past_dx, mh_p_ksads__bpd__bpd1__curdep__partrem_dx, mh_p_ksads__bpd__bpd1__rcnt__manicmix__pres_dx, mh_p_ksads__bpd__bpd1__curmanic__pres_dx, mh_p_ksads__bpd__bpd1__curdep__pres_dx, mh_y_ksads__bpd__bpd1__curmanic__pres_dx, mh_y_ksads__bpd__bpd1__curdep__pres_dx, mh_y_ksads__bpd__bpd1__rcnt__manic__pres_dx, mh_p_ksads__bpd__bpd1__curhypo__pres_dx, mh_p_ksads__bpd__bpd1__rcnt__dep__pres_dx, mh_p_ksads__bpd__bpd1__rcnt__manic__pres_dx, mh_y_ksads__bpd__bpd1__rcnt__dep__pres_dx, mh_y_ksads__bpd__bpd1__curhypo__pres_dx, mh_y_ksads__bpd__bpd1__rcnt__manicmix__pres_dx, mh_y_ksads__bpd__bpd1__curdep__partrem_dx, mh_p_ksads__bpd__bpd2__curhypo__pres_dx, mh_p_ksads__bpd__bpd2__rcnt__hypo__pres_dx, mh_p_ksads__bpd__bpd2__curdep__pres_dx, mh_p_ksads__bpd__bpd2__curdep__partrem_dx, mh_y_ksads__bpd__bpd2__curdep__pres_dx, mh_y_ksads__bpd__bpd2__curdep__partrem_dx, mh_y_ksads__bpd__bpd2__rcnt__hypo__pres_dx, mh_y_ksads__bpd__bpd2__curhypo__pres_dx, mh_p_ksads__bpd__bpd2__rcnt__hypomix__pres_dx, mh_y_ksads__bpd__bpd2__rcnt__hypomix__pres_dx, mh_p_ksads__bpd__bpd2__oth__mindur_dx, mh_p_ksads__bpd__oth__mindur_dx, mh_y_ksads__bpd__bpd2__oth__mindur_dx, mh_y_ksads__bpd__oth__mindur_dx, mh_p_ksads__bpd__unspec__pres_dx, mh_p_ksads__bpd__unspec__past_dx, mh_y_ksads__bpd__unspec__pres_dx, mh_y_ksads__bpd__unspec__past_dx, mh_p_ksads__dep__mdd__partrem_dx, mh_p_ksads__dep__mdd__past_dx, mh_p_ksads__dep__mdd__pres_dx, mh_p_ksads__dep__pdd__oth__pres_dx, mh_p_ksads__dep__pdd__partrem_dx, mh_p_ksads__dep__pdd__past_dx, mh_p_ksads__dep__pdd__pres_dx, mh_y_ksads__dep__mdd__partrem_dx, mh_y_ksads__dep__mdd__past_dx, mh_y_ksads__dep__mdd__pres_dx, mh_y_ksads__dep__pdd__oth__pres_dx, mh_y_ksads__dep__pdd__partrem_dx, mh_y_ksads__dep__pdd__past_dx, mh_y_ksads__dep__pdd__pres_dx, mh_p_cbcl__dsm__dep_tscore, mh_p_cbcl__dsm__dep_nm, mh_p_cbcl__dsm__anx_tscore, mh_p_cbcl__dsm__anx_nm, mh_p_cbcl__synd__attn_tscore, mh_p_cbcl__synd__attn_nm, mh_p_cbcl__synd__aggr_tscore, mh_p_cbcl__synd__aggr_nm, mh_p_gbi_sum))
 
 #1.12 Turn all instances of empty, missing, 555, and 999 to NA; and 888 to 0 in KSADS columns
 raw_data_trimmed <- raw_data_trimmed %>%
@@ -232,64 +234,64 @@ bd2_past_mania_vars <- c(
   "mh_y_ksads__bpd__bpd2__rcnt__hypo__pres_dx"
 )
 
-#2.2 Create binary outcomes according to the plan
+#2.2 Create binary outcomes including any necessary validation steps
 prelim_outcome_data <- raw_data_trimmed %>%
   mutate(
     
     #2.2.1 Suicidal ideation - passive
     si_passive = case_when(
-      rowSums(select(., all_of(si_passive_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
-      rowSums(!is.na(select(., all_of(si_passive_vars)))) == 0 ~ NA_real_,
+      rowSums(dplyr::select(., all_of(si_passive_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(dplyr::select(., all_of(si_passive_vars)))) == 0 ~ NA_real_,
       TRUE ~ 0),
     
     #2.2.2 Suicidal ideation - active
     si_active = case_when(
-      rowSums(select(., all_of(si_active_vars))  == 1, na.rm = TRUE) > 0 ~ 1,
-      rowSums(!is.na(select(., all_of(si_active_vars)))) == 0 ~ NA_real_,
+      rowSums(dplyr::select(., all_of(si_active_vars))  == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(dplyr::select(., all_of(si_active_vars)))) == 0 ~ NA_real_,
       TRUE ~ 0),
     
     #2.2.3 Suicide Attempt
     sa = case_when(
-      rowSums(select(., all_of(sa_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
-      rowSums(!is.na(select(., all_of(sa_vars)))) == 0 ~ NA_real_,
+      rowSums(dplyr::select(., all_of(sa_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(dplyr::select(., all_of(sa_vars)))) == 0 ~ NA_real_,
       TRUE ~ 0),
     
     #2.2.4 Non-Suicidal Self-Injury (NSSI)
     nssi = case_when(
-      rowSums(select(., all_of(nssi_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
-      rowSums(!is.na(select(., all_of(nssi_vars)))) == 0 ~ NA_real_,
+      rowSums(dplyr::select(., all_of(nssi_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(dplyr::select(., all_of(nssi_vars)))) == 0 ~ NA_real_,
       TRUE ~ 0),
     
     #2.2.5 Bipolar I Disorder
     bipolar_I = case_when(
-      rowSums(select(., all_of(bd1_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
-      rowSums(!is.na(select(., all_of(bd1_vars)))) == 0 ~ NA_real_,
+      rowSums(dplyr::select(., all_of(bd1_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(dplyr::select(., all_of(bd1_vars)))) == 0 ~ NA_real_,
       TRUE ~ 0),
     
     #2.2.6 Bipolar II Disorder
     bipolar_II = case_when(
-      rowSums(select(., all_of(bd2_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
-      rowSums(!is.na(select(., all_of(bd2_vars)))) == 0 ~ NA_real_,
+      rowSums(dplyr::select(., all_of(bd2_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(dplyr::select(., all_of(bd2_vars)))) == 0 ~ NA_real_,
       TRUE ~ 0),
     
     #2.2.7 Rescore Bipolar I at baseline & 2-year: past mania requires depression
     bipolar_I = case_when(
       session_id %in% c("ses-00A","ses-02A") &
-        rowSums(select(., all_of(bd1_past_mania_vars)) == 1, na.rm = TRUE) > 0 ~
-          if_else(rowSums(select(., all_of(dep_vars)) == 1, na.rm = TRUE) > 0, 1, 0),
+        rowSums(dplyr::select(., all_of(bd1_past_mania_vars)) == 1, na.rm = TRUE) > 0 ~
+          if_else(rowSums(dplyr::select(., all_of(dep_vars)) == 1, na.rm = TRUE) > 0, 1, 0),
       TRUE ~ bipolar_I),
     
     #2.2.8 Rescore Bipolar II at baseline & 2-year: past hypomania requires depression
     bipolar_II = case_when(
       session_id %in% c("ses-00A","ses-02A") &
-        rowSums(select(., all_of(bd2_past_mania_vars)) == 1, na.rm = TRUE) > 0 ~
-          if_else(rowSums(select(., all_of(dep_vars)) == 1, na.rm = TRUE) > 0, 1, 0),
+        rowSums(dplyr::select(., all_of(bd2_past_mania_vars)) == 1, na.rm = TRUE) > 0 ~
+          if_else(rowSums(dplyr::select(., all_of(dep_vars)) == 1, na.rm = TRUE) > 0, 1, 0),
       TRUE ~ bipolar_II),
     
     #2.2.9 Any Bipolar Spectrum Disorder
     any_bsd = case_when(
-      rowSums(select(., all_of(any_bsd_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
-      rowSums(!is.na(select(., all_of(any_bsd_vars)))) == 0 ~ NA_real_,
+      rowSums(dplyr::select(., all_of(any_bsd_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(dplyr::select(., all_of(any_bsd_vars)))) == 0 ~ NA_real_,
       TRUE ~ 0)
   )
 
@@ -508,14 +510,14 @@ The shape of the distribution for each continuous variable and frequency distrib
 summarize_data_by_timepoint <- function(data, continuous_cols, categorical_cols) {
   summary_list <- list()
   
-  # Get unique timepoints
+  #4.1.1 Get unique timepoints
   timepoints <- unique(data$session_id)
   timepoints <- timepoints[!is.na(timepoints)]
   
   for (tp in timepoints) {
     tp_data <- data[data$session_id == tp, ]
     
-    #4.11 Continuous variables summary by timepoint
+    #4.1.2 Continuous variables summary by timepoint
     for (col in continuous_cols) {
       column_data <- tp_data[[col]]
       valid_values <- column_data[!is.na(column_data)]
@@ -538,7 +540,7 @@ summarize_data_by_timepoint <- function(data, continuous_cols, categorical_cols)
       }
     }
     
-    #4.12 Categorical variables summary by timepoint
+    #4.1.3 Categorical variables summary by timepoint
     for (col in categorical_cols) {
       column_data <- tp_data[[col]]
       freq_table <- table(column_data, useNA = "no")
@@ -571,8 +573,8 @@ summary_table_by_timepoint <- summarize_data_by_timepoint(prelim_outcome_data_tr
 #4.3 Print the summary table in the RMD
 kable(summary_table_by_timepoint, caption = "Summary Statistics for Outcome Model Variables by Assessment Timepoint", row.names = FALSE) %>%
   kable_styling(bootstrap_options = c("striped","hover","condensed","responsive")) %>%
-  column_spec(1, bold = TRUE) %>%  # Make timepoint column bold
-  pack_rows(index = table(summary_table_by_timepoint$Timepoint))  # Group by timepoint
+  column_spec(1, bold = TRUE) %>%
+  pack_rows(index = table(summary_table_by_timepoint$Timepoint))
 
 #4.4 Create plots visualizing distributions of variables by timepoint
 #4.4.1 Prepare long data for continuous variables
@@ -670,43 +672,60 @@ By tabulating both raw counts and percentages of “current” versus “past‐
 
 ## Distribution of Past-Only vs. Current Diagnoses by Timepoint ##
 
-#5.1 Define vectors of raw KSADS columns for current vs. past mania/hypomania (these are subsets of the bd1_vars and bd2_vars you already defined)
+#5.1 Define vectors of raw KSADS columns for current vs. past mania/hypomania (these are subsets of the bd1_vars and bd2_vars already defined)
 #5.1.1 Bipolar I “current” flags (any present manic or depressive episode)
 bd1_current_vars <- c(
+  "mh_p_ksads__bpd__bpd1__curdep__partrem_dx", 
   "mh_p_ksads__bpd__bpd1__curmanic__pres_dx",
   "mh_p_ksads__bpd__bpd1__curdep__pres_dx",
   "mh_y_ksads__bpd__bpd1__curmanic__pres_dx",
-  "mh_y_ksads__bpd__bpd1__curdep__pres_dx"
+  "mh_y_ksads__bpd__bpd1__curdep__pres_dx",
+  "mh_p_ksads__bpd__bpd1__curhypo__pres_dx",
+  "mh_y_ksads__bpd__bpd1__curhypo__pres_dx",
+  "mh_y_ksads__bpd__bpd1__curdep__partrem_dx"
 )
 
-#5.1.2 Bipolar I “past‐only” flags (recent past mania but no current)
+#5.1.2 Bipolar I “past‐only” flags
 bd1_pastonly_vars <- c(
+  "mh_p_ksads__bpd__bpd1__rcnt__manicmix__pres_dx", 
+  "mh_y_ksads__bpd__bpd1__rcnt__manic__pres_dx",
+  "mh_p_ksads__bpd__bpd1__rcnt__dep__pres_dx",
   "mh_p_ksads__bpd__bpd1__rcnt__manic__pres_dx",
-  "mh_y_ksads__bpd__bpd1__rcnt__manic__pres_dx"
+  "mh_y_ksads__bpd__bpd1__rcnt__dep__pres_dx",
+  "mh_y_ksads__bpd__bpd1__rcnt__manicmix__pres_dx"
 )
 
 #5.1.3 Bipolar II “current” flags (any present hypomanic or depressive episode)
 bd2_current_vars <- c(
   "mh_p_ksads__bpd__bpd2__curhypo__pres_dx",
   "mh_p_ksads__bpd__bpd2__curdep__pres_dx",
-  "mh_y_ksads__bpd__bpd2__curhypo__pres_dx",
-  "mh_y_ksads__bpd__bpd2__curdep__pres_dx"
+  "mh_p_ksads__bpd__bpd2__curdep__partrem_dx",
+  "mh_y_ksads__bpd__bpd2__curdep__pres_dx",
+  "mh_y_ksads__bpd__bpd2__curdep__partrem_dx",
+  "mh_y_ksads__bpd__bpd2__curhypo__pres_dx"
 )
 
 #5.1.4 Bipolar II “past‐only” flags (recent past hypomania but no current)
 bd2_pastonly_vars <- c(
   "mh_p_ksads__bpd__bpd2__rcnt__hypo__pres_dx",
-  "mh_y_ksads__bpd__bpd2__rcnt__hypo__pres_dx"
+  "mh_y_ksads__bpd__bpd2__rcnt__hypo__pres_dx",
+  "mh_p_ksads__bpd__bpd2__rcnt__hypomix__pres_dx",
+  "mh_y_ksads__bpd__bpd2__rcnt__hypomix__pres_dx"
 )
 
-#5.1.5 “Any BSD” current vs. past‐only:
+#5.1.5.1 “Any BSD” current
 anybsd_current_vars <- c(
   bd1_current_vars,
   bd2_current_vars,
   "mh_p_ksads__bpd__unspec__pres_dx",
-  "mh_y_ksads__bpd__unspec__pres_dx"
+  "mh_y_ksads__bpd__unspec__pres_dx",
+  "mh_p_ksads__bpd__bpd2__oth__mindur_dx",
+  "mh_p_ksads__bpd__oth__mindur_dx",
+  "mh_y_ksads__bpd__bpd2__oth__mindur_dx",
+  "mh_y_ksads__bpd__oth__mindur_dx"
 )
 
+#5.1.5.2 “Any BSD” past‐only
 anybsd_pastonly_vars <- c(
   bd1_pastonly_vars,
   bd2_pastonly_vars,
@@ -714,80 +733,91 @@ anybsd_pastonly_vars <- c(
   "mh_y_ksads__bpd__unspec__past_dx"
 )
 
-#5.2 Create new flags in the “prelim_outcome_data” data‐frame
+# 5.1.6 Depression qualifiers for baseline & 2-yr rescoring
+dep_vars <- c(
+  "mh_p_ksads__dep__mdd__pres_dx", "mh_p_ksads__dep__mdd__past_dx",
+  "mh_p_ksads__dep__mdd__partrem_dx",
+  "mh_p_ksads__dep__pdd__pres_dx", "mh_p_ksads__dep__pdd__past_dx",
+  "mh_p_ksads__dep__pdd__partrem_dx",
+  "mh_y_ksads__dep__mdd__pres_dx", "mh_y_ksads__dep__mdd__past_dx",
+  "mh_y_ksads__dep__mdd__partrem_dx",
+  "mh_y_ksads__dep__pdd__pres_dx", "mh_y_ksads__dep__pdd__past_dx",
+  "mh_y_ksads__dep__pdd__partrem_dx"
+)
+
+#5.2 Build current vs. past-only flags, with rescoring at ses-00A/02A
 prelim_outcome_data2 <- prelim_outcome_data %>%
-  
-  #5.2.1 Bipolar I - current vs. past‐only
   mutate(
-    bipolar_I_current = case_when(
-      rowSums(dplyr::select(., all_of(bd1_current_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
-      TRUE ~ 0),
     
-    #5.2.1.1 Past flag present AND no “current” mania/depression
+    #5.2.1 BD-I current
+    bipolar_I_current = as.numeric(rowSums(dplyr::select(., all_of(bd1_current_vars)) == 1, na.rm=TRUE) > 0),
+
+    #5.2.2 BD-I past-only: require depression at baseline & 2-yr
     bipolar_I_pastonly = case_when(
-      rowSums(dplyr::select(., all_of(bd1_pastonly_vars)) == 1, na.rm = TRUE) > 0 &
-        rowSums(dplyr::select(., all_of(bd1_current_vars)) == 1, na.rm = TRUE) == 0 ~ 1,
+      rowSums(dplyr::select(., all_of(bd1_pastonly_vars)) == 1, na.rm=TRUE) > 0 &
+        (!session_id %in% c("ses-00A","ses-02A") |
+          rowSums(dplyr::select(., all_of(dep_vars)) == 1, na.rm=TRUE) > 0) ~ 1,
       TRUE ~ 0),
-    
-    #5.2.2 Bipolar II - current vs. past‐only
-    bipolar_II_current = case_when(
-      rowSums(dplyr::select(., all_of(bd2_current_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
-      TRUE ~ 0),
+
+    #5.2.3 BD-II current
+    bipolar_II_current = as.numeric(rowSums(select(., all_of(bd2_current_vars)) == 1, na.rm=TRUE) > 0),
+
+    #5.2.4 BD-II past-only: require depression at baseline & 2-yr
     bipolar_II_pastonly = case_when(
-      rowSums(dplyr::select(., all_of(bd2_pastonly_vars)) == 1, na.rm = TRUE) > 0 &
-        rowSums(dplyr::select(., all_of(bd2_current_vars)) == 1, na.rm = TRUE) == 0 ~ 1,
+      rowSums(dplyr::select(., all_of(bd2_pastonly_vars)) == 1, na.rm=TRUE) > 0 &
+        (!session_id %in% c("ses-00A","ses-02A") |
+          rowSums(dplyr::select(., all_of(dep_vars)) == 1, na.rm=TRUE) > 0) ~ 1,
       TRUE ~ 0),
-    
-    #5.2.3 Any BSD - current vs. past‐only
-    any_bsd_current = case_when(
-      rowSums(dplyr::select(., all_of(anybsd_current_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
-      TRUE ~ 0),
+
+    #5.2.5 Any BSD current
+    any_bsd_current = as.numeric(rowSums(dplyr::select(., all_of(anybsd_current_vars)) == 1, na.rm=TRUE) > 0),
+
+    #5.2.6 Any BSD past-only (no additional validation)
     any_bsd_pastonly = case_when(
-      rowSums(select(., all_of(anybsd_pastonly_vars)) == 1, na.rm = TRUE) > 0 &
-        rowSums(select(., all_of(anybsd_current_vars)) == 1, na.rm = TRUE) == 0 ~ 1,
+      rowSums(dplyr::select(., all_of(anybsd_pastonly_vars)) == 1, na.rm=TRUE) > 0 &
+        rowSums(dplyr::select(., all_of(anybsd_current_vars)) == 1, na.rm=TRUE) == 0 ~ 1,
       TRUE ~ 0)) %>%
   
-  #5.2.4 Keep only the columns we need for this section
-  dplyr::select(
-    participant_id, session_id,
-    bipolar_I_current, bipolar_I_pastonly,
-    bipolar_II_current, bipolar_II_pastonly,
-    any_bsd_current, any_bsd_pastonly
-  )
+  #5.2.7 Retain only columns of interest to analyses
+  dplyr::select(participant_id, session_id,
+         bipolar_I_current, bipolar_I_pastonly,
+         bipolar_II_current, bipolar_II_pastonly,
+         any_bsd_current, any_bsd_pastonly)
 
 #5.3 Summarize counts & percentages by session
 diagnosis_summary_by_time <- prelim_outcome_data2 %>%
   pivot_longer(
-    cols = c(
-      bipolar_I_current, bipolar_I_pastonly,
-      bipolar_II_current, bipolar_II_pastonly,
-      any_bsd_current, any_bsd_pastonly),
-    names_to = c("Diagnosis", "Timing"),
+    cols = c(bipolar_I_current, bipolar_I_pastonly,
+             bipolar_II_current, bipolar_II_pastonly,
+             any_bsd_current, any_bsd_pastonly),
+    names_to = c("Diagnosis","Timing"),
     names_pattern = "(bipolar_I|bipolar_II|any_bsd)_(current|pastonly)",
     values_to = "Flag") %>%
   group_by(session_id, Diagnosis, Timing) %>%
   summarize(
-    N_flag = sum(Flag == 1, na.rm = TRUE),
+    N_flag = sum(Flag == 1, na.rm=TRUE),
     N_total = n(),
     Pct_flag = 100 * N_flag / N_total,
-    .groups="drop") %>%
+    .groups = "drop") %>%
   arrange(Diagnosis, Timing, session_id)
 
 #5.4 Print summary table
 kable(
   diagnosis_summary_by_time,
-  col.names = c("Session", "Diagnosis", "Timing", "N", "Total N", "Percent"),
-  digits = c(0, 0, 0, 0, 0, 1),
-  caption = "Counts & Percentages of Current vs. Past‐Only Diagnoses by Session") %>%
+  col.names = c("Session","Diagnosis","Timing","N","Total N","Percent"),
+  digits = c(0,0,0,0,0,1),
+  caption = "Counts & Percentages of Current vs. Past-Only Diagnoses by Session") %>%
   kable_styling(full_width = FALSE)
 
 ```
 
-In Section 5, we see that both “Any BSD” and individual bipolar diagnoses show their highest prevalence at baseline (ses-00A), with a substantial proportion of cases being “past-only.” For example, at ses-00A, 2.0% of youth (234/11,878) currently met BSD criteria and 13.2% (1 563/11,878) had a past-only BSD history. By the 2-year follow-up (ses-02A), “Any BSD” current prevalence fell to 1.1% (126/11,797) and past-only to 7.2% (844/11,797). From ses-04A onward, no youth met criteria for past-only BSD (0%), and current BSD hovered around 0.5-0.6%. 
+In Section 5, we observe that "Any BSD" and individual bipolar diagnoses generally show their highest prevalence at baseline (ses-00A), with a significant portion initially classified as "past-only." Specifically, at baseline, 2.0% of youth (235/11,878) currently met criteria for Any BSD, and 13.2% (1,562/11,878) had a past-only BSD diagnosis - with that category primarily composed of other/unspecified bipolar cases. At the 2-year follow-up (ses-02A), current Any BSD prevalence slightly decreased to 1.1% (129/11,797), and past-only prevalence fell to 7.1% (841/11,797). By the 4-year follow-up (ses-04A) and later, past-only BSD prevalence remained very low (around 0.5%), while current BSD rates rose slightly to approximately 2.5-3.1%. This is likely due to the shift to KSADS 2.0 and better algorithmic/data collection procedures and not any actual patterns in the data. 
 
-A similar pattern holds for Bipolar I: baseline current = 0.7% (80/11,878), past-only = 5.4% (645/11,878); at 2 years, current = 0.4% (43/11,797), past-only = 3.5 % (413/11,797); by ses-04A and later, all “past-only” flags drop to zero, while current rates remain ≈ 0.5%. Bipolar II follows the same trajectory but at lower absolute rates (baseline current = 0.3%, past-only = 1.9%; 2 years current = 0.2%, past-only = 1.3%; zero past-only thereafter, current ≈ 0.1%). 
+For Bipolar I, baseline prevalence was 0.7% current (81/11,878) and 0.2% past-only (28/11,878). At the 2-year follow-up, current prevalence decreased to 0.4% (46/11,797), while past-only remained at 0.2% (24/11,797). However, at subsequent assessments (ses-04A and ses-06A), Bipolar I prevalence increased, with current diagnoses at approximately 0.9-1.1% and past-only around 0.4-0.5%. This is (mostly) expected and likely reflects fairly good quality data. 
 
-Note that odd-numbered follow-ups (ses-01A, ses-03A, ses-05A, ses-07A, ses-08A) have no diagnostic data, so all counts are zero at those waves. Overall, lifetime (past-only) flags decline to zero by ses-04A (at least in part due to the shift in KSADS-COMP version), and current prevalence remains low (< 1%) at later waves. 
+Bipolar II showed a consistently lower prevalence, with baseline current at 0.3% (38/11,878) and past-only at 0.1% (17/11,878). At the 2-year follow-up, current prevalence slightly dropped to 0.2% (24/11,797), while past-only slightly increased to 0.2% (24/11,797). Later waves (ses-04A and ses-06A) showed small increases in current diagnoses (0.4%) and consistently minimal past-only diagnoses (around 0.1%). This is also (mostly) expected and likely reflects fairly good quality data.
+
+Overall, following the introduction of KSADS-COMP version 2.0 after ses-02A, there was a notable rise in current diagnoses for Any BSD and Bipolar I, and minimal past-only diagnoses. No diagnostic data were collected at odd-numbered follow-ups (ses-01A, ses-03A, ses-05A, ses-07A, ses-08A), thus resulting in zero counts at those waves.
 
 ## 6. Transitions: Who “Drops Out” vs. Who “Converts In” at Adjacent Timepoints
 
@@ -832,8 +862,8 @@ get_transition_counts <- function(df, diag_prefix, time1, time2) {
   still_no <- sum(vect1 == 0 & vect2 == 0)
   
   #6.3.3 Denominators for percentages
-  n_with_at_time1 <- dropped_out + still_has    # those diagnosed at time1
-  n_without_at_time1 <- new_on + still_no          # those undiagnosed at time1
+  n_with_at_time1 <- dropped_out + still_has
+  n_without_at_time1 <- new_on + still_no 
   
   tibble(
     Diagnosis = diag_prefix,
@@ -883,7 +913,7 @@ kable(
 
 ```
 
-Between each pair of available diagnostic waves, nearly all youth who met criteria at the earlier timepoint no longer met criteria at the next (“Dropped”—>~95% for Bipolar I/II, ~82–94% for Any BSD), and most of those diagnosed at the later timepoint were incident cases (“NewOn”—>~68–97% of those with a diagnosis at time t+1 did not have it at time t). For example:
+Between each pair of available diagnostic waves, nearly all youth who met criteria at the earlier timepoint no longer met criteria at the next (“Dropped” —> ~95% for Bipolar I/II, ~82–94% for Any BSD), and most of those diagnosed at the later timepoint were incident cases (“NewOn” —> ~68–97% of those with a diagnosis at time *t+1* did not have it at time *t*). For example:
   
 - Bipolar I:  
   
@@ -909,4 +939,363 @@ Between each pair of available diagnostic waves, nearly all youth who met criter
 
   - ses-04A→ses-06A: 255/294 (86.7%) dropped; 306/345 (88.7%) of ses-06A cases were new, and 39 remained stable.  
 
-In sum, very few youth with Bipolar I/II (or Any BSD) remained positive across waves: most earlier cases “dropped out,” and the vast majority of later cases were new onset. This underscores substantial diagnostic turnover rather than persistence across the available follow-ups. (No diagnoses were collected in odd-numbered years, so transitions are shown only for even-year intervals.)
+In sum, very few youth with Bipolar I/II (or Any BSD) remained positive across waves: most earlier cases “dropped out,” and the vast majority of later cases were new onset. This underscores substantial diagnostic turnover rather than persistence across the available follow-ups. No diagnoses were collected in odd-numbered years, so transitions are shown only for even-year intervals
+
+## 7. Transitions Between Diagnostic Categories
+
+In this section, we create a multi‐state variable that encodes each youth’s bipolar spectrum diagnosis at each wave (No BSD, BD-I, BD-II, Other/Unspecified BSD), then compute the full transition matrix between consecutive waves. This allows us to quantify flows such as BD-I → BD-II, Other BSD → BD-I, etc., both in raw counts and as percentages of the “From” category
+
+```{r EDA 7, echo = FALSE, warning = FALSE}
+
+## Transitions Between Diagnostic Categories ##
+
+#7.1 Assign a single diagnosis state factor for each subject/wave
+#7.1.1 Define raw KSADS columns for Other/Unspecified BSD only
+other_bsd_vars  <- c(
+  "mh_p_ksads__bpd__bpd2__oth__mindur_dx",
+  "mh_p_ksads__bpd__oth__mindur_dx",
+  "mh_y_ksads__bpd__bpd2__oth__mindur_dx",
+  "mh_y_ksads__bpd__oth__mindur_dx",
+  "mh_p_ksads__bpd__unspec__pres_dx",
+  "mh_p_ksads__bpd__unspec__past_dx",
+  "mh_y_ksads__bpd__unspec__pres_dx",
+  "mh_y_ksads__bpd__unspec__past_dx"
+)
+
+#7.1.2 Create diagnosis flags at each wave (more specific than "any BSD")
+state_map <- function(df) {
+  df %>%
+    mutate(
+      diag_state = case_when(
+        
+        #7.1.2.1 BD-I if any BD1 flag (current or past-only)
+        bipolar_I_current == 1 | bipolar_I_pastonly == 1 ~ "BD1",
+        
+        #7.1.2.2 BD-II if any BD2 flag
+        bipolar_II_current == 1 | bipolar_II_pastonly == 1 ~ "BD2",
+        
+        #7.1.2.3 OtherBSD only if an unspec flag and NO BD1/BD2
+        rowSums(dplyr::select(., all_of(other_bsd_vars))  == 1, na.rm=TRUE) > 0 ~ "OtherBSD",
+        
+        #7.1.2.4 Otherwise no spectrum diagnosis
+        TRUE ~ "NoBSD") %>%
+      factor(levels = c("NoBSD","BD1","BD2","OtherBSD"))
+    )
+}
+
+#7.1.3 Apply mapping to produce `prelim_states`
+prelim_states <- prelim_outcome_data2 %>%
+  left_join(prelim_outcome_data) %>% 
+  filter(session_id == "ses-00A" | session_id == "ses-02A" | session_id == "ses-04A" | session_id == "ses-06A" | session_id == "ses-08A") %>% 
+  state_map()
+
+#7.2 Pivot data to one row per subject with diag_state_<session> columns
+wide_states <- prelim_states %>%
+  dplyr::select(participant_id, session_id, diag_state) %>%
+  pivot_wider(
+    names_from = session_id,
+    values_from = diag_state,
+    names_prefix = "diag_state_"
+  )
+
+#7.3 Create a function to compute transition counts and % for a given pair of sessions
+get_state_matrix <- function(df, from_sess, to_sess) {
+  tbl <- table(
+    From = df[[paste0("diag_state_", from_sess)]],
+    To = df[[paste0("diag_state_", to_sess)]])
+  prop_tbl <- prop.table(tbl, margin = 1) * 100
+  list(counts = tbl, props = prop_tbl)
+}
+
+#7.4 Create Transition Matrices for Each Pair of Waves
+#7.4.1 Define your waves of interest
+sessions <- c("ses-00A", "ses-02A", "ses-04A", "ses-06A", "ses-08A")
+
+#7.4.2 Build a combined summary
+transitions_summary <- map_dfr(seq_len(length(sessions) - 1), function(i) {
+  from <- sessions[i]; to <- sessions[i + 1]
+  mat <- get_state_matrix(wide_states, from, to)
+  cnts <- as.matrix(mat$counts)
+  prps <- round(as.matrix(mat$props), 1)
+  tibble(
+    Transition = paste0(from, "→", to),
+    From = rownames(cnts),
+    NoBSD = paste0(cnts[,"NoBSD"], " (", prps[,"NoBSD"],    "%)"),
+    BD1 = paste0(cnts[,"BD1"], " (", prps[,"BD1"],      "%)"),
+    BD2 = paste0(cnts[,"BD2"], " (", prps[,"BD2"],      "%)"),
+    OtherBSD = paste0(cnts[,"OtherBSD"], " (", prps[,"OtherBSD"], "%)")
+  )
+})
+
+#7.4.3 Render the table and group by timepoint
+transitions_summary %>%
+  dplyr::select(-Transition) %>%
+  kable(
+    col.names = c("From","NoBSD","BD1","BD2","OtherBSD"),
+    align = "c",
+    caption = "Transition Counts & Percentages Between Diagnostic States") %>%
+  kable_styling(full_width = FALSE) %>%
+  pack_rows(index = table(transitions_summary$Transition))
+
+#7.5 Create a Sankey diagram displaying transitions between diagnostic categories across timepoints
+#7.5.1 Store transition counts from each sequential timepoint to the next
+links <- map_dfr(seq_len(length(sessions)-1), function(i) {
+  from <- sessions[i]; to <- sessions[i+1]
+  mat <- get_state_matrix(wide_states, from, to)$counts
+  
+  #7.5.1.1 Use expand.grid to create transition count dataframe
+  df <- expand.grid(
+    From = rownames(mat), 
+    To = colnames(mat),
+    stringsAsFactors = FALSE) %>%
+    mutate(
+      value = as.vector(mat),
+      source = paste0(from, "_", From),
+      target = paste0(to, "_", To)) %>%
+    filter(value > 0) 
+  return(df)
+})
+
+#7.5.2 Build nodes for Sankey
+nodes <- data.frame(
+  name = unique(c(links$source, links$target)),
+  stringsAsFactors = FALSE
+)
+
+#7.5.3 Map source/target to node IDs
+links <- links %>%
+  mutate(
+    IDsource = match(source, nodes$name) - 1,
+    IDtarget = match(target, nodes$name) - 1
+  )
+
+#7.5.4 Plot Sankey diagram
+sankeyNetwork(
+  Links = links,
+  Nodes = nodes,
+  Source = "IDsource",
+  Target = "IDtarget",
+  Value = "value",
+  NodeID = "name",
+  fontSize = 8,
+  nodeWidth = 30,
+  sinksRight = FALSE
+)
+
+```
+
+Across each consecutive assessment wave, most youth without a bipolar diagnosis remained stable (~97% NoBSD→NoBSD), though small numbers transitioned into BD-I, BD-II, or Other/Unspecified BSD categories (0.2–3.2%). 
+
+Youth initially diagnosed with BD-I, BD-II, or Other BSD demonstrated high diagnostic instability. For example, between baseline and the 2-year follow-up, 87.5% of BD-I youth transitioned to NoBSD, with similarly high rates for BD-II (85.4%) and OtherBSD (90%). This pattern persisted across subsequent follow-ups, reflecting substantial flux rather than diagnostic persistence, particularly notable in transitions from diagnostic categories back to No BSD.
+
+Another informative spot check is how many youth have any BSD at multiple timepoints. In brief, 2,346 (19.7%) participants have any BSD at any 1 of the timepoints; 458 (3.85%) participants have any BSD at 2 timepoints; 40 (0.33%) participants have any BSD at 3 timepoints; and 6 (0.05%) participants have any BSD at all 4 timepoints. 
+
+## 8. Tiered Bipolar‐Spectrum Definitions & Their Stability
+
+As forms of potential sensitivity analyses and to increase the specificity and sensitivity in our BSD cases, we define four “tiers” of increasing diagnostic stringency at each assessment timepoint to compare to just KSADS-COMP derived diagnoses:
+
+  1. **Tier 1**: All four CBCL subscales (depression, anxiety, attention, aggression) ≥ 70 T-score  
+  
+  2. **Tier 2**: Tier 1 **+** GBI Mania total > 12 
+
+  3. **Tier 3**: KSADS any BSD (current or past-only) **+** Tier 1  
+
+  4. **Tier 4**: KSADS any BSD **+** Tier 1 **+** GBI Mania > 12  
+  
+We then count, for each youth, at how many of the four timepoints of interest (baseline, 2-year, 4-year, and 6-year follow-ups) they meet each tier, and display the distribution of those counts.
+
+```{r EDA 8, echo = FALSE, warning = FALSE}
+
+## Tiered Bipolar‐Spectrum Definitions & Their Stability ##
+
+#8.1 Create tiered diagnosis flags
+#8.11 Merge CBCL & GBI scores onto our diagnosis flags
+tier_data <- prelim_outcome_data2 %>%
+  left_join(
+    prelim_outcome_data %>%
+      dplyr::select(
+        participant_id, session_id,
+        mh_p_cbcl__dsm__dep_tscore,
+        mh_p_cbcl__dsm__anx_tscore,
+        mh_p_cbcl__synd__attn_tscore,
+        mh_p_cbcl__synd__aggr_tscore,
+        mh_p_gbi_sum),
+    by = c("participant_id", "session_id")
+  )
+
+#8.12 Define tier flags (1/0) per subject row (i.e., at each timepoint)
+tier_data <- tier_data %>%
+  mutate(
+    any_bsd_flag  = as.numeric(any_bsd_current==1 | any_bsd_pastonly==1),
+    tier1 = as.numeric(
+      mh_p_cbcl__dsm__dep_tscore >= 70 &
+      mh_p_cbcl__dsm__anx_tscore >= 70 &
+      mh_p_cbcl__synd__attn_tscore >= 70 &
+      mh_p_cbcl__synd__aggr_tscore >= 70),
+    tier2 = as.numeric(tier1 == 1 & mh_p_gbi_sum > 12),
+    tier3 = as.numeric(any_bsd_flag == 1 & tier1 == 1),
+    tier4 = as.numeric(any_bsd_flag == 1 & tier1 == 1 & mh_p_gbi_sum > 12)
+  )
+
+#8.2 Determine the prevalence of Each Tier by Timepoint
+#8.2.1 Build a long table of tier flags
+tier_long <- tier_data %>%
+  dplyr::select(participant_id, session_id, tier1:tier4) %>%
+  pivot_longer(
+    cols = tier1:tier4,
+    names_to = "Tier",
+    values_to = "Flag"
+  )
+
+#8.2.2 Summarize N and percent per Tier × Timepoint
+tier_prev <- tier_long %>%
+  group_by(session_id, Tier) %>%
+  summarise(
+    N_flag = sum(Flag == 1, na.rm=TRUE),
+    N_total = n_distinct(participant_id),
+    Percent = 100 * N_flag / N_total,
+    .groups = "drop") %>%
+  arrange(Tier, session_id)
+
+#8.2.3 Print occurrence rate table 
+kable(
+  tier_prev,
+  col.names = c("Session", "Tier", "N Endorsed", "Total N", "% Endorsed"),
+  digits = c(0, 0, 0, 0, 2),
+  caption = "Prevalence of Each Tier by Wave") %>%
+  kable_styling(full_width = FALSE) %>%
+  pack_rows("Tier1 (CBCL BD Profile ≥ 70)", 1, length(unique(tier_prev$session_id))) %>%
+  pack_rows("Tier2 (+GBI Mania > 12)", length(unique(tier_prev$session_id)) +
+              1, 2 * length(unique(tier_prev$session_id))) %>%
+  pack_rows("Tier3 (+KSADS Any BSD)",
+            2 * length(unique(tier_prev$session_id)) + 1,
+            3 * length(unique(tier_prev$session_id))) %>%
+  pack_rows("Tier4 (All criteria)", 3 * length(unique(tier_prev$session_id)) +
+              1, 4 * length(unique(tier_prev$session_id)))
+
+#8.3 Determine the stability of each tier across timepoints
+#8.3.1 Pivot wide: one column per tier × session
+wide_tiers <- tier_long %>%
+  pivot_wider(
+    names_from  = c(Tier, session_id),
+    values_from = Flag,
+    names_sep   = "_"
+  )
+
+#8.3.2 Write a helper function for diagnostic transitions across time
+get_transition_counts <- function(df, prefix, t1, t2) {
+  c1 <- paste0(prefix, "_", t1)
+  c2 <- paste0(prefix, "_", t2)
+  v1 <- ifelse(is.na(df[[c1]]), 0, df[[c1]])
+  v2 <- ifelse(is.na(df[[c2]]), 0, df[[c2]])
+  dropped <- sum(v1==1 & v2==0)
+  still <- sum(v1==1 & v2==1)
+  newon <- sum(v1==0 & v2==1)
+  still_no <- sum(v1==0 & v2==0)
+  tibble(
+    Tier = prefix,
+    From = t1,
+    To = t2,
+    Dropped = dropped,
+    Still = still,
+    Pct_Drop  = 100 * dropped / max(dropped+still,1),
+    NewOn = newon,
+    StillNo = still_no,
+    Pct_Newon = 100 * newon / max(newon+still,1)
+  )
+}
+
+#8.3.3 Loop over tiers & session pairs counting diangostic transitions
+sessions <- c("ses-00A","ses-02A","ses-04A","ses-06A")
+all_tier_trans <- map_dfr(
+  c("tier1","tier2","tier3","tier4"),
+  ~ map_dfr(seq_len(length(sessions)-1), function(i) {
+    get_transition_counts(wide_tiers, .x, sessions[i], sessions[i+1])})
+)
+
+#8.3.4 Print summary of diagnostic transitions across timepoints
+kable(
+  all_tier_trans,
+  col.names = c("Tier","From","To",
+                "N Dropped","N Still Has","% dropped",
+                "N NewOnset","N Still No","% NewOnset"),
+  digits = c(0,0,0,0,0,1,0,0,1),
+  caption = "Tier Transition Counts & Percentages Between Waves") %>%
+  kable_styling(full_width = FALSE)
+
+#8.4 Build Sankey diagrams for each tier
+#8.4.1 Create tier labels for plots
+tier_labels <- c(
+  tier1 = "Tier 1 - CBCL >=70 on All 4 Subscales",
+  tier2 = "Tier 2 - Tier 1 + GBI Mania >12",
+  tier3 = "Tier 3 - Any BSD + Tier 1",
+  tier4 = "Tier 4 - Any BSD + Tier 1 + GBI Mania >12"
+)
+
+#8.4.2 Loop through each tier and create a sankey diagram for diagnostic transitions over time
+widgets <- map(names(tier_labels), function(prefix) {
+  
+  #8.4.2.1 Build links
+  links <- map_dfr(seq_len(length(sessions)-1), function(i) {
+    t1 <- sessions[i]; t2 <- sessions[i+1]
+    mat <- table(
+      From = wide_tiers[[paste0(prefix, "_", t1)]],
+      To = wide_tiers[[paste0(prefix, "_", t2)]]
+    )
+    expand.grid(From = rownames(mat), To = colnames(mat), 
+                stringsAsFactors = FALSE) %>%
+      mutate(
+        value = as.vector(mat),
+        source = paste0(t1, "_", From),
+        target = paste0(t2, "_", To)) %>% 
+      filter(value > 0)
+  })
+  
+  #8.4.2.2 Build nodes
+  nodes <- data.frame(name = unique(c(links$source, links$target)),
+                      stringsAsFactors = FALSE)
+  
+  #8.4.2.3 Map links onto nodes
+  links <- links %>%
+    mutate(
+      IDsource = match(source, nodes$name) - 1,
+      IDtarget = match(target, nodes$name) - 1)
+  
+  #8.4.2.4 Build each sankey diagram
+  sankey <- sankeyNetwork(
+    Links = links,
+    Nodes = nodes,
+    Source = "IDsource",
+    Target = "IDtarget",
+    Value = "value",
+    NodeID = "name",
+    fontSize = 10,
+    nodeWidth = 20,
+    sinksRight= FALSE
+  )
+  
+  #8.4.2.5 Return each sankey diagram
+  tagList(
+    tags$h4(tier_labels[prefix]),
+    sankey
+  )
+})
+
+#8.4.3 Render all sankey diagrams in the output
+browsable(tagList(widgets))
+
+```
+
+Across the four even-year follow-up timepoints, the tiers are quite low in occurrence rate; and unsurprisingly, the stricter the definition, the rarer each tier is in ABCD.
+
+Moreover, all four tiers show marked instability (ses-00 → 02 → 04 → 06):
+
+- Tier 1: ~83% of baseline cases drop by 2 yrs; new-onset cases each wave are ~75% of those diagnosed at the next wave, leaving only 4–5 participants (≤0.04 %) who persist from one wave to the next.
+
+- Tier 2: ≥ 88% of baseline cases remit by 2 yrs and ≥ 83% of the next-wave cases are incident.
+
+- Tier 3: 94% of baseline Tier 3 participants lose the tier by 2 yrs; every following Tier 3 case is incident (100% “new-onset”) and none persist across consecutive waves.
+
+- Tier 4: The strictest definition is almost entirely transient; every wave after baseline sees complete drop-out of prior Tier 4 cases and 100% of the few subsequent Tier 4 diagnoses are new relative to previous timepoints.
+
+**Overall**, < 0.3% of the ABCD cohort ever meets Tier 1, < 0.15% meets Tier 2, and Tier 3/Tier 4 occur in only one or two dozen participants each wave. Persistence across multiple waves is exceptionally rare (no one meets Tier 3 or Tier 4 at two consecutive waves). These findings reinforce that even with additional “validation” criteria, bipolar-spectrum indicators in ABCD are infrequent and highly unstable over time.
