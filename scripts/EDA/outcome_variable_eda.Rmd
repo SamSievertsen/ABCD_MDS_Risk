@@ -913,7 +913,7 @@ kable(
 
 ```
 
-Between each pair of available diagnostic waves, nearly all youth who met criteria at the earlier timepoint no longer met criteria at the next (“Dropped” —> ~95% for Bipolar I/II, ~82–94% for Any BSD), and most of those diagnosed at the later timepoint were incident cases (“NewOn” —> ~68–97% of those with a diagnosis at time *t+1* did not have it at time *t*). For example:
+Between each pair of available diagnostic waves, nearly all youth who met criteria at the earlier timepoint no longer met criteria at the next (“Dropped” → ~95% for Bipolar I/II, ~82-94% for Any BSD), and most of those diagnosed at the later timepoint were incident cases (“NewOn” → ~68-97% of those with a diagnosis at time *t+1* did not have it at time *t*). For example:
   
 - Bipolar I:  
   
@@ -1084,7 +1084,7 @@ sankeyNetwork(
 
 ```
 
-Across each consecutive assessment wave, most youth without a bipolar diagnosis remained stable (~97% NoBSD→NoBSD), though small numbers transitioned into BD-I, BD-II, or Other/Unspecified BSD categories (0.2–3.2%). 
+Across each consecutive assessment wave, most youth without a bipolar diagnosis remained stable (~97% NoBSD→NoBSD), though small numbers transitioned into BD-I, BD-II, or Other/Unspecified BSD categories (0.2-3.2%). 
 
 Youth initially diagnosed with BD-I, BD-II, or Other BSD demonstrated high diagnostic instability. For example, between baseline and the 2-year follow-up, 87.5% of BD-I youth transitioned to NoBSD, with similarly high rates for BD-II (85.4%) and OtherBSD (90%). This pattern persisted across subsequent follow-ups, reflecting substantial flux rather than diagnostic persistence, particularly notable in transitions from diagnostic categories back to No BSD.
 
@@ -1290,12 +1290,12 @@ Across the four even-year follow-up timepoints, the tiers are quite low in occur
 
 Moreover, all four tiers show marked instability (ses-00 → 02 → 04 → 06):
 
-- Tier 1: ~83% of baseline cases drop by 2 yrs; new-onset cases each wave are ~75% of those diagnosed at the next wave, leaving only 4–5 participants (≤0.04 %) who persist from one wave to the next.
+  - Tier 1: ~83% of baseline cases drop by 2 yrs; new-onset cases each wave are ~75% of those diagnosed at the next wave, leaving only 4-5 participants (≤0.04 %) who persist from one wave to the next.
 
-- Tier 2: ≥ 88% of baseline cases remit by 2 yrs and ≥ 83% of the next-wave cases are incident.
+  - Tier 2: ≥ 88% of baseline cases remit by 2 yrs and ≥ 83% of the next-wave cases are incident.
 
-- Tier 3: 94% of baseline Tier 3 participants lose the tier by 2 yrs; every following Tier 3 case is incident (100% “new-onset”) and none persist across consecutive waves.
+  - Tier 3: 94% of baseline Tier 3 participants lose the tier by 2 yrs; every following Tier 3 case is incident (100% “new-onset”) and none persist across consecutive waves.
 
-- Tier 4: The strictest definition is almost entirely transient; every wave after baseline sees complete drop-out of prior Tier 4 cases and 100% of the few subsequent Tier 4 diagnoses are new relative to previous timepoints.
+  - Tier 4: The strictest definition is almost entirely transient; every wave after baseline sees complete drop-out of prior Tier 4 cases and 100% of the few subsequent Tier 4 diagnoses are new relative to previous timepoints.
 
-**Overall**, < 0.3% of the ABCD cohort ever meets Tier 1, < 0.15% meets Tier 2, and Tier 3/Tier 4 occur in only one or two dozen participants each wave. Persistence across multiple waves is exceptionally rare (no one meets Tier 3 or Tier 4 at two consecutive waves). These findings reinforce that even with additional “validation” criteria, bipolar-spectrum indicators in ABCD are infrequent and highly unstable over time.
+**Overall**, < 0.3% of the ABCD cohort ever meets Tier 1, < 0.15% meets Tier 2, and Tier 3/Tier 4 occur in only one or two dozen participants each wave. Persistence across multiple waves is exceptionally rare (no one meets Tier 3 or Tier 4 at two consecutive waves). To me, these findings reinforce that even with additional “validation” criteria, bipolar-spectrum indicators in ABCD are infrequent and highly unstable over time. Which is not to say that we shouldn't trust that our clinical classifications aren't useful or even that they don't represent bipolar in a way we wouldn't expect; just that they are limited by how much we trust their validity & reliability compared to clinician administered diagnoses
