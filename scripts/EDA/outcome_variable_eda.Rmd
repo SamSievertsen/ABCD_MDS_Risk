@@ -34,8 +34,12 @@ The following report contains information regarding the:
 library(knitr)
 library(kableExtra)
 library(dplyr)
+library(stringr)
 library(tidyr)
 library(ggplot2)
+library(grid)
+library(gridExtra)
+library(tidytext)
 library(networkD3)
 library(patchwork)
 library(purrr)
@@ -192,8 +196,7 @@ bd2_vars <- c(
 )
 
 #2.1.7 Any Bipolar Disorder - combine Bipolar I, II, OS & unspecified (parent or youth)
-any_bsd_vars <- c(
-  bd1_vars, bd2_vars,
+unspec_vars <- c(
   "mh_p_ksads__bpd__bpd2__oth__mindur_dx",
   "mh_p_ksads__bpd__oth__mindur_dx",
   "mh_y_ksads__bpd__bpd2__oth__mindur_dx",
@@ -201,8 +204,7 @@ any_bsd_vars <- c(
   "mh_p_ksads__bpd__unspec__pres_dx",
   "mh_p_ksads__bpd__unspec__past_dx",
   "mh_y_ksads__bpd__unspec__pres_dx",
-  "mh_y_ksads__bpd__unspec__past_dx"
-)
+  "mh_y_ksads__bpd__unspec__past_dx")
 
 # 2.1.8 Depression qualifiers for rescoring bipolar past mania/hypomania
 dep_vars <- c(
@@ -290,8 +292,17 @@ prelim_outcome_data <- raw_data_trimmed %>%
     
     #2.2.9 Any Bipolar Spectrum Disorder
     any_bsd = case_when(
-      rowSums(dplyr::select(., all_of(any_bsd_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
-      rowSums(!is.na(dplyr::select(., all_of(any_bsd_vars)))) == 0 ~ NA_real_,
+      
+      #2.2.9.1 if either validated BD-I or BD-II flag is 1, count as BSD
+      bipolar_I  == 1 | bipolar_II == 1 ~ 1,
+      
+      #2.2.9.2 else if *any* of the OS/unspecified vars is present, count as BSD
+      rowSums(select(., all_of(unspec_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
+      
+      #2.2.9.3 if none of the BD1, BD2 or NS vars were ever measured → NA
+      rowSums(!is.na(select(., all_of(c(bd1_vars, bd2_vars, unspec_vars))))) == 0 ~ NA_real_,
+      
+      #2.2.9.4 otherwise explicitly no BSD
       TRUE ~ 0)
   )
 
@@ -656,7 +667,7 @@ for (tp in sort(unique(plot_data_by_timepoint$Timepoint))) {
 
 ```
 
-Distributions of continuous variables and rates of categorical variables by timepoint are shown above. While continuous variables exhibit noticeable skew & kurtosis, and the CBCL aggression problem scale results will need to be interpreted with caution/re-evaluated during modeling as described in section 3 above, no other problems are not noted herein. 
+Distributions of continuous variables and rates of categorical variables by timepoint are shown above. While continuous variables exhibit noticeable skew & kurtosis, and the CBCL aggression problem scale results will need to be interpreted with caution/re-evaluated during modeling as described in section 3 above, no other problems are noted herein. 
 
 ## 5. Distribution of Past-Only vs. Current Diagnoses by Timepoint
 
@@ -714,9 +725,7 @@ bd2_pastonly_vars <- c(
 )
 
 #5.1.5.1 “Any BSD” current
-anybsd_current_vars <- c(
-  bd1_current_vars,
-  bd2_current_vars,
+unspec_current_vars <- c(
   "mh_p_ksads__bpd__unspec__pres_dx",
   "mh_y_ksads__bpd__unspec__pres_dx",
   "mh_p_ksads__bpd__bpd2__oth__mindur_dx",
@@ -726,23 +735,27 @@ anybsd_current_vars <- c(
 )
 
 #5.1.5.2 “Any BSD” past‐only
-anybsd_pastonly_vars <- c(
-  bd1_pastonly_vars,
-  bd2_pastonly_vars,
+unspec_pastonly_vars <- c(
   "mh_p_ksads__bpd__unspec__past_dx",
   "mh_y_ksads__bpd__unspec__past_dx"
 )
 
-# 5.1.6 Depression qualifiers for baseline & 2-yr rescoring
+#5.1.6 Depression qualifiers for baseline & 2-yr rescoring
 dep_vars <- c(
-  "mh_p_ksads__dep__mdd__pres_dx", "mh_p_ksads__dep__mdd__past_dx",
   "mh_p_ksads__dep__mdd__partrem_dx",
-  "mh_p_ksads__dep__pdd__pres_dx", "mh_p_ksads__dep__pdd__past_dx",
-  "mh_p_ksads__dep__pdd__partrem_dx",
-  "mh_y_ksads__dep__mdd__pres_dx", "mh_y_ksads__dep__mdd__past_dx",
+  "mh_p_ksads__dep__mdd__past_dx",
+  "mh_p_ksads__dep__mdd__pres_dx",
   "mh_y_ksads__dep__mdd__partrem_dx",
-  "mh_y_ksads__dep__pdd__pres_dx", "mh_y_ksads__dep__pdd__past_dx",
-  "mh_y_ksads__dep__pdd__partrem_dx"
+  "mh_y_ksads__dep__mdd__past_dx",
+  "mh_y_ksads__dep__mdd__pres_dx",
+  "mh_p_ksads__dep__pdd__oth__pres_dx",
+  "mh_p_ksads__dep__pdd__partrem_dx",
+  "mh_p_ksads__dep__pdd__past_dx",
+  "mh_p_ksads__dep__pdd__pres_dx",
+  "mh_y_ksads__dep__pdd__oth__pres_dx",
+  "mh_y_ksads__dep__pdd__partrem_dx",
+  "mh_y_ksads__dep__pdd__past_dx",
+  "mh_y_ksads__dep__pdd__pres_dx"
 )
 
 #5.2 Build current vs. past-only flags, with rescoring at ses-00A/02A
@@ -770,13 +783,16 @@ prelim_outcome_data2 <- prelim_outcome_data %>%
       TRUE ~ 0),
 
     #5.2.5 Any BSD current
-    any_bsd_current = as.numeric(rowSums(dplyr::select(., all_of(anybsd_current_vars)) == 1, na.rm=TRUE) > 0),
+    any_bsd_current = case_when(
+      bipolar_I_current == 1 | bipolar_II_current == 1 ~ 1,
+      rowSums(dplyr::select(., all_of(unspec_current_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
+      TRUE ~ 0),
 
     #5.2.6 Any BSD past-only (no additional validation)
     any_bsd_pastonly = case_when(
-      rowSums(dplyr::select(., all_of(anybsd_pastonly_vars)) == 1, na.rm=TRUE) > 0 &
-        rowSums(dplyr::select(., all_of(anybsd_current_vars)) == 1, na.rm=TRUE) == 0 ~ 1,
-      TRUE ~ 0)) %>%
+      (bipolar_I_pastonly == 1 | bipolar_II_pastonly == 1) & any_bsd_current == 0 ~ 1,
+      rowSums(dplyr::select(., all_of(unspec_pastonly_vars)) == 1, na.rm = TRUE) > 0 &
+        any_bsd_current == 0 ~ 1, TRUE ~ 0)) %>%
   
   #5.2.7 Retain only columns of interest to analyses
   dplyr::select(participant_id, session_id,
@@ -811,13 +827,39 @@ kable(
 
 ```
 
-In Section 5, we observe that "Any BSD" and individual bipolar diagnoses generally show their highest prevalence at baseline (ses-00A), with a significant portion initially classified as "past-only." Specifically, at baseline, 2.0% of youth (235/11,878) currently met criteria for Any BSD, and 13.2% (1,562/11,878) had a past-only BSD diagnosis - with that category primarily composed of other/unspecified bipolar cases. At the 2-year follow-up (ses-02A), current Any BSD prevalence slightly decreased to 1.1% (129/11,797), and past-only prevalence fell to 7.1% (841/11,797). By the 4-year follow-up (ses-04A) and later, past-only BSD prevalence remained very low (around 0.5%), while current BSD rates rose slightly to approximately 2.5-3.1%. This is likely due to the shift to KSADS 2.0 and better algorithmic/data collection procedures and not any actual patterns in the data. 
+In Section 5, we observe that “Any BSD” and individual bipolar diagnoses generally show their highest prevalence at baseline (ses-00A), with a substantial portion initially classified as “past-only.” Specifically:
 
-For Bipolar I, baseline prevalence was 0.7% current (81/11,878) and 0.2% past-only (28/11,878). At the 2-year follow-up, current prevalence decreased to 0.4% (46/11,797), while past-only remained at 0.2% (24/11,797). However, at subsequent assessments (ses-04A and ses-06A), Bipolar I prevalence increased, with current diagnoses at approximately 0.9-1.1% and past-only around 0.4-0.5%. This is (mostly) expected and likely reflects fairly good quality data. 
+- Any BSD
+    
+  - ses-00A: 2.0% currently met criteria (235 / 11,878) and 7.6% had past-only BSD (904 / 11,878)
+    
+  - ses-02A: current fell to 1.1% (129 / 11,797), past-only to 3.5% (409 / 11,797)
+    
+  - ses-04A: current rose to 2.5% (243 / 9,799), past-only held at 0.5% (51 / 9,799)
+    
+  - ses-06A: current at 3.1% (300 / 9,525), past-only at 0.5% (45 / 9,525)
+    
+- BD-I
+  
+  - ses-00A: 0.7% current (81 / 11,878), 0.2% past-only (28 / 11,878)
+    
+  - ses-02A: 0.4% current (46 / 11,797), 0.2% past-only (24 / 11,797)
+    
+  - ses-04A: 0.9% current (89 / 9,799), 0.5% past-only (45 / 9,799)
+    
+  - ses-06A: 1.1% current (102 / 9,525), 0.4% past-only (39 / 9,525)
+  
+- BD-II
 
-Bipolar II showed a consistently lower prevalence, with baseline current at 0.3% (38/11,878) and past-only at 0.1% (17/11,878). At the 2-year follow-up, current prevalence slightly dropped to 0.2% (24/11,797), while past-only slightly increased to 0.2% (24/11,797). Later waves (ses-04A and ses-06A) showed small increases in current diagnoses (0.4%) and consistently minimal past-only diagnoses (around 0.1%). This is also (mostly) expected and likely reflects fairly good quality data.
+  - ses-00A: 0.3% current (38 / 11,878), 0.1% past-only (17 / 11,878)
+  
+  - ses-02A: 0.2% current (24 / 11,797), 0.2% past-only (24 / 11,797)
+  
+  - ses-04A: 0.4% current (37 / 9,799), 0.1% past-only (8 / 9,799)
+  
+  - ses-06A: 0.4% current (42 / 9,525), 0.1% past-only (7 / 9,525)
 
-Overall, following the introduction of KSADS-COMP version 2.0 after ses-02A, there was a notable rise in current diagnoses for Any BSD and Bipolar I, and minimal past-only diagnoses. No diagnostic data were collected at odd-numbered follow-ups (ses-01A, ses-03A, ses-05A, ses-07A, ses-08A), thus resulting in zero counts at those waves.
+After the shift to KSADS-COMP v2.0 (post-ses-02A), “past-only” flags remained very low (< 1%) while “current” rates for Any BSD and BD-I rose modestly—likely reflecting improved measurement combined with developmentally expected increases in the emergence of the disorder.
 
 ## 6. Transitions: Who “Drops Out” vs. Who “Converts In” at Adjacent Timepoints
 
@@ -913,31 +955,31 @@ kable(
 
 ```
 
-Between each pair of available diagnostic waves, nearly all youth who met criteria at the earlier timepoint no longer met criteria at the next (“Dropped” → ~95% for Bipolar I/II, ~82-94% for Any BSD), and most of those diagnosed at the later timepoint were incident cases (“NewOn” → ~68-97% of those with a diagnosis at time *t+1* did not have it at time *t*). For example:
+Between each pair of available diagnostic waves, nearly all youth who met criteria at the earlier timepoint no longer met criteria at the next (“Dropped” → ~95% for Bipolar I/II, ~86-94% for Any BSD), and most of those diagnosed at the later timepoint were incident cases (“NewOn” → ~78-89% of those with a diagnosis at time *t+1* did not have it at time *t*). More specifically:
   
-- Bipolar I:  
+- BD-I:  
   
-  - ses-00A→ses-02A: 100/105 cases (95.2%) dropped, 64/69 cases at ses-02A (92.8%) were new onset, only 5 remained stable.  
+  - ses-00A→ses-02A: 100/105 cases (95.2%) dropped, 64/69 cases at ses-02A (92.8%) were new onset, only 5 remained stable
 
-  - ses-02A→ses-04A: 65/69 (94.2%) dropped; 129/133 (97.0%) of ses-04A cases were new.  
+  - ses-02A→ses-04A: 65/69 (94.2%) dropped; 129/133 (97.0%) of ses-04A cases were new 
 
-  - ses-04A→ses-06A: 127/133 (95.5%) dropped; 134/140 (95.7%) of ses-06A cases were new.  
+  - ses-04A→ses-06A: 127/133 (95.5%) dropped; 134/140 (95.7%) of ses-06A cases were new
 
-- Bipolar II:  
+- BD-II:  
   
-  - ses-00A→ses-02A: 31/32 (96.9%) dropped; 28/29 (96.6%) of ses-02A cases were new.  
+  - ses-00A→ses-02A: 31/32 (96.9%) dropped; 28/29 (96.6%) of ses-02A cases were new
 
-  - ses-02A→ses-04A: 29/29 (100%) dropped; 45/45 (100%) of ses-04A cases were new (no one remained).  
+  - ses-02A→ses-04A: 29/29 (100%) dropped; 45/45 (100%) of ses-04A cases were new (no one remained)
 
-  - ses-04A→ses-06A: 43/45 (95.6%) dropped; 47/49 (95.9%) of ses-06A cases were new.  
+  - ses-04A→ses-06A: 43/45 (95.6%) dropped; 47/49 (95.9%) of ses-06A cases were new 
 
 - Any BSD:  
   
-  - ses-00A→ses-02A: 1 477/1 797 (82.2%) dropped; 650/970 (67.0%) of ses-02A cases were new, and 320 remained stable.  
+  - ses-00A→ses-02A: 1,011/1,122 (90.1%) dropped; 415/526 (89.5%) of ses-02A cases were new, and 111 remained stable
 
-  - ses-02A→ses-04A: 911/970 (93.9%) dropped; 235/294 (79.9%) of ses-04A cases were new, and 59 remained stable.  
+  - ses-02A→ses-04A: 495/526 (94.1%) dropped; 263/294 (89.5%) of ses-04A cases were new, and 31 remained stable
 
-  - ses-04A→ses-06A: 255/294 (86.7%) dropped; 306/345 (88.7%) of ses-06A cases were new, and 39 remained stable.  
+  - ses-04A→ses-06A: 255/294 (86.7%) dropped; 306/345 (88.7%) of ses-06A cases were new, and 39 remained stable
 
 In sum, very few youth with Bipolar I/II (or Any BSD) remained positive across waves: most earlier cases “dropped out,” and the vast majority of later cases were new onset. This underscores substantial diagnostic turnover rather than persistence across the available follow-ups. No diagnoses were collected in odd-numbered years, so transitions are shown only for even-year intervals
 
@@ -1020,9 +1062,9 @@ transitions_summary <- map_dfr(seq_len(length(sessions) - 1), function(i) {
   tibble(
     Transition = paste0(from, "→", to),
     From = rownames(cnts),
-    NoBSD = paste0(cnts[,"NoBSD"], " (", prps[,"NoBSD"],    "%)"),
-    BD1 = paste0(cnts[,"BD1"], " (", prps[,"BD1"],      "%)"),
-    BD2 = paste0(cnts[,"BD2"], " (", prps[,"BD2"],      "%)"),
+    NoBSD = paste0(cnts[,"NoBSD"], " (", prps[,"NoBSD"], "%)"),
+    BD1 = paste0(cnts[,"BD1"], " (", prps[,"BD1"], "%)"),
+    BD2 = paste0(cnts[,"BD2"], " (", prps[,"BD2"], "%)"),
     OtherBSD = paste0(cnts[,"OtherBSD"], " (", prps[,"OtherBSD"], "%)")
   )
 })
@@ -1070,6 +1112,7 @@ links <- links %>%
   )
 
 #7.5.4 Plot Sankey diagram
+cat("Sankey Diagram of Transition Counts Between Diagnostic States\n")
 sankeyNetwork(
   Links = links,
   Nodes = nodes,
@@ -1088,19 +1131,19 @@ Across each consecutive assessment wave, most youth without a bipolar diagnosis 
 
 Youth initially diagnosed with BD-I, BD-II, or Other BSD demonstrated high diagnostic instability. For example, between baseline and the 2-year follow-up, 87.5% of BD-I youth transitioned to NoBSD, with similarly high rates for BD-II (85.4%) and OtherBSD (90%). This pattern persisted across subsequent follow-ups, reflecting substantial flux rather than diagnostic persistence, particularly notable in transitions from diagnostic categories back to No BSD.
 
-Another informative spot check is how many youth have any BSD at multiple timepoints. In brief, 2,346 (19.7%) participants have any BSD at any 1 of the timepoints; 458 (3.85%) participants have any BSD at 2 timepoints; 40 (0.33%) participants have any BSD at 3 timepoints; and 6 (0.05%) participants have any BSD at all 4 timepoints. 
+Another informative spot check is how many youth have any BSD at multiple timepoints. In brief, 1,793 (15.1%) participants have any BSD at any 1 of the timepoints; 229 (1.9%) participants have any BSD at 2 timepoints; 19 (0.16%) participants have any BSD at 3 timepoints; and 2 (0.01%) participants have any BSD at all 4 timepoints. 
 
 ## 8. Tiered Bipolar‐Spectrum Definitions & Their Stability
 
 As forms of potential sensitivity analyses and to increase the specificity and sensitivity in our BSD cases, we define four “tiers” of increasing diagnostic stringency at each assessment timepoint to compare to just KSADS-COMP derived diagnoses:
 
-  1. **Tier 1**: All four CBCL subscales (depression, anxiety, attention, aggression) ≥ 70 T-score  
+  1. **Tier 1**: All four CBCL subscales (depression, anxiety, attention, aggression) ≥ 65 T-score  
   
-  2. **Tier 2**: Tier 1 **+** GBI Mania total > 12 
+  2. **Tier 2**: Tier 1 **+** GBI Mania total ≥ 12 
 
   3. **Tier 3**: KSADS any BSD (current or past-only) **+** Tier 1  
 
-  4. **Tier 4**: KSADS any BSD **+** Tier 1 **+** GBI Mania > 12  
+  4. **Tier 4**: KSADS any BSD **+** Tier 1 **+** GBI Mania ≥ 12  
   
 We then count, for each youth, at how many of the four timepoints of interest (baseline, 2-year, 4-year, and 6-year follow-ups) they meet each tier, and display the distribution of those counts.
 
@@ -1128,13 +1171,13 @@ tier_data <- tier_data %>%
   mutate(
     any_bsd_flag  = as.numeric(any_bsd_current==1 | any_bsd_pastonly==1),
     tier1 = as.numeric(
-      mh_p_cbcl__dsm__dep_tscore >= 70 &
-      mh_p_cbcl__dsm__anx_tscore >= 70 &
-      mh_p_cbcl__synd__attn_tscore >= 70 &
-      mh_p_cbcl__synd__aggr_tscore >= 70),
-    tier2 = as.numeric(tier1 == 1 & mh_p_gbi_sum > 12),
+      mh_p_cbcl__dsm__dep_tscore >= 65 &
+      mh_p_cbcl__dsm__anx_tscore >= 65 &
+      mh_p_cbcl__synd__attn_tscore >= 65 &
+      mh_p_cbcl__synd__aggr_tscore >= 65),
+    tier2 = as.numeric(tier1 == 1 & mh_p_gbi_sum >= 12),
     tier3 = as.numeric(any_bsd_flag == 1 & tier1 == 1),
-    tier4 = as.numeric(any_bsd_flag == 1 & tier1 == 1 & mh_p_gbi_sum > 12)
+    tier4 = as.numeric(any_bsd_flag == 1 & tier1 == 1 & mh_p_gbi_sum >= 12)
   )
 
 #8.2 Determine the prevalence of Each Tier by Timepoint
@@ -1164,8 +1207,8 @@ kable(
   digits = c(0, 0, 0, 0, 2),
   caption = "Prevalence of Each Tier by Wave") %>%
   kable_styling(full_width = FALSE) %>%
-  pack_rows("Tier1 (CBCL BD Profile ≥ 70)", 1, length(unique(tier_prev$session_id))) %>%
-  pack_rows("Tier2 (+GBI Mania > 12)", length(unique(tier_prev$session_id)) +
+  pack_rows("Tier1 (CBCL BD Profile ≥ 65)", 1, length(unique(tier_prev$session_id))) %>%
+  pack_rows("Tier2 (+GBI Mania >= 12)", length(unique(tier_prev$session_id)) +
               1, 2 * length(unique(tier_prev$session_id))) %>%
   pack_rows("Tier3 (+KSADS Any BSD)",
             2 * length(unique(tier_prev$session_id)) + 1,
@@ -1226,10 +1269,10 @@ kable(
 #8.4 Build Sankey diagrams for each tier
 #8.4.1 Create tier labels for plots
 tier_labels <- c(
-  tier1 = "Tier 1 - CBCL >=70 on All 4 Subscales",
-  tier2 = "Tier 2 - Tier 1 + GBI Mania >12",
+  tier1 = "Tier 1 - CBCL >=65 on All 4 Subscales",
+  tier2 = "Tier 2 - Tier 1 + GBI Mania >=12",
   tier3 = "Tier 3 - Any BSD + Tier 1",
-  tier4 = "Tier 4 - Any BSD + Tier 1 + GBI Mania >12"
+  tier4 = "Tier 4 - Any BSD + Tier 1 + GBI Mania >=12"
 )
 
 #8.4.2 Loop through each tier and create a sankey diagram for diagnostic transitions over time
@@ -1290,12 +1333,433 @@ Across the four even-year follow-up timepoints, the tiers are quite low in occur
 
 Moreover, all four tiers show marked instability (ses-00 → 02 → 04 → 06):
 
-  - Tier 1: ~83% of baseline cases drop by 2 yrs; new-onset cases each wave are ~75% of those diagnosed at the next wave, leaving only 4-5 participants (≤0.04 %) who persist from one wave to the next.
+  - Tier 1: ~79% of baseline cases drop by 2 yrs; new-onset cases each wave are 69-83% of those diagnosed at the next wave, leaving 10-30 participants (13.2-21.0%) who persist from one wave to the next.
 
-  - Tier 2: ≥ 88% of baseline cases remit by 2 yrs and ≥ 83% of the next-wave cases are incident.
+  - Tier 2: ≥ 88% of baseline cases remit by 2 yrs and ≥ 81% of the next-wave cases are incident.
 
-  - Tier 3: 94% of baseline Tier 3 participants lose the tier by 2 yrs; every following Tier 3 case is incident (100% “new-onset”) and none persist across consecutive waves.
+  - Tier 3: 88% of baseline Tier 3 participants lose the tier by 2 yrs; every following Tier 3 case except for 1 is incident (100% “new-onset”) and none persist across consecutive waves.
 
-  - Tier 4: The strictest definition is almost entirely transient; every wave after baseline sees complete drop-out of prior Tier 4 cases and 100% of the few subsequent Tier 4 diagnoses are new relative to previous timepoints.
+  - Tier 4: The strictest definition is almost entirely transient; every wave after baseline sees almost complete drop-out of prior Tier 4 cases and 100% of the few subsequent Tier 4 diagnoses are new relative to previous timepoints.
 
-**Overall**, < 0.3% of the ABCD cohort ever meets Tier 1, < 0.15% meets Tier 2, and Tier 3/Tier 4 occur in only one or two dozen participants each wave. Persistence across multiple waves is exceptionally rare (no one meets Tier 3 or Tier 4 at two consecutive waves). To me, these findings reinforce that even with additional “validation” criteria, bipolar-spectrum indicators in ABCD are infrequent and highly unstable over time. Which is not to say that we shouldn't trust that our clinical classifications aren't useful or even that they don't represent bipolar in a way we wouldn't expect; just that they are limited by how much we trust their validity & reliability compared to clinician administered diagnoses
+**Overall**, < 1.5% of the ABCD cohort ever meets Tier 1, < 0.5% meets Tier 2, and Tier 3/Tier 4 occur in only a few dozen participants each wave. Persistence across multiple waves is exceptionally rare (single digit numbers of participants meet Tier 3 or Tier 4 at two consecutive waves). To me, these findings reinforce that even with additional “validation” criteria, bipolar-spectrum indicators in ABCD are infrequent and highly unstable over time. Which is not to say that we shouldn't trust that our clinical classifications aren't useful or even that they don't represent bipolar in a way we wouldn't expect; just that they are limited by how much we trust their validity & reliability compared to clinician administered diagnoses
+
+##9. Clarifying Bipolar NOS Diagnoses
+
+Given that the unspecified bipolar and related disorder diagnoses occur in much higher rates than anticipated at the baseline and 2-year follow-up assessment timepoints (when KSADS 1.0 was delivered) and are highly unstable across time, we will do the following to determine whether we can operationalize the unspecified bipolar and related disorder diagnoses from those two timepoints in a manner that allows us to trust the data (i.e., whether subjects with said diagnoses are truly experiencing BD symptomatology): 
+
+  1. Check whether any assessment sites have inflated rates of these diagnoses
+  
+  2. Stratify the BD NOS cases by GBI scores > 12 and check what patterns emerge over time (e.g., stability)
+  
+As such, we will first examine the rates of BD NOS diagnoses (and BD NOS diagnoses stratified by GBI mania >= 12) at each assessment site:
+
+```{r eda 9.1, warning = FALSE, echo = FALSE, fig.height = 11.5, fig.width = 8.5}
+
+## Clarifying Bipolar NOS Diagnoses ##
+
+#9.1 Check whether any assessment sites have inflated rates of these diagnoses
+#9.1.1 Define the exact OtherBSD columns and sessions of interest
+other_bsd_vars <- c(
+  "mh_p_ksads__bpd__bpd2__oth__mindur_dx",
+  "mh_p_ksads__bpd__oth__mindur_dx",
+  "mh_y_ksads__bpd__bpd2__oth__mindur_dx",
+  "mh_y_ksads__bpd__oth__mindur_dx",
+  "mh_p_ksads__bpd__unspec__pres_dx",
+  "mh_p_ksads__bpd__unspec__past_dx",
+  "mh_y_ksads__bpd__unspec__pres_dx",
+  "mh_y_ksads__bpd__unspec__past_dx"
+)
+sessions <- c("ses-00A", "ses-02A")
+
+#9.1.2 Build working dataframe of outcomes of interest & assessment site data
+#9.1.2.1 Create a dataframe containing complete site information
+site_data <- raw_data %>%
+  dplyr::select(c(participant_id, session_id, ab_g_dyn__design_site)) %>% 
+group_by(participant_id) %>%
+  
+  #9.1.2.1.1 For each participant, fill NA values with the first non-NA value found
+  fill(ab_g_dyn__design_site, .direction = "updown") %>%
+  ungroup()
+
+#9.1.2.2 Join the site data with the outcome data & flag BD NOS & GBI >= 12 cases
+bdnos_site <- prelim_outcome_data %>%
+  filter(session_id %in% sessions) %>%
+  left_join(site_data, by=c("participant_id","session_id")) %>%
+  dplyr::select(participant_id, session_id, all_of(other_bsd_vars), bipolar_I, bipolar_II, mh_p_gbi_sum, ab_g_dyn__design_site) %>%
+  
+  #9.1.2.2.1 Flag NOS vs. GBI‐high subjects
+  mutate(
+    unspec_flag = +(
+      
+      #9.1.2.2.1.1 has any of the OtherBSD flags
+      rowSums(select(., all_of(other_bsd_vars)) == 1, na.rm=TRUE) > 0
+      
+      #9.1.2.2.1.2 but not BD-I or BD-II
+      & bipolar_I == 0 & bipolar_II == 0),
+    gbi_high = +(mh_p_gbi_sum >= 12)) %>%
+  filter(!is.na(ab_g_dyn__design_site))
+
+#9.1.3 Summarize data by site & session
+site_summary <- bdnos_site %>%
+  group_by(ab_g_dyn__design_site, session_id) %>%
+  filter(session_id == "ses-00A" | session_id == "ses-02A") %>% 
+  summarise(
+    total = n(),
+    nos_cases = sum(unspec_flag),
+    nos_gbi = sum(unspec_flag & gbi_high),
+    .groups = "drop") %>%
+  
+  #9.1.3.1 ensure every site×session appears
+  complete(
+    ab_g_dyn__design_site,
+    session_id = sessions,
+    fill = list(total=0, nos_cases=0, nos_gbi=0)) %>%
+  
+  #9.1.3.2 compute percentages, converting any NaN/NA → 0
+  mutate(
+    pct_nos = if_else(total>0, 100 * nos_cases/total, 0),
+    pct_nos_gbi = if_else(nos_cases>0, 100 * nos_gbi/nos_cases, 0)) %>%
+  arrange(ab_g_dyn__design_site, session_id) %>% 
+  dplyr::select(c(ab_g_dyn__design_site, session_id, total, nos_cases, pct_nos, nos_gbi, pct_nos_gbi))
+
+#9.1.4 Print cleaned summary table
+kable(site_summary, 
+      col.names = c("Site","Session","Total Site N","N BD NOS","% BD NOS","N BD NOS + GBI≥12","% of NOS w GBI≥12"), 
+      digits = c(0,0,0,0,2,0,2),
+      caption = "Site-Level Unspecified BSD Rates by Session") %>%
+  kable_styling(full_width = FALSE)
+
+
+#9.1.5 Plot BD NOS data (and cases stratified by GBI≥12)                                                
+plot_df <- site_summary %>%  
+  
+  #9.1.5.1 Compute overall % BD NOS & GBI≥12                        
+  mutate(
+    pct_nos_and_gbi_total = if_else(total > 0, 100 * nos_gbi / total, 0)) %>%
+  
+  #9.1.5.2 Pivot to long format
+  pivot_longer(
+    cols = c(pct_nos, pct_nos_and_gbi_total),
+    names_to = "metric",
+    values_to = "percent") %>%
+  
+  #9.1.5.3 Recode metric names and reorder sites within each session by % BD NOS
+  mutate(
+    metric = recode(metric,
+      pct_nos = "% BD NOS (of total)",
+      pct_nos_and_gbi_total = "% BD NOS + GBI≥12 (of total)"),
+    site_reordered = reorder_within(
+      ab_g_dyn__design_site,
+      percent,
+      session_id,
+      .fun = max)
+  )
+
+#9.1.5.4 Plot bar‐chart of % BD NOS vs. % BD NOS + GBI≥12 by site & session
+ggplot(plot_df, aes(
+  x = site_reordered,
+  y = percent,
+  fill = metric)) +
+  
+  #9.1.5.4.1 Draw grouped bars
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  
+  #9.1.5.4.2 Separate panels for each session, free y-scale 
+  facet_wrap(~ session_id, ncol = 1, scales = "free_y") +
+  
+  #9.1.5.4.3 Restore original site labels
+  scale_x_reordered() +
+  coord_flip() +
+  
+  #9.1.5.4.4 Custom two-tone fill palette
+  scale_fill_manual(
+    values = c("#9E2A2B", "#4C72B0")) +
+  
+  #9.1.5.4.5 Labels and title
+  labs(
+    x = "Assessment Site (ordered by % BD NOS)",
+    y = "Percent of Site Sample",
+    fill = NULL,
+    title = "Unspecified BSD & GBI≥12 (of Total) by Site & Session") +
+  
+  #9.1.5.4.6 Clean theme & spacing tweaks
+  theme_minimal(base_size = 11) +
+  theme(
+    strip.text = element_text(face = "bold"),
+    axis.text.y = element_text(size = 7),
+    panel.spacing = unit(0.75, "lines"),
+    legend.position = "top"
+  )
+
+```
+
+From these results, it is evident that some sites (e.g., 22 AKA Mount Sinai and 15 AKA Pitt) have a much higher incidence rate of BD NOS cases diagnosed per-capita (e.g., 16% and 13% at baseline, respectively).
+
+However, even the lowest incidence rates for BD NOS cases at any site (i.e., 3.6% at site 16 AKA University of Utah, followed by 5.9% at site 10 AKA UCSD) exceeds the rate we would expect to observe in the population. So, while some scrutiny could be placed on diagnoses coming from specific sites (i.e., us stratifying our study participants in that way), it is likely that a more broad stratification criteria based on symptoms applied to the whole data set would be more appropriate for "trusting" the diagnoses here.
+
+In this same vein, we will now examine the incidence and stability of BD NOS cases across the baseline and 2-year follow-up set when stratified by GBI mania scores >= 12. 
+
+Additionally, on this same topic, correspondence with Dr. Kenneth Kobak on 06/25/2025 related to the algorithms used to indicate BD NOS diagnoses in KSADS 1.0 vs 2.0 revealed that the only difference between the BD NOS diagnoses derived from KSADS 1.0 and 2.0 is the necessary presence of 1) a past or current MDD diagnosis and 2) 3 hypomania symptoms (as opposed to 2 symptoms) using KSADS 2.0. 
+
+As such, below is also another sort of spot check comparing the rates of BD NOS diagnosis across time when we stratify the cases at baseline and 2-year follow-up (i.e., derived from KSADS 1.0) by those with a part or current MDD diagnosis:
+
+```{r eda 9.2, warning = FALSE, echo = FALSE, fig.height = 11.5, fig.width = 8.5}
+
+## Clarifying BD NOS Diagnoses: GBI Mania & Lifetime MDD Spot Checks ##
+
+#9.2.1 Augment bdnos_site with lifetime‐MDD (only MDD columns) and pivot for 00A & 02A 
+#9.2.1.1 Define the six KSADS‐COMP MDD columns to use
+mdd_only_vars <- c(
+  "mh_p_ksads__dep__mdd__pres_dx",
+  "mh_p_ksads__dep__mdd__past_dx",
+  "mh_p_ksads__dep__mdd__partrem_dx",
+  "mh_y_ksads__dep__mdd__pres_dx",
+  "mh_y_ksads__dep__mdd__past_dx",
+  "mh_y_ksads__dep__mdd__partrem_dx"
+)
+
+#9.2.1.2 Join MDD flags onto bdnos_site, compute gbi & mdd flags, filter to 00A/02A, and pivot wide
+bdnos_site2 <- bdnos_site %>%
+  
+  #9.2.1.2.1 Bring in only the six MDD columns from raw_data_trimmed
+  left_join(
+  raw_data_trimmed %>% 
+  dplyr::select(participant_id, session_id, all_of(mdd_only_vars)),
+  by = c("participant_id", "session_id")) %>%
+  
+  #9.2.1.2.2 Compute binary MDD flag (any of the six = 1)
+  mutate(
+  mdd_flag = +(
+  rowSums(dplyr::select(., all_of(mdd_only_vars)) == 1, na.rm = TRUE) > 0)) %>%
+  
+  #9.2.1.2.3 Keep only the flags and identifiers
+  dplyr::select(participant_id, session_id, unspec_flag, gbi_high, mdd_flag) %>%
+  
+  #9.2.1.2.4 Filter down to the two KSADS 1.0 waves
+  filter(session_id %in% c("ses-00A", "ses-02A")) %>%
+  
+  #9.2.1.2.5 Pivot to wide so each subject has columns for each flag at each wave
+  pivot_wider(
+  names_from  = session_id,
+  values_from = c(unspec_flag, gbi_high, mdd_flag),
+  names_sep = "__") %>%
+  
+  #9.2.1.2.6 Rename for readability
+  rename_with(~ str_replace_all(.x, 
+    c(
+    "unspec_flag__ses-00A" = "unspec_00A",
+    "unspec_flag__ses-02A" = "unspec_02A",
+    "gbi_high__ses-00A" = "gbi_00A",
+    "gbi_high__ses-02A" = "gbi_02A",
+    "mdd_flag__ses-00A" = "mdd_00A",
+    "mdd_flag__ses-02A" = "mdd_02A")), everything())
+
+#9.2.2 Prevalence tables at 00A & 02A 
+#9.2.2.1 Build a summary tibble with counts and percentages for NOS alone, NOS+GBI, NOS+MDD
+prev_table <- tibble(Session = c("ses-00A","ses-02A")) %>%
+  mutate(
+    
+    #9.2.2.1.1 total N (same for both rows)
+    N = nrow(bdnos_site2),
+    
+    #9.2.2.1.2 counts of BD NOS at each wave
+    BD_NOS = c(
+      sum(bdnos_site2$unspec_00A == 1, na.rm = TRUE),
+      sum(bdnos_site2$unspec_02A == 1, na.rm = TRUE)),
+    
+    #9.2.2.1.3 % BD NOS of total
+    `% NOS` = 100 * BD_NOS / N,
+    
+    #9.2.2.1.4 counts of BD NOS & high GBI
+    BD_NOS_GBI = c(
+      sum(bdnos_site2$unspec_00A & bdnos_site2$gbi_00A, na.rm = TRUE),
+      sum(bdnos_site2$unspec_02A & bdnos_site2$gbi_02A, na.rm = TRUE)),
+    
+    #9.2.2.1.5 % BD NOS ∧ GBI≥12 of total
+    `% NOS+GBI≥12` = 100 * BD_NOS_GBI / N,
+    
+    #9.2.2.1.6 counts of BD NOS & lifetime MDD
+    BD_NOS_MDD = c(
+      sum(bdnos_site2$unspec_00A & bdnos_site2$mdd_00A, na.rm = TRUE),
+      sum(bdnos_site2$unspec_02A & bdnos_site2$mdd_02A, na.rm = TRUE)),
+    
+    #9.2.2.1.7 % BD NOS ∧ MDD of total
+    `% NOS+MDD` = 100 * BD_NOS_MDD / N,
+    
+    #9.2.2.1.8 counts of BD NOS & (GBI≥12 ∧ lifetime MDD)
+    BD_NOS_GBI_MDD = c(
+      sum(bdnos_site2$unspec_00A & bdnos_site2$gbi_00A & bdnos_site2$mdd_00A, na.rm = TRUE),
+      sum(bdnos_site2$unspec_02A & bdnos_site2$gbi_02A & bdnos_site2$mdd_02A, na.rm = TRUE)),
+    
+    #9.2.2.1.9 % BD NOS ∧ GBI≥12 ∧ MDD of total
+    `% NOS+GBI+MDD` = 100 * BD_NOS_GBI_MDD / N
+  )
+
+#9.2.2.2 Print the combined prevalence table
+kable(
+  prev_table,
+  caption = "Overall Prevalence of BD NOS and Its Co-occurrence with GBI≥12 and Lifetime MDD",
+  col.names = c(
+    "Session", "Total N",
+    "N NOS", "% NOS",
+    "N NOS+GBI≥12","% NOS+GBI≥12",
+    "N NOS+MDD", "% NOS+MDD",
+    "N NOS+GBI+MDD","% NOS+GBI+MDD"),
+  digits = c(0,0,0,1,0,1,0,1,0,1)) %>%
+  kable_styling(full_width = FALSE)
+
+#9.2.3 Transition tables by GBI & by MDD 
+#9.2.3.1 Helper to compute drop/new stats for any binary flag
+make_transitions <- function(df, flag00, flag02) {
+  df %>% summarize(
+  N_w_00A = sum({{flag00}} == 1, na.rm=TRUE),
+  N_wo_00A  = sum({{flag00}} == 0, na.rm=TRUE),
+  Dropped = sum({{flag00}} == 1 & {{flag02}} == 0, na.rm=TRUE),
+  Still_Has = sum({{flag00}} == 1 & {{flag02}} == 1, na.rm=TRUE),
+  New_Onset = sum({{flag00}} == 0 & {{flag02}} == 1, na.rm=TRUE),
+  `%Dropped`  = 100 * Dropped / max(N_w_00A,1),
+  `%NewOnset` = 100 * New_Onset / max(N_wo_00A,1))
+}
+
+#9.2.3.2 Transitions stratified by GBI Mania ≥ 12 at baseline
+trans_gbi <- bdnos_site2 %>%
+  group_by(GBI_Stratum = if_else(gbi_00A == 1, "GBI ≥12", "GBI <12")) %>%
+  make_transitions(unspec_00A, unspec_02A)
+
+#9.2.3.3 Transitions stratified by Lifetime MDD at baseline
+trans_mdd <- bdnos_site2 %>%
+  group_by(MDD_Stratum = if_else(mdd_00A == 1, "MDD+", "MDD–")) %>%
+  make_transitions(unspec_00A, unspec_02A)
+
+#9.2.3.4 Print transition tables
+#9.2.3.4.1 BD NOS + GBI
+kable(
+  trans_gbi,
+  caption = "BD NOS Transitions 00A→02A by Baseline GBI Mania Stratum",
+  col.names = c("GBI Stratum","N @00A","N no @00A",
+      "Dropped","Still Has","New","%Dropped","%NewOnset"),
+  digits = c(0,0,0,0,0,0,1,1)) %>% 
+  kable_styling(full_width = FALSE)
+
+#9.2.3.4.1 BD NOS + MDD
+kable(
+  trans_mdd,
+  caption = "BD NOS Transitions 00A→02A by Baseline Lifetime MDD Stratum",
+  col.names = c("MDD Stratum","N @00A","N no @00A",
+      "Dropped","Still Has","New","%Dropped","%NewOnset"),
+  digits = c(0,0,0,0,0,0,1,1)) %>% 
+  kable_styling(full_width = FALSE)
+
+#9.2.4 Create sankey diagrams outlining the transition flow for each subgroup
+#9.2.4.1 Sankey: BD NOS → BD NOS by GBI Mania Stratum 
+for (strat in na.omit(unique(bdnos_site2$gbi_00A))) {
+  
+  #9.2.4.1.1 Subset to this GBI stratum
+  df_str <- bdnos_site2 %>% 
+    filter(gbi_00A == strat)
+  
+  #9.2.4.1.2 Build transition matrix (No NOS → NOS)
+  mat <- table(
+    From = factor(ifelse(df_str$unspec_00A == 1, "NOS", "No NOS"),
+                  levels = c("No NOS","NOS")),
+    To = factor(ifelse(df_str$unspec_02A == 1, "NOS", "No NOS"),
+                  levels = c("No NOS","NOS")))
+  
+  #9.2.4.1.3 Convert to long format and drop zero flows
+  links <- as.data.frame(mat) %>% 
+    filter(Freq > 0) %>% 
+    transmute(
+      source = paste0("00A_", From),
+      target = paste0("02A_", To),
+      value  = Freq)
+  
+  #9.2.4.1.4 Create node list
+  nodes <- data.frame(
+    name = unique(c(links$source, links$target)),
+    stringsAsFactors = FALSE)
+  
+  #9.2.4.1.5 Map to zero-based node IDs
+  links <- links %>%
+    mutate(
+      IDsource = match(source, nodes$name) - 1,
+      IDtarget = match(target, nodes$name) - 1)
+  
+  #9.2.4.1.6 Friendly label for this stratum
+  strat_label <- ifelse(strat == 1, "GBI ≥12", "GBI <12")
+  cat("#### Sankey: BD NOS 00A→02A (", strat_label, ")\n\n", sep = "")
+  
+  #9.2.4.1.7 Render the Sankey
+  print(networkD3::sankeyNetwork(
+    Links = links,
+    Nodes = nodes,
+    Source = "IDsource",
+    Target = "IDtarget",
+    Value = "value",
+    NodeID = "name",
+    fontSize = 10,
+    nodeWidth = 30,
+    sinksRight = FALSE))
+  
+  cat("\n\n")
+}
+
+#9.2.4.2 Sankey: Lifetime MDD
+#9.2.4.2.1 Loop only over non‐NA MDD strata
+for (strat in na.omit(unique(bdnos_site2$mdd_00A))) {
+
+  #9.2.4.2.2 Subset to this MDD stratum
+  df_m <- bdnos_site2 %>%
+    filter(mdd_00A == strat)
+
+  #9.2.4.2.3 Build transition matrix (No NOS → NOS)
+  mat_m <- table(
+    From = factor(ifelse(df_m$unspec_00A == 1, "NOS", "No NOS"),
+                  levels = c("No NOS","NOS")),
+    To = factor(ifelse(df_m$unspec_02A == 1, "NOS", "No NOS"),
+                  levels = c("No NOS","NOS")))
+
+  #9.2.4.2.4 Convert to data.frame and drop zero flows
+  links_m <- as.data.frame(mat_m) %>%
+    filter(Freq > 0) %>%
+    transmute(
+      source = paste0("00A_", From),
+      target = paste0("02A_", To),
+      value = Freq)
+
+  #9.2.4.2.5 Build node list
+  nodes_m <- data.frame(
+    name = unique(c(links_m$source, links_m$target)),
+    stringsAsFactors = FALSE)
+
+  #9.2.4.2.6 Map to zero-based node IDs
+  links_m <- links_m %>%
+    mutate(
+      IDsource = match(source, nodes_m$name) - 1,
+      IDtarget = match(target, nodes_m$name) - 1)
+
+  #9.2.4.2.7 Friendly label for this stratum
+  mdd_label <- ifelse(strat == 1, "MDD+", "MDD−")
+  cat("#### Sankey: BD NOS 00A→02A (", mdd_label, ")\n\n", sep = "")
+
+  #9.2.4.2.8 Render the Sankey
+  print(networkD3::sankeyNetwork(
+    Links = links_m,
+    Nodes = nodes_m,
+    Source = "IDsource",
+    Target = "IDtarget",
+    Value = "value",
+    NodeID = "name",
+    fontSize = 10,
+    nodeWidth = 30,
+    sinksRight = FALSE))
+
+  cat("\n\n")
+}
+
+
+```
+
+
+
+## 10. Determine Operationalization of Outcome Variables
+

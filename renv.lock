@@ -930,6 +930,19 @@
       ],
       "Hash": "38bbf05fc2503143db4c734a7e5cab66"
     },
+    "data.tree": {
+      "Package": "data.tree",
+      "Version": "1.1.0",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R",
+        "R6",
+        "methods",
+        "stringi"
+      ],
+      "Hash": "d7602f0f55e0335b83f2353337848d6f"
+    },
     "datawizard": {
       "Package": "datawizard",
       "Version": "1.0.0",
@@ -1855,6 +1868,29 @@
       ],
       "Hash": "0f14199bbd820a9fca398f2df40994f1"
     },
+    "igraph": {
+      "Package": "igraph",
+      "Version": "2.1.4",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "Matrix",
+        "R",
+        "cli",
+        "cpp11",
+        "grDevices",
+        "graphics",
+        "lifecycle",
+        "magrittr",
+        "methods",
+        "pkgconfig",
+        "rlang",
+        "stats",
+        "utils",
+        "vctrs"
+      ],
+      "Hash": "db7352c3d239d0a319d2e3d0d040ed16"
+    },
     "infer": {
       "Package": "infer",
       "Version": "1.0.7",
@@ -2407,6 +2443,21 @@
         "stats"
       ],
       "Hash": "c7241e6be9d6df551a2e539a50f5c875"
+    },
+    "networkD3": {
+      "Package": "networkD3",
+      "Version": "0.4.1",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R",
+        "data.tree",
+        "htmlwidgets",
+        "igraph",
+        "jsonlite",
+        "magrittr"
+      ],
+      "Hash": "a4c0a43c1fe6182e7f9684b3bf014bcd"
     },
     "nlme": {
       "Package": "nlme",
