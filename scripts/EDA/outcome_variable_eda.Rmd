@@ -27,6 +27,18 @@ The following report contains information regarding the:
   3. Skewness + appropriateness of the mean as the measure of central tendency for continuous variables
   
   4. Shape of each variables' distribution
+  
+  5. Distribution of Past-Only vs. Current Diagnoses by Timepoint
+  
+  6. Transitions: Who “Drops Out” vs. Who “Converts In” at Adjacent Timepoints
+  
+  7. Transitions Between Diagnostic Sub-Categories
+  
+  8. Tiered Bipolar‐Spectrum Definitions & Their Stability
+  
+  9. Clarifying Bipolar NOS Diagnoses
+  
+  10. Operationalization of Outcome Variables
 
 ```{r environment, echo = FALSE, include = FALSE, warning = FALSE}
 
@@ -1137,13 +1149,13 @@ Another informative spot check is how many youth have any BSD at multiple timepo
 
 As forms of potential sensitivity analyses and to increase the specificity and sensitivity in our BSD cases, we define four “tiers” of increasing diagnostic stringency at each assessment timepoint to compare to just KSADS-COMP derived diagnoses:
 
-  1. **Tier 1**: All four CBCL subscales (depression, anxiety, attention, aggression) ≥ 65 T-score  
+  1. **Tier 1**: All four CBCL subscales (depression, anxiety, attention, aggression) >= 65 T-score  
   
-  2. **Tier 2**: Tier 1 **+** GBI Mania total ≥ 12 
+  2. **Tier 2**: Tier 1 **+** GBI Mania total >= 12 
 
   3. **Tier 3**: KSADS any BSD (current or past-only) **+** Tier 1  
 
-  4. **Tier 4**: KSADS any BSD **+** Tier 1 **+** GBI Mania ≥ 12  
+  4. **Tier 4**: KSADS any BSD **+** Tier 1 **+** GBI Mania >= 12  
   
 We then count, for each youth, at how many of the four timepoints of interest (baseline, 2-year, 4-year, and 6-year follow-ups) they meet each tier, and display the distribution of those counts.
 
@@ -1207,7 +1219,7 @@ kable(
   digits = c(0, 0, 0, 0, 2),
   caption = "Prevalence of Each Tier by Wave") %>%
   kable_styling(full_width = FALSE) %>%
-  pack_rows("Tier1 (CBCL BD Profile ≥ 65)", 1, length(unique(tier_prev$session_id))) %>%
+  pack_rows("Tier1 (CBCL BD Profile >= 65)", 1, length(unique(tier_prev$session_id))) %>%
   pack_rows("Tier2 (+GBI Mania >= 12)", length(unique(tier_prev$session_id)) +
               1, 2 * length(unique(tier_prev$session_id))) %>%
   pack_rows("Tier3 (+KSADS Any BSD)",
@@ -1335,7 +1347,7 @@ Moreover, all four tiers show marked instability (ses-00 → 02 → 04 → 06):
 
   - Tier 1: ~79% of baseline cases drop by 2 yrs; new-onset cases each wave are 69-83% of those diagnosed at the next wave, leaving 10-30 participants (13.2-21.0%) who persist from one wave to the next.
 
-  - Tier 2: ≥ 88% of baseline cases remit by 2 yrs and ≥ 81% of the next-wave cases are incident.
+  - Tier 2: >= 88% of baseline cases remit by 2 yrs and >= 81% of the next-wave cases are incident.
 
   - Tier 3: 88% of baseline Tier 3 participants lose the tier by 2 yrs; every following Tier 3 case except for 1 is incident (100% “new-onset”) and none persist across consecutive waves.
 
@@ -1424,16 +1436,16 @@ site_summary <- bdnos_site %>%
 
 #9.1.4 Print cleaned summary table
 kable(site_summary, 
-      col.names = c("Site","Session","Total Site N","N BD NOS","% BD NOS","N BD NOS + GBI≥12","% of NOS w GBI≥12"), 
+      col.names = c("Site","Session","Total Site N","N BD NOS","% BD NOS","N BD NOS + GBI>=12","% of NOS w GBI>=12"), 
       digits = c(0,0,0,0,2,0,2),
       caption = "Site-Level Unspecified BSD Rates by Session") %>%
   kable_styling(full_width = FALSE)
 
 
-#9.1.5 Plot BD NOS data (and cases stratified by GBI≥12)                                                
+#9.1.5 Plot BD NOS data (and cases stratified by GBI>=12)                                                
 plot_df <- site_summary %>%  
   
-  #9.1.5.1 Compute overall % BD NOS & GBI≥12                        
+  #9.1.5.1 Compute overall % BD NOS & GBI>=12                        
   mutate(
     pct_nos_and_gbi_total = if_else(total > 0, 100 * nos_gbi / total, 0)) %>%
   
@@ -1447,7 +1459,7 @@ plot_df <- site_summary %>%
   mutate(
     metric = recode(metric,
       pct_nos = "% BD NOS (of total)",
-      pct_nos_and_gbi_total = "% BD NOS + GBI≥12 (of total)"),
+      pct_nos_and_gbi_total = "% BD NOS + GBI>=12 (of total)"),
     site_reordered = reorder_within(
       ab_g_dyn__design_site,
       percent,
@@ -1455,7 +1467,7 @@ plot_df <- site_summary %>%
       .fun = max)
   )
 
-#9.1.5.4 Plot bar‐chart of % BD NOS vs. % BD NOS + GBI≥12 by site & session
+#9.1.5.4 Plot bar‐chart of % BD NOS vs. % BD NOS + GBI>=12 by site & session
 ggplot(plot_df, aes(
   x = site_reordered,
   y = percent,
@@ -1480,7 +1492,7 @@ ggplot(plot_df, aes(
     x = "Assessment Site (ordered by % BD NOS)",
     y = "Percent of Site Sample",
     fill = NULL,
-    title = "Unspecified BSD & GBI≥12 (of Total) by Site & Session") +
+    title = "Unspecified BSD & GBI>=12 (of Total) by Site & Session") +
   
   #9.1.5.4.6 Clean theme & spacing tweaks
   theme_minimal(base_size = 11) +
@@ -1556,7 +1568,7 @@ bdnos_site2 <- bdnos_site %>%
 
 #9.2.2 Prevalence tables at 00A & 02A 
 #9.2.2.1 Build a summary tibble with counts and percentages for NOS alone, NOS+GBI, NOS+MDD
-prev_table <- tibble(Session = c("ses-00A","ses-02A")) %>%
+prev_table <- tibble(Session = c("ses-00A", "ses-02A")) %>%
   mutate(
     
     #9.2.2.1.1 total N (same for both rows)
@@ -1575,34 +1587,34 @@ prev_table <- tibble(Session = c("ses-00A","ses-02A")) %>%
       sum(bdnos_site2$unspec_00A & bdnos_site2$gbi_00A, na.rm = TRUE),
       sum(bdnos_site2$unspec_02A & bdnos_site2$gbi_02A, na.rm = TRUE)),
     
-    #9.2.2.1.5 % BD NOS ∧ GBI≥12 of total
-    `% NOS+GBI≥12` = 100 * BD_NOS_GBI / N,
+    #9.2.2.1.5 % BD NOS & GBI>=12 of total
+    `% NOS+GBI>=12` = 100 * BD_NOS_GBI / N,
     
-    #9.2.2.1.6 counts of BD NOS & lifetime MDD
+    # 9.2.2.1.6 counts of BD NOS & lifetime MDD
     BD_NOS_MDD = c(
       sum(bdnos_site2$unspec_00A & bdnos_site2$mdd_00A, na.rm = TRUE),
       sum(bdnos_site2$unspec_02A & bdnos_site2$mdd_02A, na.rm = TRUE)),
     
-    #9.2.2.1.7 % BD NOS ∧ MDD of total
+    #9.2.2.1.7 % BD NOS & MDD of total
     `% NOS+MDD` = 100 * BD_NOS_MDD / N,
     
-    #9.2.2.1.8 counts of BD NOS & (GBI≥12 ∧ lifetime MDD)
+    #9.2.2.1.8 counts of BD NOS & (GBI>=12 & lifetime MDD)
     BD_NOS_GBI_MDD = c(
       sum(bdnos_site2$unspec_00A & bdnos_site2$gbi_00A & bdnos_site2$mdd_00A, na.rm = TRUE),
       sum(bdnos_site2$unspec_02A & bdnos_site2$gbi_02A & bdnos_site2$mdd_02A, na.rm = TRUE)),
     
-    #9.2.2.1.9 % BD NOS ∧ GBI≥12 ∧ MDD of total
+    #9.2.2.1.9 % BD NOS & GBI>=12 & MDD of total
     `% NOS+GBI+MDD` = 100 * BD_NOS_GBI_MDD / N
   )
 
 #9.2.2.2 Print the combined prevalence table
 kable(
   prev_table,
-  caption = "Overall Prevalence of BD NOS and Its Co-occurrence with GBI≥12 and Lifetime MDD",
+  caption = "Overall Prevalence of BD NOS and Its Co-occurrence with GBI>=12 and Lifetime MDD",
   col.names = c(
     "Session", "Total N",
     "N NOS", "% NOS",
-    "N NOS+GBI≥12","% NOS+GBI≥12",
+    "N NOS+GBI>=12","% NOS+GBI>=12",
     "N NOS+MDD", "% NOS+MDD",
     "N NOS+GBI+MDD","% NOS+GBI+MDD"),
   digits = c(0,0,0,1,0,1,0,1,0,1)) %>%
@@ -1621,14 +1633,14 @@ make_transitions <- function(df, flag00, flag02) {
   `%NewOnset` = 100 * New_Onset / max(N_wo_00A,1))
 }
 
-#9.2.3.2 Transitions stratified by GBI Mania ≥ 12 at baseline
+#9.2.3.2 Transitions stratified by GBI Mania >= 12 at baseline
 trans_gbi <- bdnos_site2 %>%
-  group_by(GBI_Stratum = if_else(gbi_00A == 1, "GBI ≥12", "GBI <12")) %>%
+  group_by(GBI_Stratum = if_else(gbi_00A == 1, "GBI >=12", "GBI <12")) %>%
   make_transitions(unspec_00A, unspec_02A)
 
 #9.2.3.3 Transitions stratified by Lifetime MDD at baseline
 trans_mdd <- bdnos_site2 %>%
-  group_by(MDD_Stratum = if_else(mdd_00A == 1, "MDD+", "MDD–")) %>%
+  group_by(MDD_Stratum = if_else(mdd_00A == 1, "MDD+", "MDD-")) %>%
   make_transitions(unspec_00A, unspec_02A)
 
 #9.2.3.4 Print transition tables
@@ -1685,7 +1697,7 @@ for (strat in na.omit(unique(bdnos_site2$gbi_00A))) {
       IDtarget = match(target, nodes$name) - 1)
   
   #9.2.4.1.6 Friendly label for this stratum
-  strat_label <- ifelse(strat == 1, "GBI ≥12", "GBI <12")
+  strat_label <- ifelse(strat == 1, "GBI >=12", "GBI <12")
   cat("#### Sankey: BD NOS 00A→02A (", strat_label, ")\n\n", sep = "")
   
   #9.2.4.1.7 Render the Sankey
@@ -1756,10 +1768,79 @@ for (strat in na.omit(unique(bdnos_site2$mdd_00A))) {
   cat("\n\n")
 }
 
-
 ```
 
+In summary of the analysis of baseline & 2-year follow-up assessment timepoint BD NOS cases stratified by the presence of a GBI clinical cut-off score and/or MDD diagnosis: 
 
+**Overall (unstratified) BD NOS Prevalence is inflated & rapidly changes across timepoints**
 
-## 10. Determine Operationalization of Outcome Variables
+- KSADS v1.0 flags BD NOS in 8.3% of youth at baseline but only 3.6% two-years later. >90 % of baseline cases “drop out,” indicating low diagnostic stability rather than enduring morbidity (potentially - this could also jointly be a product of the fluctuation of BD symptoms over time)
 
+**Symptom-based validators helps us detect a much more expected number of cases**
+
+- Co-occurrence with a manic GBI score ≥ 12 is rare (0.3% at baseline, 0.1% at 2 yr)
+
+- Co-occurrence with a lifetime MDD diagnosis is slightly higher (0.8% → 0.4%), but still represents <10 % of all NOS calls
+
+- To note, fewer than 0.1% (n=3) of youth meet both lifetime validators (GBI≥12 + MDD) simultaneously
+
+**Validators do not show a markedly different picture of diagnostic stability (for better or worse)**
+
+- Within our "validated" strata, ~91 % of NOS cases remit by 2-year, and new-onset rates remain modest
+
+**Implications for analysis** 
+
+- Restricting BD NOS at baseline/2-year to youth who also carry a lifetime MDD diagnosis sharply reduces over-diagnosis but still yields an unstable, small group
+
+- Down-stream models should therefore a) focus on the validated BD-I/II definitions, and b) treat NOS cases conservatively, e.g., include only MDD-validated NOS
+
+## 10. Operationalization of Outcome Variables
+
+Below is the coding scheme we will carry forward into all survival, longitudinal, and sensitivity models.  Every choice is anchored to the empirical patterns uncovered in Sections 5-9 of the EDA (instability, site effects, validator yields)
+
+### 10.1 Primary Bipolar‐Spectrum Outcomes (binary, per wave)
+
+| Variable in models           | Coding rule (per wave)                                                                                                                        | Empirical rationale from EDA                                                                                                                                                       |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **BD-I**                     | KSADS-COMP “current” or “recent-past” BD-I and<br> if wave = Baseline (00A) or 2-year (02A) → must also meet any lifetime MDD flag | KSADS-1.0 over-endorsed “past mania” (Sec 5). Re-scoring with an MDD validator reduced spurious past-only cases from 13 → 0.2 % and produced stable prevalence across later waves. |
+| **BD-II**                    | Analogous to BD-I rule using hypomania + MDD validator at 00A/02A                                                                             | Same inflation/instability pattern; MDD validation trimmed prevalence to realistic 0.1–0.4 %.                                                                                      |
+| **BD-NOS / Other Specified** | KSADS algorithm at Y4+ (v2.0) as is.<br>At 00A/02A (v1.0) retain only cases with lifetime MDD (no GBI requirement)                      | Only 0.8 % of youth meet NOS + MDD vs 8.3 % raw NOS (Sec 9). Validators still show >90 % remitting → keep but treat cautiously.                                                    |
+| **Any BSD**                  | 1 if BD-I or BD-II or NOS (as defined above)                                                                                          | Captures full spectrum while excluding invalidated false-positives.                                                                                                                |
+
+*Informant logic*: parent *or* youth endorsement = 1 (maximizes sensitivity; parent-only and “double-endorsement” rules will be sensitivity analyses)
+
+### 10.2 Suicidality Outcomes (binary, per wave; scored **only among Any BSD**)
+
+- **Passive SI**: any passive ideation flag (past or current)
+
+- **Active SI**: any active ideation flag (method / intent / plan; past or current)
+
+- **Suicide Attempt**: interrupted, aborted, or actual attempt (past or current)
+
+- **NSSI**: non-suicidal self-injury (past or current)
+
+*Why restricted to BSD*: keeps interpretation within a bipolar context; Section 6 showed extremely low BSD persistence, so suicidality is analysed at the same time rather than as lifetime carry-forward
+
+### 10.3 Secondary Symptom Outcomes (continuous)
+
+- CBCL DSM-5 Depression T, Anxiety T, Attention T, Aggression T
+
+- Raw T-scores used; LMM residuals will be inspected and √/log transforms or gamma GLMMs deployed if required (EDA sec 3)
+
+### 10.4 Sensitivity Analyses Already Planned
+
+| Analysis                                    | Definition tested                         | Justification                                                        |
+| ------------------------------------------- | ----------------------------------------- | -------------------------------------------------------------------- |
+| **Tiered CBCL/GBI “risk” tiers**            | Tiers 1–4 from EDA §8                     | Extremely rare (<1 %) & unstable; included only as robustness check. |
+| **Parent-only vs dual-informant diagnoses** | Re-score BD-I/II using parent flags alone | Evaluates impact of informant source.                                |
+| **Exclude NOS entirely**                    | Run primary models on BD-I + BD-II only   | Sec 9 showed NOS inflation & instability.                            |
+
+### 10.5 Modelling Framework (brief)
+
+- **Discrete-time survival** for first incident BD-I, BD-II, Any BSD, SI, SA, NSSI starting Year-2; prevalent baseline cases removed from risk set but covaried
+
+- **Wave‐specific mixed-effects prevalence** (BD & suicidality), random intercepts for participant & family
+
+- **CBCL mixed models** for symptom severity trajectories
+
+Covariates will include: sex, age (time-varying), clustering solution, baseline diagnosis where relevant, family ID random effect, assessment site (possible random effect if model convergence allows)
