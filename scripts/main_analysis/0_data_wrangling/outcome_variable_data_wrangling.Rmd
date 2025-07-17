@@ -1,5 +1,5 @@
 ---
-title: "Mood Disorder & Suicidality Outcome Variable Data Wrangling"
+title: "Bipolar Disorder & Suicidality Outcome Variable Data Wrangling"
 author: "Sam A. Sievertsen"
 date: "`r Sys.Date()`"
 output:

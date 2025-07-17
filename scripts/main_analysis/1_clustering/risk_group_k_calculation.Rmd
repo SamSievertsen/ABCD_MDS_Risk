@@ -1,5 +1,5 @@
 ---
-title: "Mood Disorder & Suicidality Risk Group Clustering Calculation, Optimization, & Validation"
+title: "Mood Disorder & Suicidality Risk Group Clustering Parameter Calculation & Optimization"
 author: "Sam A. Sievertsen"
 date: "`r Sys.Date()`"
 output:
@@ -38,6 +38,7 @@ library(hopkins)
 library(tidymodels)
 library(tidyclust)
 library(tidyquant)
+library(FeatureImpCluster)
 library(ggplot2)
 options(scipen = 999, digits = 8)
 
@@ -165,8 +166,9 @@ kprot_result <- kproto(
   verbose = TRUE
 )
 
-# Add cluster assignments to original data
+# Add ID and cluster assignments to original data
 cluster_data$cluster <- as.factor(kprot_result$cluster)
+cluster_data$participant_id <- row.names(cluster_data)
 
 # Basic cluster summary
 table(cluster_data$cluster)
@@ -254,6 +256,13 @@ cluster_profile <- cluster_data %>%
 
 print("Cluster Profiles:")
 print(cluster_profile)
+
+# Extract feature importance
+cluster_data_table <- as.data.table(cluster_data) %>% 
+  dplyr::select(-participant_id, -cluster)
+FeatureImp_res <- FeatureImpCluster(kprot_result, cluster_data_table)
+FeatureImp_res
+plot(FeatureImp_res, cluster_data_table)
 
 ```
 

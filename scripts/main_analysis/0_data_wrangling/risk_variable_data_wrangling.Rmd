@@ -1,5 +1,5 @@
 ---
-title: "Mood Disorder & Suicidality Risk Variable Data Wrangling"
+title: "Bipolar Disorder & Suicidality Risk Variable Data Wrangling"
 author: "Sam A. Sievertsen"
 date: "`r Sys.Date()`"
 output:
@@ -25,7 +25,7 @@ library(skimr)
 options(scipen = 999, digits = 8)
 
 # Read in raw data generated in DEAP
-raw_data <- read.csv("../../data/data_raw/dataset.csv")
+raw_data <- read.csv("../../../data/data_raw/dataset.csv")
 
 ```
 
@@ -491,9 +491,9 @@ skimr::skim(risk_variable_data_clean)
 ## Output ##
 
 #1. Write the cleaned and filtered risk variable data as a csv file to be used in clustering
-write.csv(risk_variable_data_clean, "../../data/data_processed/risk_variable_data.csv", row.names = FALSE)
+write.csv(risk_variable_data_clean, "../../../data/data_processed/risk_variable_data.csv", row.names = FALSE)
 
 #2. Write the cleaned and not filtered (i.e., subjects w/o complete data not excluded) as a csv file to be used later in missignness analyses
-write.csv(risk_variable_data, "../../data/data_processed/risk_variable_data_unfiltered.csv", row.names = FALSE)
+write.csv(risk_variable_data, "../../../data/data_processed/risk_variable_data_unfiltered.csv", row.names = FALSE)
 
 ```

@@ -1,5 +1,5 @@
 ---
-title: "Mood Disorder & Suicidality Risk Variable EDA"
+title: "Bipolar Disorder & Suicidality Risk Variable EDA"
 author: "Sam A. Sievertsen"
 date: "`r Sys.Date()`"
 output:
