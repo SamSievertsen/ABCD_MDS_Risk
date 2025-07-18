@@ -1,0 +1,228 @@
+---
+title: "Scaling Comparison for k-prototypes Clustering"
+author: "Sam A. Sievertsen"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    self_contained: true
+---
+
+```{r global, include = FALSE}
+
+# Set global env variables
+knitr::opts_chunk$set(warning = FALSE, message = FALSE, comment = "")
+
+```
+
+```{r environment, echo = FALSE, include = FALSE, warning = FALSE}
+
+# Load necessary packages + environmental variables
+library(knitr)
+library(kableExtra)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(clustMixType)
+library(cluster)
+library(furrr)
+library(purrr)
+plan(multisession)
+options(scipen = 999, digits = 8)
+
+# Read in risk variable data
+risk_variable_data <- read.csv("../../../data/data_processed/risk_variable_data.csv")
+
+```
+
+## Risk Variable Data Wrangling 
+
+```{r data wrangling, warning = FALSE}
+
+## Data Wrangling ##
+
+#1. Ensure dichotimization of categorical data for clustering
+risk_variable_data <- risk_variable_data %>% 
+  mutate(across(c("family_history_depression", "family_history_mania", "bullying"), as.factor))
+
+#2. Retain subject IDs as row names while removing variables that will not be clustered 
+#2.1 Remove all variables except subject ID from the dataframe for clustering
+risk_variable_clustering_data <- risk_variable_data %>%
+  dplyr::select(-session_id, -family_id, -site, -sex, -age, -race_ethnicity)
+
+#2.2 Set subject IDs as row names
+row.names(risk_variable_clustering_data) <- risk_variable_clustering_data$participant_id
+
+#2.3 Remove subject ID column
+risk_variable_clustering_data <- risk_variable_clustering_data %>% 
+  dplyr::select(-participant_id)
+
+#3. Identify continuous and categorical variables for the purpose of scaling
+continuous_vars <- names(risk_variable_clustering_data)[sapply(risk_variable_clustering_data, is.numeric)]
+categorical_vars <- names(risk_variable_clustering_data)[sapply(risk_variable_clustering_data, is.factor)]
+
+```
+
+## Comparative Validation of Scaling Methods
+
+Per results from [Wongoutong (2024)](https://doi.org/10.1371/journal.pone.0310839) which show that no standardization/normalization method is clearly superior for k-clustering purposes, the original [Huang (1998)](https://doi.org/10.1023/A:1009769707641) k-prototypes paper stating that the lambda weighting parameter makes it possible to use raw data without scaling, and no consistent distribution being present across variables in our data, continuous variables will undergo comparative performance assessment of the raw, z-scored, min-max, percentile, maximum absolute, and IQR robust scaling of the numerical features in the data (across k values 2:8) to ensure comparability across scales while retaining information about their distribution
+
+For each combination of scaling and index, we used `validation_kproto()` with `kp_obj = "optimal"` to find the *k* (2:8) that optimizes the index. The table below then reports, for each index, the optimal *k* and its value (asterisked) under each scaling method, with an indication of whether higher or lower is better for each respective index. This allows us to identify which transformation consistently produces high-quality clusters across multiple criteria, i.e., enabling us to thoughtfully select the way in which we scale our numerical data (or not) prior to the actual clustering run(s)
+
+```{r scaling comparison, echo = FALSE, warning = FALSE}
+
+## Comparative Validation of Scaling Methods ##
+
+#1. Define scaling methods and helper function
+#1.1 Establish a vector of the different numerical scaling methods
+scale_methods <- c("none","z_score","min_max","percentile","max_absolute","robust")
+
+#1.2 Create a helper function to create all relevant scaled versions of the data to iterate through
+apply_scaling <- function(df, method){
+  out <- df
+  if (method != "none") {
+    cont <- df[continuous_vars]
+    scaled <- switch(method,
+      
+      #1.2.1 Z score scaling
+      z_score = scale(cont),
+      
+      #1.2.2 Min Max scaling
+      min_max = purrr::map_df(cont, ~(.x - min(.x,na.rm=TRUE)) / (max(.x,na.rm=TRUE) - min(.x,na.rm=TRUE))),
+      
+      #1.2.3 Percentile scaling
+      percentile = purrr::map_df(cont, ~rank(.x,na.last="keep") / sum(!is.na(.x)) * 100),
+      
+      #1.2.4 Max absolute scaling
+      max_absolute = purrr::map_df(cont, ~.x / max(abs(.x),na.rm=TRUE)),
+      
+      #1.2.5 Robust Median-IQR Scaling (akin to RobustScaler)
+      robust = purrr::map_df(cont, ~(.x - median(.x,na.rm=TRUE)) / (IQR(.x,na.rm=TRUE) %||% 1)))
+    out[continuous_vars] <- scaled
+  }
+  out
+}
+
+#2. Compute & summarize optimal k and index for each scaling x index
+#2.1 Create a vector of all relevant validation indices
+indices <- c("silhouette","cindex","dunn","gamma","ptbiserial","tau")
+
+#2.2 Create a summary table containing each combination of scaling method x validation index
+summary_tbl <- expand_grid(
+  method = scale_methods,
+  index = indices) %>%
+  mutate(
+    res = purrr::map2(method, index, ~{
+      d <- apply_scaling(risk_variable_clustering_data, .x)
+      validation_kproto(
+        method = .y,
+        data = d,
+        k = 2:8,
+        kp_obj = "optimal",
+        verbose= FALSE)
+    }),
+    k_opt = purrr::map_int(res, "k_opt"),
+    index_val = purrr::map_dbl(res, "index_opt")) %>%
+  dplyr::select(method, index, k_opt, index_val)
+
+#2.3 Define index labels and optimization direction
+dir_tbl <- tribble(
+  ~index, ~direction, ~label,
+  "silhouette", "higher", "Silhouette (higher = better)",
+  "cindex", "lower", "C-index (lower = better)",
+  "dunn", "higher", "Dunn (higher = better)",
+  "gamma", "higher", "Gamma (higher = better)",
+  "ptbiserial", "higher", "Point-biserial (higher = better)",
+  "tau", "higher", "Tau (higher = better)"
+)
+
+#2.4 Flag the optimal value for each index
+styled <- summary_tbl %>%
+  left_join(dir_tbl, by = "index") %>%
+  group_by(index) %>%
+  mutate(
+    best = if_else(
+      direction == "higher",
+      index_val == max(index_val, na.rm=TRUE),
+      index_val == min(index_val, na.rm=TRUE))) %>% 
+  ungroup()
+
+#2.5 Pivot summary table to wide form and annotate optimal values
+#2.5.1 Pivot the values
+wide <- styled %>%
+  dplyr::select(method, index, k_opt, index_val, best) %>%
+  pivot_wider(
+    names_from = method,
+    values_from = c(k_opt, index_val, best),
+    names_glue = "{.value}_{method}"
+  )
+
+#2.5.2 Store the numerical scaling methods as a vector
+methods <- scale_methods
+
+#2.5.3 Create a column for each index value x scaling method
+value_cols <- paste0("index_val_", methods)
+
+#2.5.4 Create a template to store the optimal method according to each validation index
+best_cols <- paste0("best_", methods)
+
+#2.5.5 Iterate through each scaling method x validation index combination and tag the optimal value with an asterisk
+for (i in seq_along(methods)) {
+  vc <- value_cols[i]; bc <- best_cols[i]
+  wide[[vc]] <- if_else(
+    wide[[bc]],
+    sprintf("%.3f*", wide[[vc]]),
+    sprintf("%.3f",  wide[[vc]])
+  )
+}
+
+#2.5.6 Remove the "best_cols" column once
+wide <- wide %>% dplyr::select(-all_of(best_cols))
+
+#2.6 Assemble the summary display table with readable names
+#2.6.1 Create a vector of labels for each scaling method
+scale_labels <- c(
+  none = "Raw",
+  z_score = "Z-score",
+  min_max = "Min-max",
+  percentile = "Percentile",
+  max_absolute = "Max-abs",
+  robust = "Robust"
+)
+
+#2.6.2 Add a top level metric column with optimal k and index value subcolumns to the summary table by mapping each index to its label
+display <- wide %>%
+  mutate(Metric = dir_tbl$label[match(index, dir_tbl$index)]) %>%
+  dplyr::select(
+    Metric,
+    unlist(map(methods, ~ c(paste0("k_opt_", .x), paste0("index_val_",.x))))
+  )
+
+#2.6.3 Build a vector of readable column names
+new_names <- c("Metric")
+for (m in methods) {
+  nm <- scale_labels[m]
+  new_names <- c(
+    new_names,
+    paste(nm, "k"),
+    paste(nm, "Index")
+  )
+}
+
+#2.6.4 Assign the new labels as the column names of the summary display table
+colnames(display) <- new_names
+
+#2.7 Render the summary display table as a kable with column spanners
+kable(
+  display,
+  booktabs = TRUE,
+  align = c("l", rep("c", length(methods)*2)),
+  caption = "Optimal k and validation-index values by scaling method") %>%
+  add_header_above(
+    c(" " = 1, setNames(rep(2, length(methods)), scale_labels))) %>%
+  kable_styling(bootstrap_options = c("striped","hover","condensed","responsive"))
+
+```
+
+**Interpretation of the Output:**
+
+The table above shows, for each validation metric (rows) and scaling method (column groups), the optimal *k* and its corresponding index value with an asterisk marking the best among methods. Metrics where “higher = better” (e.g., silhouette) will favor the greatest index value, while those where “lower = better” (i.e., C-index) favor the least. A scaling method that accumulates the most asterisks across metrics, indicating consistent optimal performance, will be adopted for the final clustering pipeline

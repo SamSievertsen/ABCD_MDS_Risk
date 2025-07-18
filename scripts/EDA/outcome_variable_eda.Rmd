@@ -409,7 +409,7 @@ get_missingness_metrics <- function(data, categorical_columns, continuous_column
 #1.3 Apply the function to compute EDA metrics for both categorical and continuous columns to the outcome variable data
 outcome_variable_integrity <- get_missingness_metrics(prelim_outcome_data_trimmed, categorical_columns, continuous_columns)
 
-# Print the results
+#1.4 Print the results
 kable(outcome_variable_integrity, col.names = c("Variable", "N Non-Missing", "Percent Non-Missing", "Range/Unique Values"), digits = 3, row.names = FALSE) %>%
   kable_styling(bootstrap_options = c("striped","hover","condensed","responsive"))
 

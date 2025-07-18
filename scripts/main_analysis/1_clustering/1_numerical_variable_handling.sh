@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-#SBATCH --job-name=risk_variable_wrangling
+#SBATCH --job-name=numerical_variable_scaling
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=sievertsen@ohsu.edu
 
@@ -9,8 +9,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=16G
-#SBATCH --time=2:00:00
+#SBATCH --mem=64G
+#SBATCH --time=23:00:00
 
 #SBATCH --chdir /home/exacloud/gscratch/NagelLab
 #SBATCH --export=all
@@ -28,8 +28,7 @@ export APPTAINER_CACHEDIR=/home/exacloud/gscratch/NagelLab/staff/${USER}/.apptai
 TODAY=$(date +%Y-%m-%d)
 LOGDIR="${REPO}/slurm_logs/${TODAY}"
 USAGEDIR="${REPO}/slurm_usage_logs"
-mkdir -p "${LOGDIR}"
-mkdir -p "${USAGEDIR}"
+mkdir -p "${LOGDIR}" "${USAGEDIR}"
 
 # Redirect stdout/stderr into dated logs
 exec > >(tee -a "${LOGDIR}/${SLURM_JOB_NAME}_${SLURM_JOB_ID}.out") \
@@ -40,23 +39,23 @@ GIT_HASH=$(git -C "${REPO}" rev-parse HEAD)
 echo "Git commit: ${GIT_HASH}"
 echo "Container: ${IMG}"
 
-# Render the risk variable data wrangling RMD inside the container
-cd "${REPO}/scripts/main_analysis/0_data_wrangling"
+# Render the numerical variable scaling assessment RMD inside the container
+cd "${REPO}/scripts/main_analysis/1_clustering"
 
 apptainer exec \
   -B /home/exacloud/gscratch/NagelLab:/home/exacloud/gscratch/NagelLab \
-  "${IMG}" Rscript -e "rmarkdown::render('risk_variable_data_wrangling.Rmd', quiet = TRUE)"
+  "${IMG}" Rscript -e "rmarkdown::render('1_numerical_variable_handling.Rmd', quiet = TRUE)"
 
 # Post-run usage accounting (on EXIT) of compute time & resources
 function log_usage {
   CSV="${USAGEDIR}/usage.csv"
 
-  # create header if needed
+  # Create header if missing
   if [[ ! -s "${CSV}" ]]; then
     echo "JobIDRaw|JobName|Partition|Elapsed|AllocCPUS|TotalCPU|MaxRSS|CPUHours|CostUSD" > "${CSV}"
   fi
 
-  # fetch and append usage + cost
+  # Append this jobs usage + cost
   sacct -j "${SLURM_JOB_ID}" \
         --format=JobIDRaw,JobName,Partition,Elapsed,AllocCPUS,TotalCPU,MaxRSS \
         --parsable2 -n |
@@ -66,7 +65,7 @@ function log_usage {
     print $0,cpu_hours,cost
   }' >> "${CSV}"
 
-  # cost alert user if > $5
+  # Cost alert user if run > $5
   last_cost=$(tail -n1 "${CSV}" | awk -F'|' '{print $NF}')
   if (( $(echo "${last_cost} > 5" | bc -l) )); then
     echo "X Job ${SLURM_JOB_ID} cost \$${last_cost}" \
