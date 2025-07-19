@@ -117,8 +117,9 @@ summary_tbl <- expand_grid(
         method = .y,
         data = d,
         k = 2:8,
+        nstart = 8,
         kp_obj = "optimal",
-        verbose= FALSE)
+        verbose= TRUE)
     }),
     k_opt = purrr::map_int(res, "k_opt"),
     index_val = purrr::map_dbl(res, "index_opt")) %>%

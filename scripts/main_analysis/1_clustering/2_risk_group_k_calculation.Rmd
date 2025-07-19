@@ -1,5 +1,5 @@
 ---
-title: "Mood Disorder & Suicidality Risk Group Clustering Parameter Calculation & Optimization"
+title: "Bipolar Disorder & Suicidality Risk Group Clustering k Calculation"
 author: "Sam A. Sievertsen"
 date: "`r Sys.Date()`"
 output:
@@ -99,6 +99,21 @@ risk_variable_clustering_data <- risk_variable_clustering_data %>%
 str(risk_variable_clustering_data)
 
 ```
+
+## Determining Optimal Number of Clusters (*k* Value)
+
+Choosing the appropriate number of clusters (*k*) is critical for uncovering meaningful groupings in mixed‐type data. Here, we combine descriptive elbow analysis with multiple internal validation indices to arrive at a robust, transparent recommendation for *k* between 2 and 8:
+
+1. **Elbow method**
+   We plot the within‐cluster sum of squares (WCSS) across *k* = 2:8 and apply the Kneedle algorithm \[Satopaa *et al.*, 2011] via the `inflection` package (Emekes, 2017) to quantitatively identify the “elbow” point. This provides a visual and numeric guide, but is treated as descriptive rather than prescriptive for purposes of our analyses
+
+2. **Internal validation indices**
+   Using `validation_kproto()`, we compute six statistical validation indices: Silhouette, C-Index, Dunn, Gamma, Point-biserial, and Tau—for each *k*. Each index captures a different aspect of cluster compactness and separation without requiring true labels
+
+3. **Consensus evaluation**
+   We record the optimal *k* returned by each index and examine patterns of agreement or discrepancy. A convergence of multiple indices on the same *k* will strengthen our confidence in that choice
+
+Below, we implement this three‐step procedure. First, we generate the elbow plot and run Kneedle to flag an elbow. Next, we loop through each validation index to extract its preferred *k*. Finally, we summarize all results in a single table for comparison
 
 ```{r}
 
@@ -266,5 +281,10 @@ plot(FeatureImp_res, cluster_data_table)
 
 ```
 
+**Interpretation:**
 
+- The elbow plot suggests a bend at *k* = X, reinforced by Kneedle’s quantitative estimate
 
+- Among the six validation indices, Y/Y indices also favor *k* = X, while the remainder peak at neighboring values
+
+- Taken together, these results indicate that *k* = X balances cohesion and separation most consistently in our risk‐variable data

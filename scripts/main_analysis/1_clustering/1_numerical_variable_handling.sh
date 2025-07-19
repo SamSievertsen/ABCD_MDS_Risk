@@ -8,12 +8,15 @@
 #SBATCH --partition=basic
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=64G
-#SBATCH --time=23:00:00
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=128G
+#SBATCH --time=23:59:00
 
 #SBATCH --chdir /home/exacloud/gscratch/NagelLab
 #SBATCH --export=all
+
+#SBATCH --output=/dev/null
+#SBATCH --error=/dev/null
 
 # Use strict Bash mode (fast error out)
 set -euo pipefail
@@ -44,7 +47,7 @@ cd "${REPO}/scripts/main_analysis/1_clustering"
 
 apptainer exec \
   -B /home/exacloud/gscratch/NagelLab:/home/exacloud/gscratch/NagelLab \
-  "${IMG}" Rscript -e "rmarkdown::render('1_numerical_variable_handling.Rmd', quiet = TRUE)"
+  "${IMG}" Rscript -e "rmarkdown::render('1_numerical_variable_handling.Rmd')"
 
 # Post-run usage accounting (on EXIT) of compute time & resources
 function log_usage {
@@ -52,20 +55,24 @@ function log_usage {
 
   # Create header if missing
   if [[ ! -s "${CSV}" ]]; then
-    echo "JobIDRaw|JobName|Partition|Elapsed|AllocCPUS|TotalCPU|MaxRSS|CPUHours|CostUSD" > "${CSV}"
+    echo "JobIDRaw|JobName|Partition|Elapsed|AllocCPUS|TotalCPU|MaxRSS|CPUHours|CostUSD" \
+      > "${CSV}"
   fi
 
-  # Append this jobs usage + cost
+  # Grab the main job step compute cost
   sacct -j "${SLURM_JOB_ID}" \
         --format=JobIDRaw,JobName,Partition,Elapsed,AllocCPUS,TotalCPU,MaxRSS \
         --parsable2 -n |
+  grep "^${SLURM_JOB_ID}|" |
   awk -F'|' -v OFS='|' '{
-    split($6,t,":"); seconds=t[1]*3600+t[2]*60+t[3];
-    cpu_hours=seconds/3600; cost=cpu_hours*0.025;
-    print $0,cpu_hours,cost
+    split($6, t, ":");
+    seconds = t[1]*3600 + t[2]*60 + t[3];
+    cpu_hours = seconds/3600;
+    cost = cpu_hours * 0.025;
+    print $0, cpu_hours, cost
   }' >> "${CSV}"
 
-  # Cost alert user if run > $5
+  # Email alert if cost exceeds $5
   last_cost=$(tail -n1 "${CSV}" | awk -F'|' '{print $NF}')
   if (( $(echo "${last_cost} > 5" | bc -l) )); then
     echo "X Job ${SLURM_JOB_ID} cost \$${last_cost}" \
