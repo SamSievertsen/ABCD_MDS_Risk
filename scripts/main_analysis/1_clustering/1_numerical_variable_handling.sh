@@ -8,8 +8,8 @@
 #SBATCH --partition=basic
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=128G
+#SBATCH --cpus-per-task=36
+#SBATCH --mem=256G
 #SBATCH --time=23:59:00
 
 #SBATCH --chdir /home/exacloud/gscratch/NagelLab

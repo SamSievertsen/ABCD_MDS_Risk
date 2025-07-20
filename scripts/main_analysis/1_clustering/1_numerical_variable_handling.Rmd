@@ -10,11 +10,11 @@ output:
 ```{r global, include = FALSE}
 
 # Set global env variables
-knitr::opts_chunk$set(warning = FALSE, message = FALSE, comment = "")
+knitr::opts_chunk$set(echo = TRUE, message = TRUE, warning = TRUE, results = "markup", verbose = TRUE, comment = "")
 
 ```
 
-```{r environment, echo = FALSE, include = FALSE, warning = FALSE}
+```{r environment, message = TRUE, echo = FALSE, include = FALSE, warning = FALSE}
 
 # Load necessary packages + environmental variables
 library(knitr)
@@ -26,7 +26,8 @@ library(clustMixType)
 library(cluster)
 library(furrr)
 library(purrr)
-plan(multisession)
+plan(multisession, workers = parallel::detectCores())
+options(future.globals.maxSize = 1e9)
 options(scipen = 999, digits = 8)
 
 # Read in risk variable data
@@ -36,7 +37,7 @@ risk_variable_data <- read.csv("../../../data/data_processed/risk_variable_data.
 
 ## Risk Variable Data Wrangling 
 
-```{r data wrangling, warning = FALSE}
+```{r data wrangling, message = TRUE, warning = FALSE}
 
 ## Data Wrangling ##
 
@@ -68,7 +69,7 @@ Per results from [Wongoutong (2024)](https://doi.org/10.1371/journal.pone.031083
 
 For each combination of scaling and index, we used `validation_kproto()` with `kp_obj = "optimal"` to find the *k* (2:8) that optimizes the index. The table below then reports, for each index, the optimal *k* and its value (asterisked) under each scaling method, with an indication of whether higher or lower is better for each respective index. This allows us to identify which transformation consistently produces high-quality clusters across multiple criteria, i.e., enabling us to thoughtfully select the way in which we scale our numerical data (or not) prior to the actual clustering run(s)
 
-```{r scaling comparison, echo = FALSE, warning = FALSE}
+```{r scaling comparison, message = TRUE, warning = FALSE}
 
 ## Comparative Validation of Scaling Methods ##
 
@@ -106,23 +107,29 @@ apply_scaling <- function(df, method){
 #2.1 Create a vector of all relevant validation indices
 indices <- c("silhouette","cindex","dunn","gamma","ptbiserial","tau")
 
-#2.2 Create a summary table containing each combination of scaling method x validation index
+#2.2 Create a summary table in parallel containing each combination of scaling method x validation index
 summary_tbl <- expand_grid(
   method = scale_methods,
   index = indices) %>%
   mutate(
-    res = purrr::map2(method, index, ~{
-      d <- apply_scaling(risk_variable_clustering_data, .x)
-      validation_kproto(
-        method = .y,
-        data = d,
-        k = 2:8,
-        nstart = 8,
-        kp_obj = "optimal",
-        verbose= TRUE)
-    }),
-    k_opt = purrr::map_int(res, "k_opt"),
-    index_val = purrr::map_dbl(res, "index_opt")) %>%
+    res = future_map2(
+      method, index,
+      ~{
+        message(glue::glue("Starting: method={.x}, index={.y}"))
+        d <- apply_scaling(risk_variable_clustering_data, .x)
+        vp <- validation_kproto(
+          method = .y,
+          data = d,
+          k = 2:8,
+          kp_obj = "optimal",
+          nstart = 8,
+          verbose= FALSE)
+        message(glue::glue("Done: method={.x}, index={.y}, k_opt={vp$k_opt}"))
+        vp
+      },
+      .progress = TRUE),
+    k_opt = map_int(res, "k_opt"),
+    index_val = map_dbl(res, "index_opt")) %>%
   dplyr::select(method, index, k_opt, index_val)
 
 #2.3 Define index labels and optimization direction
