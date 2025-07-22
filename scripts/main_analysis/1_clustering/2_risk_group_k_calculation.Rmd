@@ -5,18 +5,20 @@ date: "`r Sys.Date()`"
 output:
   html_document:
     self_contained: true
+params:
+  scaling_method: "none"  # editable options: none, z_score, min_max, percentile, max_absolute, robust
 ---
 
 ```{r global, include = FALSE}
 
 # Set global env variables
-knitr::opts_chunk$set(warning = FALSE, message = NA, comment = "")
+knitr::opts_chunk$set(echo = TRUE, cache = FALSE, message = TRUE, warning = TRUE, results = "markup", verbose = TRUE, comment = "")
 
 ```
 
 ```{r environment, echo = FALSE, include = FALSE, warning = FALSE}
 
-# Load necessary packages + environmental variables
+# Load necessary packages + environment
 library(knitr)
 library(dplyr)
 library(tidyr)
@@ -40,63 +42,63 @@ library(tidyclust)
 library(tidyquant)
 library(FeatureImpCluster)
 library(ggplot2)
+library(inflection)
+library(progressr)
+handlers("txtprogressbar")
+plan(multisession, workers = as.integer(Sys.getenv("SLURM_CPUS_PER_TASK"), unset = "1"))
 options(scipen = 999, digits = 8)
+set.seed(123)
 
 # Read in risk variable data to be used in clustering
 risk_variable_data <- read.csv("../../data/data_processed/risk_variable_data.csv")
 
 ```
 
-## Data Prep for Analysis 
+## Data Prep for k Value Analysis 
 
 ```{r data prep, warning = FALSE}
 
 ## Data Prep ## 
 
-#1. Z-score continuous data for clustering
-#1.1 Create a list of continuous variables to z-score
-variables_to_scale <- c(
-  "mh_p_cbcl__dsm__anx_tscore", 
-  "mh_p_cbcl__synd__attn_tscore",
-  "mh_p_cbcl__synd__aggr_tscore",
-  "mh_p_gbi_sum",
-  "mh_y_upps__nurg_sum",
-  "mh_y_upps__purg_sum",
-  "le_l_coi__addr1__coi__total__national_zscore",
-  "fc_p_nsc__ns_mean",
-  "sds_total",
-  "nc_y_nihtb__lswmt__uncor_score",
-  "nc_y_nihtb__flnkr__uncor_score",
-  "nc_y_nihtb__pttcp__uncor_score",
-  "ACE_index_sum_score")
-
-#1.2 Z-score all continuous variables to be used in clustering
-risk_variable_data <- risk_variable_data %>%
-  mutate(across(
-    all_of(variables_to_scale),
-    ~ as.numeric(scale(.)),
-    .names = "{.col}_scaled"))
-
-#2. Ensure dichotimization of categorical data for clustering
+#1. Ensure dichotimization of categorical data for clustering
 risk_variable_data <- risk_variable_data %>% 
   mutate(across(c("family_history_depression", "family_history_mania", "bullying"), as.factor))
 
-#3. Retain only columns of interest for clustering
-risk_variable_data_scaled <- risk_variable_data %>% 
-  dplyr::select(c(participant_id, session_id, site, age, race_ethnicity, sex, family_id, family_history_depression, family_history_mania, bullying, mh_p_cbcl__dsm__anx_tscore_scaled, mh_p_cbcl__synd__attn_tscore_scaled, mh_p_cbcl__synd__aggr_tscore_scaled, mh_p_gbi_sum_scaled, mh_y_upps__nurg_sum_scaled, mh_y_upps__purg_sum_scaled, le_l_coi__addr1__coi__total__national_zscore_scaled, fc_p_nsc__ns_mean_scaled, sds_total_scaled, nc_y_nihtb__lswmt__uncor_score_scaled, nc_y_nihtb__flnkr__uncor_score_scaled, nc_y_nihtb__pttcp__uncor_score_scaled, ACE_index_sum_score_scaled))
-
-#4. Retain subject IDs as row names while removing variables that will not be clustered 
-#4.1 Remove all variables except subject ID from the dataframe for clustering
-risk_variable_clustering_data <- risk_variable_data_scaled %>%
+#2. Retain subject IDs as row names while removing variables that will not be clustered 
+#2.1 Remove all variables except subject ID from the dataframe for clustering
+risk_variable_clustering_data <- risk_variable_data %>%
   dplyr::select(-session_id, -family_id, -site, -sex, -age, -race_ethnicity)
 
-#4.2 Set subject IDs as row names
+#2.2 Set subject IDs as row names
 row.names(risk_variable_clustering_data) <- risk_variable_clustering_data$participant_id
 
-#4.3 Remove 'participant_id' column from data
-risk_variable_clustering_data <- risk_variable_clustering_data %>%
+#2.3 Remove subject ID column
+risk_variable_clustering_data <- risk_variable_clustering_data %>% 
   dplyr::select(-participant_id)
-str(risk_variable_clustering_data)
+
+#3. Identify continuous and categorical variables
+continuous_vars <- names(risk_variable_clustering_data)[sapply(risk_variable_clustering_data, is.numeric)]
+categorical_vars <- names(risk_variable_clustering_data)[sapply(risk_variable_clustering_data, is.factor)]
+
+#4. Scaling function to be matched with established param
+apply_scaling <- function(df, method) {
+  out <- df
+  if (method != "none") {
+    cont <- df[continuous_vars]
+    scaled <- switch(method,
+      z_score = scale(cont),
+      min_max = purrr::map_df(cont, ~ (.x - min(.x, na.rm=TRUE)) / (max(.x, na.rm=TRUE) - min(.x, na.rm=TRUE))),
+      percentile = purrr::map_df(cont, ~ rank(.x, na.last="keep") / sum(!is.na(.x)) * 100),
+      max_absolute = purrr::map_df(cont, ~ .x / max(abs(.x), na.rm=TRUE)),
+      robust = purrr::map_df(cont, ~ (.x - median(.x, na.rm=TRUE)) / (IQR(.x, na.rm=TRUE) %||% 1))
+    )
+    out[continuous_vars] <- scaled
+  }
+  out
+}
+
+#5. Scale data according to param set in script call
+scaled_data <- apply_scaling(risk_variable_clustering_data, params$scaling_method)
 
 ```
 
@@ -115,169 +117,73 @@ Choosing the appropriate number of clusters (*k*) is critical for uncovering mea
 
 Below, we implement this three‐step procedure. First, we generate the elbow plot and run Kneedle to flag an elbow. Next, we loop through each validation index to extract its preferred *k*. Finally, we summarize all results in a single table for comparison
 
-```{r}
+```{r optimal k, warning = FALSE}
 
-# Define variables for clustering
-cluster_vars <- c(
-  "mh_p_cbcl__dsm__dep_tscore",
-  "ACE_index_sum_score", 
-  "sds_total",
-  "mh_p_cbcl__dsm__anx_tscore",
-  "mh_p_cbcl__synd__attn_tscore",
-  "family_history_depression"
-)
+## Determining Optimal Number of Clusters (*k* Value) ## 
 
-# Prepare data for clustering
-cluster_data <- risk_variable_data %>%
-  dplyr::select(participant_id, all_of(cluster_vars)) %>%
-  drop_na()  # Remove rows with any missing values
+#1. Establish parameters for testing cluster k solutions
+k_vals <- 2:8
+wss_vec <- numeric(length(k_vals))
+kp_list <- vector("list", length(k_vals))
+names(kp_list) <- paste0("k", k_vals)
 
-# Set subject IDs as row names
-row.names(cluster_data) <- cluster_data$participant_id
-
-# Check data structure
-str(cluster_data[, -1])  # Exclude participant_id
-summary(cluster_data[, -1])
-
-# Remove participant ID 
-cluster_data <- cluster_data[,-1]
-
-# Identify variable types for k-prototypes
-# Assuming family_history_depression is categorical (0/1 or factor)
-# and the rest are continuous
-continuous_vars <- c(
-  "mh_p_cbcl__dsm__dep_tscore",
-  "ACE_index_sum_score", 
-  "sds_total",
-  "mh_p_cbcl__dsm__anx_tscore",
-  "mh_p_cbcl__synd__attn_tscore"
-)
-
-categorical_vars <- c("family_history_depression")
-
-# Ensure categorical variables are factors
-cluster_data <- cluster_data %>%
-  mutate(family_history_depression = as.factor(family_history_depression))
-
-# Min-max scale continuous variables (0 to 1 range)
-scale_minmax <- function(x) {
-  (x - min(x, na.rm = TRUE)) / (max(x, na.rm = TRUE) - min(x, na.rm = TRUE))
+#2.2 Compute WSS and kproto objects for k = 2:8
+for (i in seq_along(k_vals)) {
+  k <- k_vals[i]
+  message(sprintf("Training kproto for k = %d", k))
+  kp <- kproto(
+    x = scaled_data,
+    k = k,
+    nstart  = 8,
+    verbose = TRUE
+  )
+  kp_list[[i]] <- kp
+  wss_vec[i]   <- kp$tot.withinss
+  saveRDS(kp, file = sprintf("kp_k%d.rds", k))  # checkpoint each model
 }
 
-# Apply min-max scaling to continuous variables
-cluster_data_scaled <- cluster_data %>%
-  mutate(
-    across(all_of(continuous_vars), scale_minmax, .names = "{.col}")
+#2.3 Elbow plot of WSS
+elbow_df <- tibble(k = k_vals, WSS = wss_vec)
+plt_elbow <- ggplot(elbow_df, aes(k, WSS)) +
+  geom_line() + geom_point() +
+  labs(title = "Elbow Plot: WSS vs k", x = "k", y = "Total WSS")
+print(plt_elbow)
+
+#2.4 Quantitative elbow via Kneedle (UIK)
+uik_pt <- inflection::uik(wss_vec)$k
+message(sprintf("UIK Elbow at k = %d", uik_pt))
+plt_elbow +
+  geom_vline(xintercept = uik_pt, linetype = "dashed", color = "red")
+
+## 3. Validation Indices across *k*
+
+#3.1 Set up indices and storage
+indices <- c("silhouette","cindex","dunn","gamma","ptbiserial","tau")
+val_results <- list()
+
+#3.2 Loop through each index and save full kp_obj results
+for (idx in indices) {
+  message(sprintf("Validating index: %s", idx))
+  vr <- validation_kproto(
+    method = idx,
+    object = NULL,
+    data   = scaled_data,
+    k      = k_vals,
+    kp_obj = "all",
+    nstart = 8,
+    verbose= TRUE
   )
-
-# Run k-prototypes clustering with k=2
-set.seed(123)  # For reproducibility
-kprot_result <- kproto(
-  x = cluster_data,
-  k = 3,
-  lambda = NULL,  # Let algorithm determine lambda automatically
-  nstart = 10,  # Multiple random starts for stability
-  max.iter = 100,
-  verbose = TRUE
-)
-
-# Add ID and cluster assignments to original data
-cluster_data$cluster <- as.factor(kprot_result$cluster)
-cluster_data$participant_id <- row.names(cluster_data)
-
-# Basic cluster summary
-table(cluster_data$cluster)
-
-# Cluster centers/prototypes
-print("Cluster Centers:")
-kprot_result$centers
-
-# Within-cluster sum of squares
-print(paste("Total within-cluster sum of squares:", round(kprot_result$tot.withinss, 2)))
-
-# Cluster validation metrics
-cluster_stats <- cluster.stats(
-  d = daisy(cluster_data[, cluster_vars], metric = "gower"),
-  clustering = kprot_result$cluster
-)
-
-print(paste("Average silhouette width:", round(cluster_stats$avg.silwidth, 3)))
-print(paste("Dunn index:", round(cluster_stats$dunn, 3)))
-
-# Visualize clusters - continuous variables
-continuous_data <- cluster_data %>% 
-  dplyr::select(all_of(continuous_vars), cluster)
-
-# Pairwise scatter plot matrix
-jitter_points <- function(data, mapping, ...) {
-  ggplot(data = data, mapping = mapping) +
-    geom_jitter(width = 0.2, height = 0.2, size = 0.75, alpha = 0.6, ...)
+  val_results[[idx]] <- vr
+  saveRDS(vr, file = sprintf("validation_%s.rds", idx))
 }
-p1 <- ggpairs(
-  continuous_data,
-  mapping = aes(color = cluster, alpha = 0.6),
-  upper = "blank",
-      lower = list(continuous = jitter_points),
-      diag = list(continuous = wrap("densityDiag", alpha = 0.5))
-) +
-  labs(title = "K-Prototypes Clusters: Continuous Variables") +
-  theme(
-        strip.text = element_text(size = 6),
-        axis.text = element_text(size = 5),
-        plot.title = element_text(hjust = 0.5, face = "bold"))
 
-print(p1)
-
-# Boxplots for continuous variables by cluster
-continuous_long <- cluster_data %>%
-  dplyr::select(all_of(continuous_vars), cluster) %>%
-  pivot_longer(cols = all_of(continuous_vars), 
-               names_to = "variable", 
-               values_to = "value")
-
-p2 <- ggplot(continuous_long, aes(x = cluster, y = value, fill = cluster)) +
-  geom_boxplot(alpha = 0.7) +
-  facet_wrap(~variable, scales = "free_y") +
-  labs(title = "Continuous Variables by Cluster",
-       x = "Cluster", y = "Value") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-print(p2)
-
-# Bar plot for categorical variable by cluster
-p3 <- ggplot(cluster_data, aes(x = cluster, fill = family_history_depression)) +
-  geom_bar(position = "fill") +
-  labs(title = "Family History Depression by Cluster",
-       x = "Cluster", y = "Proportion",
-       fill = "Family History\nDepression") +
-  theme_minimal()
-
-print(p3)
-
-# Cluster profiling table
-cluster_profile <- cluster_data %>%
-  group_by(cluster) %>%
-  summarise(
-    n = n(),
-    mean_depression = mean(mh_p_cbcl__dsm__dep_tscore, na.rm = TRUE),
-    mean_ACE = mean(ACE_index_sum_score, na.rm = TRUE),
-    mean_sds = mean(sds_total, na.rm = TRUE),
-    mean_anxiety = mean(mh_p_cbcl__dsm__anx_tscore, na.rm = TRUE),
-    mean_attention = mean(mh_p_cbcl__synd__attn_tscore, na.rm = TRUE),
-    prop_fam_hist_dep = mean(as.numeric(family_history_depression) - 1, na.rm = TRUE),
-    .groups = 'drop'
-  )
-
-print("Cluster Profiles:")
-print(cluster_profile)
-
-# Extract feature importance
-cluster_data_table <- as.data.table(cluster_data) %>% 
-  dplyr::select(-participant_id, -cluster)
-FeatureImp_res <- FeatureImpCluster(kprot_result, cluster_data_table)
-FeatureImp_res
-plot(FeatureImp_res, cluster_data_table)
+#3.3 Summarize optimal k for each index
+opt_summary <- tibble(
+  index   = indices,
+  k_opt   = map_int(val_results, "k_opt"),
+  values  = map(val_results, function(v) v$indices)
+)
+knitr::kable(opt_summary, caption = "Optimal k per validation index")
 
 ```
 

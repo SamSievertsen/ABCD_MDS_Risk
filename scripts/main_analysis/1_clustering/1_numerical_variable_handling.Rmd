@@ -16,7 +16,7 @@ knitr::opts_chunk$set(echo = TRUE, message = TRUE, warning = TRUE, results = "ma
 
 ```{r environment, message = TRUE, echo = FALSE, include = FALSE, warning = FALSE}
 
-# Load necessary packages + environmental variables
+# Load necessary packages
 library(knitr)
 library(kableExtra)
 library(dplyr)
@@ -26,16 +26,75 @@ library(clustMixType)
 library(cluster)
 library(furrr)
 library(purrr)
+library(glue)
+library(progressr)
+handlers("txtprogressbar")
+
+# Configure parallel backend: multisession across all available cores
 plan(multisession, workers = parallel::detectCores())
-options(future.globals.maxSize = 1e9)
+options(future.globals.maxSize = 1e9)  # allow large objects in futures
+
+# Numeric display options
 options(scipen = 999, digits = 8)
 
-# Read in risk variable data
-risk_variable_data <- read.csv("../../../data/data_processed/risk_variable_data.csv")
+## Environmental variable setup ##
+
+# Ensure reproducible randomness
+set.seed(123)
+
+# Fallback SLURM job name when running locally
+SLURM_JOB_NAME <- Sys.getenv("SLURM_JOB_NAME", "local_numeric_scaling")
+
+# Determine where to write the detailed log (from the SLURM wrapper or default)
+log_file <- Sys.getenv(
+  "DETAILED_LOG",
+  file.path(getwd(), "detailed_log_local.txt")
+)
+
+# Determine where to write the high-level summary CSV
+summary_csv <- Sys.getenv(
+  "SUMMARY_CSV",
+  file.path(getwd(), paste0(SLURM_JOB_NAME, "_summary.csv"))
+)
+
+# Ensure parent folders for both logs exist
+dir.create(dirname(log_file), recursive = TRUE, showWarnings = FALSE)
+dir.create(dirname(summary_csv), recursive = TRUE, showWarnings = FALSE)
+
+# Initialize the summary CSV with header if it doesn’t already exist
+if (!file.exists(summary_csv)) {
+  cat(
+    "method,status,start_time,end_time,duration_min\n",
+    file = summary_csv
+  )
+}
+
+## Project paths and data loading ##
+
+# Define the root of the project repository
+REPO <- "/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk"
+
+# Read in the processed risk variable data
+risk_variable_data <- read.csv(
+  file.path(REPO, "data", "data_processed", "risk_variable_data.csv")
+)
+
+## Checkpoint folders for k-prototype and validation RDS files ##
+
+# Where to stash the full kproto objects
+kproto_dir <- file.path(REPO, "data_processed", "kproto_results")
+# Where to stash the full validation_kproto results
+validation_dir <- file.path(REPO, "data_processed", "validation_results")
+
+# Create both folders if they don’t already exist
+if (!dir.exists(kproto_dir)) dir.create(kproto_dir, recursive = TRUE)
+if (!dir.exists(validation_dir)) dir.create(validation_dir, recursive = TRUE)
 
 ```
 
 ## Risk Variable Data Wrangling 
+
+Minimal wrangling of variables to ensure they are prepped for clustering
 
 ```{r data wrangling, message = TRUE, warning = FALSE}
 
@@ -103,36 +162,145 @@ apply_scaling <- function(df, method){
   out
 }
 
-#2. Compute & summarize optimal k and index for each scaling x index
+#2. Compute & summarize optimal k and index for each scaling method
 #2.1 Create a vector of all relevant validation indices
 indices <- c("silhouette","cindex","dunn","gamma","ptbiserial","tau")
 
-#2.2 Create a summary table in parallel containing each combination of scaling method x validation index
-summary_tbl <- expand_grid(
-  method = scale_methods,
-  index = indices) %>%
-  mutate(
-    res = future_map2(
-      method, index,
-      ~{
-        message(glue::glue("Starting: method={.x}, index={.y}"))
-        d <- apply_scaling(risk_variable_clustering_data, .x)
-        vp <- validation_kproto(
-          method = .y,
-          data = d,
-          k = 2:8,
-          kp_obj = "optimal",
-          nstart = 8,
-          verbose= FALSE)
-        message(glue::glue("Done: method={.x}, index={.y}, k_opt={vp$k_opt}"))
-        vp
-      },
-      .progress = TRUE),
-    k_opt = map_int(res, "k_opt"),
-    index_val = map_dbl(res, "index_opt")) %>%
-  dplyr::select(method, index, k_opt, index_val)
+#2.2 Prepare for logging and resumable checkpoints
+#2.2.1 Total number of tasks (for metadata)
+total_iterations <- length(scale_methods) * length(indices)
 
-#2.3 Define index labels and optimization direction
+#2.2.2 Detailed progress will be written here
+log_file <- Sys.getenv("DETAILED_LOG", "detailed_log.txt")
+
+#2.3 Iterate over each scaling method once (in parallel)
+all_results <- future_map_dfr(
+  scale_methods,
+  function(m) {
+
+    #2.3.1 Record queued → running in summary CSV
+    method_start <- Sys.time()
+    cat(sprintf("%s,running,%s,,\n", m, 
+        format(method_start, "%Y-%m-%d %H:%M:%OS3")), file = summary_csv, append = TRUE)
+
+    #2.3.2 Paths to prototype & validation checkpoints
+    proto_chk <- file.path(kproto_dir, sprintf("kproto_%s.rds", m))
+    val_chks <- file.path(validation_dir, sprintf("val_%s_%s.rds", m, indices))
+    k_vals <- 2:8
+
+    #2.3.3 List method start
+    cat(sprintf("%s|METHOD_START|%s\n",
+      format(method_start, "%Y-%m-%d %H:%M:%OS3"), m ), file = log_file, append = TRUE)
+
+    #2.3.4 Load or compute + save the list of kproto objects
+    if (file.exists(proto_chk) && all(file.exists(val_chks))) {
+      kp_list <- readRDS(proto_chk)
+      cat(sprintf(
+        "%s|PROTO_SKIP|%s|loaded from checkpoint\n",
+        format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"), m
+      ), file = log_file, append = TRUE)
+    } else {
+      
+      #2.3.4.1 Run kproto
+      proto_start <- Sys.time()
+      cat(sprintf("%s|PROTO_START|%s\n",
+        format(proto_start, "%Y-%m-%d %H:%M:%OS3"), m), file = log_file, append = TRUE)
+
+      d_scaled <- apply_scaling(risk_variable_clustering_data, m)
+      kp_list <- future_map(
+        k_vals,
+        ~ kproto(x = d_scaled,
+                 k = .x,
+                 nstart = 8,
+                 verbose = TRUE),
+        .options = furrr_options(seed = TRUE)
+      )
+      names(kp_list) <- paste0("k", k_vals)
+      saveRDS(kp_list, proto_chk)
+
+      #2.3.4.2 End kproto
+      proto_end <- Sys.time()
+      cat(sprintf("%s|PROTO_END|%s|duration=%.1fmin\n",
+        format(proto_end, "%Y-%m-%d %H:%M:%OS3"), m, 
+        as.numeric(difftime(proto_end, proto_start, units = "mins"))), file = log_file, append = TRUE)
+    }
+
+    #2.3.5 Sequential validations for logging clarity and saving full validation_kproto() objects
+    res_list <- vector("list", length(indices))
+    for (i in seq_along(indices)) {
+      idx <- indices[i]
+      chk <- file.path(validation_dir, sprintf("val_%s_%s.rds", m, idx))
+
+      if (file.exists(chk)) {
+        vr_all <- readRDS(chk)
+        k_opt <- vr_all$k_opt
+        index_val <- vr_all$indices[which(k_vals == k_opt)]
+        cat(sprintf("%s|VAL_SKIP|%s|%s|k_opt=%d\n",
+          format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"), m, idx, k_opt
+        ), file = log_file, append = TRUE)
+
+      } else {
+        
+        # 2.3.5.1 Run index calculations 
+        idx_start <- Sys.time()
+        cat(sprintf("%s|VAL_START|%s|%s\n",
+          format(idx_start, "%Y-%m-%d %H:%M:%OS3"), m, idx
+        ), file = log_file, append = TRUE)
+
+        vr_all <- validation_kproto(
+          method = idx,
+          data = d_scaled,
+          k = k_vals,
+          kp_obj = "all",
+          nstart = 8,
+          verbose = FALSE
+        )
+        
+        k_opt <- vr_all$k_opt
+        index_val <- vr_all$indices[which(k_vals == k_opt)]
+        saveRDS(vr_all, chk)
+
+        #2.3.5.2 Finish index calculation
+        idx_end <- Sys.time()
+        cat(sprintf("%s|VAL_END|%s|%s|k_opt=%d|duration=%.1fsec\n",
+          format(idx_end, "%Y-%m-%d %H:%M:%OS3"),
+          m, idx, k_opt,
+          as.numeric(difftime(idx_end, idx_start, units = "secs"))
+        ), file = log_file, append = TRUE)
+      }
+
+      #2.3.6 Store each individual result in a tibble
+      res_list[[i]] <- tibble(
+        method = m,
+        index = idx,
+        k_opt = k_opt,
+        index_val = index_val
+      )
+    }
+
+    #2.3.7 End method
+    method_end <- Sys.time()
+    cat(sprintf("%s|METHOD_END|%s|duration=%.1fmin\n",
+      format(method_end, "%Y-%m-%d %H:%M:%OS3"), m,
+      as.numeric(difftime(method_end, method_start, units = "mins"))
+    ), file = log_file, append = TRUE)
+
+    #2.3.8 Record done in summary CSV
+    duration <- as.numeric(difftime(method_end, method_start, units = "mins"))
+    cat(sprintf("%s,done,,%s,%.1f\n", m,
+      format(method_end, "%Y-%m-%d %H:%M:%OS3"),
+      duration
+    ), file = summary_csv, append = TRUE)
+    
+    bind_rows(res_list)
+  },
+  .options = furrr_options(seed = TRUE)
+)
+
+#2.4 Copy all method‐level results into the summary_tbl object for further analysis
+summary_tbl <- all_results
+
+#2.5 Define index labels and optimization direction
 dir_tbl <- tribble(
   ~index, ~direction, ~label,
   "silhouette", "higher", "Silhouette (higher = better)",
@@ -143,7 +311,7 @@ dir_tbl <- tribble(
   "tau", "higher", "Tau (higher = better)"
 )
 
-#2.4 Flag the optimal value for each index
+#2.6 Flag the optimal value for each index
 styled <- summary_tbl %>%
   left_join(dir_tbl, by = "index") %>%
   group_by(index) %>%
@@ -154,8 +322,8 @@ styled <- summary_tbl %>%
       index_val == min(index_val, na.rm=TRUE))) %>% 
   ungroup()
 
-#2.5 Pivot summary table to wide form and annotate optimal values
-#2.5.1 Pivot the values
+#2.7 Pivot summary table to wide form and annotate optimal values
+#2.7.1 Pivot the values
 wide <- styled %>%
   dplyr::select(method, index, k_opt, index_val, best) %>%
   pivot_wider(
@@ -164,16 +332,16 @@ wide <- styled %>%
     names_glue = "{.value}_{method}"
   )
 
-#2.5.2 Store the numerical scaling methods as a vector
+#2.7.2 Store the numerical scaling methods as a vector
 methods <- scale_methods
 
-#2.5.3 Create a column for each index value x scaling method
+#2.7.3 Create a column for each index value x scaling method
 value_cols <- paste0("index_val_", methods)
 
-#2.5.4 Create a template to store the optimal method according to each validation index
+#2.7.4 Create a template to store the optimal method according to each validation index
 best_cols <- paste0("best_", methods)
 
-#2.5.5 Iterate through each scaling method x validation index combination and tag the optimal value with an asterisk
+#2.7.5 Iterate through each scaling method x validation index combination and tag the optimal value with an asterisk
 for (i in seq_along(methods)) {
   vc <- value_cols[i]; bc <- best_cols[i]
   wide[[vc]] <- if_else(
@@ -183,11 +351,11 @@ for (i in seq_along(methods)) {
   )
 }
 
-#2.5.6 Remove the "best_cols" column once
+#2.7.6 Remove the "best_cols" column once
 wide <- wide %>% dplyr::select(-all_of(best_cols))
 
-#2.6 Assemble the summary display table with readable names
-#2.6.1 Create a vector of labels for each scaling method
+#2.8 Assemble the summary display table with readable names
+#2.8.1 Create a vector of labels for each scaling method
 scale_labels <- c(
   none = "Raw",
   z_score = "Z-score",
@@ -197,7 +365,7 @@ scale_labels <- c(
   robust = "Robust"
 )
 
-#2.6.2 Add a top level metric column with optimal k and index value subcolumns to the summary table by mapping each index to its label
+#2.8.2 Add a top level metric column with optimal k and index value subcolumns to the summary table by mapping each index to its label
 display <- wide %>%
   mutate(Metric = dir_tbl$label[match(index, dir_tbl$index)]) %>%
   dplyr::select(
@@ -205,7 +373,7 @@ display <- wide %>%
     unlist(map(methods, ~ c(paste0("k_opt_", .x), paste0("index_val_",.x))))
   )
 
-#2.6.3 Build a vector of readable column names
+#2.8.3 Build a vector of readable column names
 new_names <- c("Metric")
 for (m in methods) {
   nm <- scale_labels[m]
@@ -216,10 +384,10 @@ for (m in methods) {
   )
 }
 
-#2.6.4 Assign the new labels as the column names of the summary display table
+#2.8.4 Assign the new labels as the column names of the summary display table
 colnames(display) <- new_names
 
-#2.7 Render the summary display table as a kable with column spanners
+#2.9 Render the summary display table as a kable with column spanners
 kable(
   display,
   booktabs = TRUE,
