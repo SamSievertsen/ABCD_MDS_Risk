@@ -165,7 +165,8 @@ apply_scaling <- function(df, method){
 
 #2. Compute & summarize optimal k and index for each scaling method
 #2.1 Create a vector of all relevant validation indices - editable per run (comment out ones not to be run)
-indices <- c("silhouette", 
+indices <- c("silhouette"
+             #, 
              #"cindex", 
              #"dunn", 
              #"gamma", 
@@ -219,7 +220,7 @@ all_results <- future_map_dfr(
         ~ kproto(x = d_scaled,
                  k = .x,
                  nstart = 8,
-                 verbose = TRUE),
+                 verbose = FALSE),
         .options = furrr_options(seed = TRUE)
       )
       names(kp_list) <- paste0("k", k_vals)
