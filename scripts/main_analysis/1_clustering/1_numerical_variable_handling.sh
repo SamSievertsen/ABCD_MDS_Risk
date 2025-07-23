@@ -15,9 +15,6 @@
 #SBATCH --chdir /home/exacloud/gscratch/NagelLab
 #SBATCH --export=all
 
-#SBATCH --output=/dev/null
-#SBATCH --error=/dev/null
-
 # Use strict Bash mode (fast error out)
 set -euo pipefail
 IFS=$'\n\t'
@@ -47,17 +44,18 @@ fi
 exec > >(tee -a "${LOGDIR}/${SLURM_JOB_NAME}_${SLURM_JOB_ID}.out") \
      2> >(tee -a "${LOGDIR}/${SLURM_JOB_NAME}_${SLURM_JOB_ID}.err" >&2)
 
-# Stamp run with Git commit & container version
+# Stamp logs of run with Git commit & container version
 GIT_HASH=$(git -C "${REPO}" rev-parse HEAD)
 echo "Git commit: ${GIT_HASH}"
 echo "Container: ${IMG}"
 
-# Render the numerical variable scaling assessment RMD inside the container
+# Change directory to the appropriate location wherein the script to run is housed
 cd "${REPO}/scripts/main_analysis/1_clustering"
 
-# Stream the DETAILED_LOG to the .out to watch in real time
+# Stream the DETAILED_LOG to the .out to watch in real time (i.e., tracking each method)
 tail -F "${DETAILED_LOG}" & TAILPID=$!
 
+# Render the numerical variable scaling assessment RMD inside the container
 apptainer exec \
   -B /home/exacloud/gscratch/NagelLab:/home/exacloud/gscratch/NagelLab \
   "${IMG}" Rscript -e "rmarkdown::render('1_numerical_variable_handling.Rmd', quiet = FALSE)"

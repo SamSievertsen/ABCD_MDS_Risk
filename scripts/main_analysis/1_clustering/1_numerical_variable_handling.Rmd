@@ -32,7 +32,7 @@ handlers("txtprogressbar")
 
 # Configure parallel backend: multisession across all available cores
 plan(multisession, workers = parallel::detectCores())
-options(future.globals.maxSize = 1e9)  # allow large objects in futures
+options(future.globals.maxSize = 5e9)
 
 # Numeric display options
 options(scipen = 999, digits = 8)
@@ -42,10 +42,10 @@ options(scipen = 999, digits = 8)
 # Ensure reproducible randomness
 set.seed(123)
 
-# Fallback SLURM job name when running locally
+# Get SLURM job name with fallback for when running locally
 SLURM_JOB_NAME <- Sys.getenv("SLURM_JOB_NAME", "local_numeric_scaling")
 
-# Determine where to write the detailed log (from the SLURM wrapper or default)
+# Determine where to write the detailed log locally when relevant
 log_file <- Sys.getenv(
   "DETAILED_LOG",
   file.path(getwd(), "detailed_log_local.txt")
@@ -76,15 +76,16 @@ REPO <- "/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk"
 
 # Read in the processed risk variable data
 risk_variable_data <- read.csv(
-  file.path(REPO, "data", "data_processed", "risk_variable_data.csv")
+  file.path(REPO, "data/data_processed", "risk_variable_data.csv")
 )
 
 ## Checkpoint folders for k-prototype and validation RDS files ##
 
 # Where to stash the full kproto objects
-kproto_dir <- file.path(REPO, "data_processed", "kproto_results")
+kproto_dir <- file.path(REPO, "data/data_processed", "kproto_results")
+
 # Where to stash the full validation_kproto results
-validation_dir <- file.path(REPO, "data_processed", "validation_results")
+validation_dir <- file.path(REPO, "data/data_processed", "validation_results")
 
 # Create both folders if they don’t already exist
 if (!dir.exists(kproto_dir)) dir.create(kproto_dir, recursive = TRUE)
@@ -163,8 +164,14 @@ apply_scaling <- function(df, method){
 }
 
 #2. Compute & summarize optimal k and index for each scaling method
-#2.1 Create a vector of all relevant validation indices
-indices <- c("silhouette","cindex","dunn","gamma","ptbiserial","tau")
+#2.1 Create a vector of all relevant validation indices - editable per run (comment out ones not to be run)
+indices <- c("silhouette", 
+             #"cindex", 
+             #"dunn", 
+             #"gamma", 
+             #"ptbiserial", 
+             #"tau"
+             )
 
 #2.2 Prepare for logging and resumable checkpoints
 #2.2.1 Total number of tasks (for metadata)
@@ -401,4 +408,4 @@ kable(
 
 **Interpretation of the Output:**
 
-The table above shows, for each validation metric (rows) and scaling method (column groups), the optimal *k* and its corresponding index value with an asterisk marking the best among methods. Metrics where “higher = better” (e.g., silhouette) will favor the greatest index value, while those where “lower = better” (i.e., C-index) favor the least. A scaling method that accumulates the most asterisks across metrics, indicating consistent optimal performance, will be adopted for the final clustering pipeline
+The table above shows, for each chosen validation metric (rows) and scaling method (column groups), the optimal *k* and its corresponding index value with an asterisk marking the best among methods. Metrics where “higher = better” (e.g., silhouette) will favor the greatest index value, while those where “lower = better” (i.e., C-index) favor the least. A scaling method that accumulates the most asterisks across metrics, indicating consistent optimal performance, will be adopted for the final clustering pipeline
