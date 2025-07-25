@@ -198,13 +198,12 @@ all_results <- future_map_dfr(
 
     #2.3.3 List method start
     cat(sprintf("%s|METHOD_START|%s\n",
-      format(method_start, "%Y-%m-%d %H:%M:%OS3"), m ), file = log_file, append = TRUE)
+      format(method_start, "%Y-%m-%d %H:%M:%OS3"), m), file = log_file, append = TRUE)
 
     #2.3.4 Load or compute + save the list of kproto objects
     if (file.exists(proto_chk) && all(file.exists(val_chks))) {
       kp_list <- readRDS(proto_chk)
-      cat(sprintf(
-        "%s|PROTO_SKIP|%s|loaded from checkpoint\n",
+      cat(sprintf("%s|PROTO_SKIP|%s|loaded from checkpoint\n",
         format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"), m
       ), file = log_file, append = TRUE)
     } else {
@@ -249,7 +248,7 @@ all_results <- future_map_dfr(
 
       } else {
         
-        # 2.3.5.1 Run index calculations 
+        #2.3.5.1 Run index calculations 
         idx_start <- Sys.time()
         cat(sprintf("%s|VAL_START|%s|%s\n",
           format(idx_start, "%Y-%m-%d %H:%M:%OS3"), m, idx
