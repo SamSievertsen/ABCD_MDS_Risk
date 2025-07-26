@@ -6,7 +6,8 @@ output:
   html_document:
     self_contained: true
 params:
-  scaling_method: "robust"  # editable options: none, z_score, min_max, percentile, max_absolute, robust
+  validation_index: "all"
+  scaling_method: "robust"
 ---
 
 ```{r global, include = FALSE}
@@ -49,47 +50,37 @@ library(glue)
 library(progressr)
 handlers("txtprogressbar")
 
-# Parallel & numeric options
-plan(multicore, workers = parallel::detectCores())
-options(future.globals.maxSize = 5e9)
-options(scipen = 999, digits = 8)
+# Set up logging from SLURM script
+log_file <- Sys.getenv("DETAILED_LOG")
+summary_csv <- Sys.getenv("SUMMARY_CSV")
 
-## Logging / checkpoint locations ##
+# Denote which validation index this array‐task will run
+idx <- as.character(params$validation_index)
+
+# Disable future multicore/furrr here as SLURM array currently provides parallelism
+plan(sequential)
+
+# Set numerical options
+options(scipen = 999, digits = 8)
 
 # Grab SLURM job name (or default when local)
 SLURM_JOB_NAME <- Sys.getenv("SLURM_JOB_NAME", "local_kcalc")
 
-# Create detailed per‐step log tailed by sbatch wrapper
-log_file <- Sys.getenv(
-  "DETAILED_LOG",
-  file.path(getwd(), paste0(SLURM_JOB_NAME, "_detail.log"))
-)
-
-# Create high-level summary CSV
-summary_csv <- Sys.getenv(
-  "SUMMARY_CSV",
-  file.path(getwd(), paste0(SLURM_JOB_NAME, "_summary.csv"))
-)
-
-# Make sure parent log folders exist & create if not
+# Make sure parent log folders exist & create if not then create them
 dir.create(dirname(log_file), recursive = TRUE, showWarnings = FALSE)
 dir.create(dirname(summary_csv), recursive = TRUE, showWarnings = FALSE)
 
-# Initialize summary CSV header if missing
+# Initialize summary csv header if missing
 if (!file.exists(summary_csv)) {
   cat("method,status,start_time,end_time,duration_min\n",
       file = summary_csv)
 }
 
-## Reproducibility & parameters ##
-
 # Set seed for future reproducible random starts
 set.seed(123)
 
-# Set scaling method param as object in env
-scaling_method <- params$scaling_method  
-
-## Establish project paths & read in data ## 
+# Set scaling method from piped params argument
+scaling_method <- params$scaling_method
 
 # List project repository location
 REPO <- "/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk"
@@ -102,7 +93,7 @@ validation_dir <- file.path(REPO, "data/data_processed", "validation_results")
 if (!dir.exists(kproto_dir)) {dir.create(kproto_dir, recursive = TRUE, showWarnings = FALSE)}
 if (!dir.exists(validation_dir)) {dir.create(validation_dir, recursive = TRUE, showWarnings = FALSE)}
 
-# Read in risk variable data to be used in clustering
+# Read in risk variable data for clustering
 risk_variable_data <- read.csv(
   file.path(REPO, "data/data_processed", "risk_variable_data.csv")
 )
@@ -159,9 +150,9 @@ scaled_data <- apply_scaling(risk_variable_clustering_data, params$scaling_metho
 
 ```
 
-## Determining Optimal Number of Clusters (*k* Value)
+## Overview of Determining Optimal Number of Clusters (*k* Value)
 
-Choosing the appropriate number of clusters (*k*) is critical for uncovering meaningful groupings in mixed‐type data. Here, we combine descriptive elbow analysis with multiple internal validation indices to arrive at a robust, transparent recommendation for *k* between 2 and 8:
+Choosing the appropriate number of clusters (*k*) is critical for uncovering meaningful groupings in mixed‐type data. In this analysis, we combine descriptive elbow analysis with multiple internal validation indices to arrive at a robust, transparent recommendation for *k* between 2 and 8:
 
 1. **Elbow method**
    We plot the within‐cluster sum of squares (WCSS) across *k* = 2:8 and apply the Kneedle algorithm \[Satopaa *et al.*, 2011] via the `inflection` package (Emekes, 2017) to quantitatively identify the “elbow” point. This provides a visual and numeric guide, but is treated as descriptive rather than prescriptive for purposes of our analyses
@@ -172,42 +163,41 @@ Choosing the appropriate number of clusters (*k*) is critical for uncovering mea
 3. **Consensus evaluation**
    We record the optimal *k* returned by each index and examine patterns of agreement or discrepancy. A convergence of multiple indices on the same *k* will strengthen our confidence in that choice; though a nuanced examination of index scores, the distribution of index scores, and the elbow method will be consulted to 
 
-Below, we implement this three‐step procedure. First, we generate the elbow plot and run Kneedle to flag an elbow. Next, we loop through each validation index to extract its preferred *k*. Finally, we summarize all results in a single table for comparison
+## Implementation: parallel k-prototypes + single‐index validation
 
-```{r optimal k, warning = FALSE}
+In this step we:
 
-## Determining Optimal Number of Clusters (*k* Value) ##
+  1. Compute k-prototypes clusterings for *k* = 2:8 once and cache the results  
+  
+  2. Extract within-cluster sum of squares (WSS) for elbow diagnostics  
+  
+  3. Run exactly one internal validation index per SLURM task (silhouette, C-index, gamma, point-biserial or Tau)  
+  
+  4. Log start/end times, WSS values, and per-index *k*ₒₚₜ for reproducibility  
 
-#1. Generate clustering solutions & validation indices of interest
-#1.1 Establish relevant parameters & paths
-#1.1.1 Create a vector containing the k’s to test
+This modular, SLURM-array approach maximizes parallelism (one R process per index) while ensuring all results are captured in detailed logs
+
+```{r validation, include = FALSE, warning = FALSE, message = FALSE, eval = (idx != "all")}
+
+## Run kproto and validation for a single index and then exit ##
+
+#1.1 k values & file paths
 k_vals <- 2:8
-
-#1.1.2 List where to stash / load the kproto list for this method
 proto_file <- file.path(kproto_dir, sprintf("kproto_%s.rds", scaling_method))
+validation_file <- file.path(validation_dir, sprintf("val_%s_%s.rds", scaling_method, idx))
 
-#1.1.3 List where to stash / load full validation_kproto() results
-indices <- c("silhouette","cindex","gamma","ptbiserial","tau")
-val_files <- file.path(validation_dir, sprintf("val_%s_%s.rds", scaling_method, indices))
-
-#1.2 Load or compute all k-prototypes clusters
-if (file.exists(proto_file)) {
+#1.2 Load or compute k‐prototype list
+if (! file.exists(proto_file)) {
   
-  #1.2.1 Skip clustering if already done
-  kp_list <- readRDS(proto_file)
-  cat(sprintf("%s|PROTO_SKIP|%s|loaded %d ks from cache\n",
-              format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"),
-              scaling_method, length(k_vals)),
-      file = log_file, append = TRUE)
-} else {
-  
-  #1.2.2 Compute clusters in parallel across k if not completed
+  #1.2.1 Start the kproto timer
   proto_start <- Sys.time()
-  cat(sprintf("%s|PROTO_START|%s\n",
-              format(proto_start, "%Y-%m-%d %H:%M:%OS3"), scaling_method),
-      file = log_file, append = TRUE)
+  cat(
+    sprintf("%s|PROTO_START|%s\n", format(proto_start, "%Y-%m-%d %H:%M:%OS3"),
+            scaling_method),
+    file = log_file, append = TRUE
+  )
   
-  #1.2.3 Store a list containing each kp object (parallel over 7 k’s)
+  #1.2.2 Execute kproto & create the list if doesn't already exist
   kp_list <- future_map(
     k_vals,
     ~ kproto(x = scaled_data,
@@ -219,81 +209,199 @@ if (file.exists(proto_file)) {
   names(kp_list) <- paste0("k", k_vals)
   saveRDS(kp_list, proto_file)
   
-  #1.2.4 Log status for each k  
-  for (j in seq_along(k_vals)) {  
-    cat(sprintf("%s|WSS|%s|k=%d|wss=%.1f\n",
-                format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"),
-                scaling_method, k_vals[j]),
-        file = log_file, append = TRUE)  
-  }
-  
+  #1.2.3 End the kproto timer
   proto_end <- Sys.time()
-  cat(sprintf("%s|PROTO_END|%s|duration=%.1fmin\n",
-              format(proto_end, "%Y-%m-%d %H:%M:%OS3"),
-              scaling_method,
-              as.numeric(difftime(proto_end, proto_start, units = "mins"))),
-      file = log_file, append = TRUE)
+  cat(
+    sprintf("%s|PROTO_END|%s|duration=%.1fmin\n", format(proto_end, "%Y-%m-%d %H:%M:%OS3"),
+            scaling_method, as.numeric(difftime(proto_end, proto_start, units = "mins"))),
+    file = log_file, append = TRUE
+  )
+
+  #1.2.4 Read in the kproto list if already computed
+} else {
+  kp_list <- readRDS(proto_file)
+  cat(
+    sprintf("%s|PROTO_SKIP|%s|loaded %d ks from cache\n",
+            format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"),
+            scaling_method,
+            length(k_vals)),
+    file = log_file, append = TRUE
+  )
 }
 
-#1.2.6 Extract total within-cluster sum of squares (WSS) for elbow plot  
+#1.3 Extract WSS
+wss_vec <- map_dbl(kp_list, "tot.withinss")
+names(wss_vec) <- k_vals
+for (j in seq_along(k_vals)) {
+  cat(
+    sprintf("%s|WSS|%s|k=%d|wss=%.1f\n",
+            format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"),
+            scaling_method,
+            k_vals[j],
+            wss_vec[j]),
+    file = log_file, append = TRUE
+  )
+}
+
+#1.4 Run the one‐index validation
+idx_start <- Sys.time()
+cat(sprintf("%s|VAL_START|%s|%s\n", format(idx_start, "%Y-%m-%d %H:%M:%OS3"),
+          scaling_method, idx),
+  file = log_file, append = TRUE
+)
+
+#1.4.1 If validation already exists, read in and skip computing - start validation timer regardless
+if (file.exists(validation_file)) {
+  vr_all <- readRDS(validation_file)
+  cat(sprintf("%s|VAL_SKIP|%s|%s|k_opt=%d\n", format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"),
+            scaling_method, idx, vr_all$k_opt),
+    file = log_file, append = TRUE
+  )
+
+  #1.4.2 If validation index doesn't exist, compute independently in this job 
+} else {
+  vr_all <- validation_kproto(
+    method = idx,
+    object = kp_list,
+    kp_obj = "all",
+    verbose = FALSE
+  )
+  
+  #1.4.3 Save the validation index results
+  saveRDS(vr_all, validation_file)
+
+  #1.4.4 End the index timer and store in log
+  idx_end <- Sys.time()
+  cat(
+    sprintf("%s|VAL_END|%s|%s|k_opt=%d|duration=%.1fsec\n", format(idx_end, "%Y-%m-%d %H:%M:%OS3"),
+            scaling_method,
+            idx,
+            vr_all$k_opt,
+            as.numeric(difftime(idx_end, idx_start, units = "secs"))),
+    file = log_file, append = TRUE
+  )
+}
+
+#1.5 Write out the per‐index summary to the CSV
+cat(
+  sprintf("%s,validation_%s,%s,%s,%.1f\n", scaling_method, idx,
+          format(idx_start, "%Y-%m-%d %H:%M:%OS3"), format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"),
+          as.numeric(difftime(Sys.time(), idx_start, units = "mins"))),
+  file = summary_csv, append = TRUE
+)
+
+#1.6 now bail out: we do *not* want to run elbow or plots in this job
+quit(save = "no", status = 0)
+
+```
+
+## Checkpoint: aggregate diagnostics & prepare for consensus
+
+All five index‐specific jobs have now finished and written:
+
+- A single cached k-prototype list (k = 2:8)  
+
+- WSS values for each *k*  
+
+- Per-index validation objects (`val_<method>_<index>.rds`) with optimal *k*
+
+Next, we will:
+
+  1. Read and combine all WSS into an elbow plot and run Kneedle  
+
+  2. Merge each index’s full *k*-vs-score trajectories  
+
+  3. Compute each index’s preferred *k* and select a consensus *k*  
+
+  4. Visualize results via line plots and heatmaps for final inspection
+
+```{r optimal k, warning = FALSE, eval = (idx == "all")}
+
+## Determining Optimal Number of Clusters (*k* Value) ##
+
+#1. Generate clustering solutions & validation indices of interest
+#1.1 Establish relevant parameters & paths
+#1.1.1 Create a vector containing the k’s to test
+k_vals <- 2:8
+
+#1.1.2 List where to stash / load the kproto list for this method
+proto_file <- file.path(kproto_dir, sprintf("kproto_%s.rds", scaling_method))
+
+#1.2 Load or compute all k-prototypes clusters (unchanged)
+if (file.exists(proto_file)) {
+  
+  #1.2.1 Skip clustering if already done
+  kp_list <- readRDS(proto_file)
+  cat(
+    sprintf("%s|PROTO_SKIP|%s|loaded %d ks from cache\n", format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"),
+            scaling_method, length(k_vals)),
+    file = log_file, append = TRUE
+  )
+  
+} else {
+  
+  #1.2.2 Compute clusters in parallel across k if not completed
+  proto_start <- Sys.time()
+  cat(
+    sprintf("%s|PROTO_START|%s\n",
+            format(proto_start, "%Y-%m-%d %H:%M:%OS3"),
+            scaling_method),
+    file = log_file, append = TRUE
+  )
+  
+  #1.2.3 Store a list containing each kp object (parallel over 7 k’s)
+  kp_list <- future_map(
+    k_vals,
+    ~ kproto(x = scaled_data,
+             k = .x,
+             nstart  = 8,
+             verbose = TRUE),
+    .options = furrr_options(seed = TRUE)
+  )
+  
+  #1.2.4 Provide a k suffix to each of the k values
+  names(kp_list) <- paste0("k", k_vals)
+  
+  #1.2.5 Save the kproto list
+  saveRDS(kp_list, proto_file)
+  
+  #1.2.6 Log end status for clustering
+  proto_end <- Sys.time()
+  cat(
+    sprintf("%s|PROTO_END|%s|duration=%.1fmin\n", format(proto_end, "%Y-%m-%d %H:%M:%OS3"),
+            scaling_method, as.numeric(difftime(proto_end, proto_start, units = "mins"))),
+    file = log_file, append = TRUE
+  )
+}
+
+#1.2.5 Extract total within‐cluster sum of squares (WSS) for elbow plot  
 wss_vec <- map_dbl(kp_list, "tot.withinss")
 names(wss_vec) <- k_vals
 
-#1.3 Run each validation index in parallel
-res_list <- future_map_dfr(
-  indices,
-  function(idx) {
-    val_f <- sprintf("val_%s_%s.rds", scaling_method, idx)
-    val_p <- file.path(validation_dir, val_f)
-    
-    if (file.exists(val_p)) {
-      
-      #1.3.1 Reload cached validation if it already exists
-      vr_all <- readRDS(val_p)
-      cat(sprintf("%s|VAL_SKIP|%s|%s|k_opt=%d\n",
-                  format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"),
-                  scaling_method, idx, vr_all$k_opt),
-          file = log_file, append = TRUE)
-    } else {
-      
-      #1.3.2 Compute full validation for each index if it doesn't already exist
-      idx_start <- Sys.time()
-      cat(sprintf("%s|VAL_START|%s|%s\n",
-                  format(idx_start, "%Y-%m-%d %H:%M:%OS3"),
-                  scaling_method, idx),
-          file = log_file, append = TRUE)
-      
-      vr_all <- validation_kproto(
-        method = idx,
-        data = scaled_data,
-        k = k_vals,
-        kp_obj = "all",
-        nstart = 8,
-        verbose = FALSE
-      )
-      saveRDS(vr_all, val_p)
-      
-      idx_end <- Sys.time()
-      cat(sprintf("%s|VAL_END|%s|%s|k_opt=%d|duration=%.1fsec\n",
-                  format(idx_end, "%Y-%m-%d %H:%M:%OS3"),
-                  scaling_method, idx, vr_all$k_opt,
-                  as.numeric(difftime(idx_end, idx_start, units = "secs"))),
-          file = log_file, append = TRUE)
-    }
-    
-    #1.3.3 Return results for each index
-    tibble(
-      method = scaling_method,
-      index = idx,
-      k_opt = vr_all$k_opt,
-      index_val = vr_all$indices[which(k_vals == vr_all$k_opt)]
-    )
-  },
-  .options = furrr_options(seed = TRUE)
-)
+#1.2.6 Log WSS for each k
+for (j in seq_along(k_vals)) {
+  cat(
+    sprintf("%s|WSS|%s|k=%d|wss=%.1f\n", format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"),
+            scaling_method,  k_vals[j], wss_vec[j]),
+    file = log_file, append = TRUE
+  )
+}
 
-#1.4 Stash a copy of the summarized index results to later display 
-summary_tbl <- bind_rows(res_list)
+#1.3 *Now* read in all five validation objects and proceed to elbow & summary
+indices <- c("silhouette","cindex","gamma","ptbiserial","tau")
+val_list <- purrr::map(indices, ~ readRDS(
+  file.path(validation_dir, sprintf("val_%s_%s.rds", scaling_method, .x))
+))
+
+#1.4 Bind & summarize all index results for plotting
+index_k_df <- purrr::map_dfr(
+  val_list,
+  function(vr) {
+    ks  <- as.integer(names(vr$indices))
+    vals<- as.numeric(vr$indices)
+    tibble(index = vr$method, k = ks, value = vals)
+  }
+)
 
 #2. Generate elbow diagnostics & Kneedle (UIK)  
 #2.1 Prepare a data.frame for plotting

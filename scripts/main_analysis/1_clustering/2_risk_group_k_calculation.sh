@@ -4,15 +4,17 @@
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=sievertsen@ohsu.edu
 
-#SBATCH --account=basic
-#SBATCH --partition=basic
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=36
-#SBATCH --mem=256G
-#SBATCH --time=23:59:00
+#SBATCH --account=NagelLab
+#SBATCH --partition=batch
+#SBATCH --qos=highio
+#SBATCH --time=36:00:00
 
-#SBATCH --chdir /home/exacloud/gscratch/NagelLab
+#SBATCH --nodes=1
+#SBATCH --ntasks=6               # 5 validations + 1 consensus step
+#SBATCH --cpus-per-task=1
+#SBATCH --mem-per-cpu=32G
+
+#SBATCH --chdir /home/exacloud/gscratch/NagelLab/staff/sam
 #SBATCH --export=all
 
 # Use strict Bash mode (fast error out)
@@ -48,28 +50,55 @@ echo "Git commit: ${GIT_HASH}"
 echo "Container: ${IMG}"
 
 # Change directories to the appropriate script location
-cd "${REPO}/scripts/main_analysis/1_clustering"
+cd "${REPO}/scripts/main_analysis/2_risk_group_k_calculation"
 
 # Stream detailed log to watch progress in real time
 tail -F "${DETAILED_LOG}" & TAILPID=$!
 
-# Render the k calculation RMD inside the container
-apptainer exec \
-  -B /home/exacloud/gscratch/NagelLab:/home/exacloud/gscratch/NagelLab \
-  "${IMG}" \
-  Rscript -e "rmarkdown::render('2_risk_group_k_calculation.Rmd', quiet = FALSE)"
+# Run the five validations in parallel, one srun per index
+INDICES=(silhouette cindex gamma ptbiserial tau)
+for idx in "${INDICES[@]}"; do
+  echo "Starting validation index: $idx" >> "${DETAILED_LOG}"
+  srun --exclusive -n1 \
+    apptainer exec \
+      -B /home/exacloud/gscratch/NagelLab:/home/exacloud/gscratch/NagelLab \
+      "${IMG}" \
+      Rscript -e "rmarkdown::render(
+        '2_risk_group_k_calculation.Rmd',
+        params = list(validation_index = '$idx'),
+        quiet = FALSE
+      )" \
+    &>> "${LOGDIR}/${SLURM_JOB_NAME}_${idx}.log" &
+done
+
+# Wait for all five to complete
+wait
+
+# Run the all job (consensus + plotting) in the same allocation
+echo "Starting consensus plot step (idx = all)" >> "${DETAILED_LOG}"
+srun -n1 \
+  apptainer exec \
+    -B /home/exacloud/gscratch/NagelLab:/home/exacloud/gscratch/NagelLab \
+    "${IMG}" \
+    Rscript -e "rmarkdown::render(
+      '2_risk_group_k_calculation.Rmd',
+      params = list(validation_index = 'all'),
+      quiet = FALSE
+    )" \
+  &>> "${LOGDIR}/${SLURM_JOB_NAME}_all.log"
 
 # Stop the background tail on exit
 kill "$TAILPID" 2>/dev/null || true
 
-# Generate post-run usage accounting (on EXIT) of compute time & resources
+#
+# 3) Post‐run usage accounting (on EXIT)
+#
 function log_usage {
   CSV="${USAGEDIR}/usage.csv"
   if [[ ! -s "${CSV}" ]]; then
     echo "JobIDRaw|JobName|Partition|Elapsed|AllocCPUS|TotalCPU|MaxRSS|CPUHours|CostUSD" > "${CSV}"
   fi
 
-# Create header if missing
   sacct -j "${SLURM_JOB_ID}" \
         --format=JobIDRaw,JobName,Partition,Elapsed,AllocCPUS,TotalCPU,MaxRSS \
         --parsable2 -n \
@@ -82,13 +111,12 @@ function log_usage {
       print $0, cpu_hours, cost
     }' >> "${CSV}"
 
-# Email alert if cost exceeds $10
+  # Email alert if cost exceeds $10
   last_cost=$(tail -n1 "${CSV}" | awk -F'|' '{print $NF}')
   if (( $(echo "${last_cost} > 10" | bc -l) )); then
     echo "Job ${SLURM_JOB_ID} cost \$${last_cost}" \
       | mail -s "SLURM cost alert for ${SLURM_JOB_NAME}_${SLURM_JOB_ID}" sievertsen@ohsu.edu
   fi
 }
-
-# Exit the accounting log
 trap log_usage EXIT
+
