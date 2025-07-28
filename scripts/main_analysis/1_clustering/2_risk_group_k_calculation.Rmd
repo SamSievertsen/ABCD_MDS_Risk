@@ -260,14 +260,14 @@ if (file.exists(validation_file)) {
 
   #1.4.2 If validation index doesn't exist, compute independently in this job 
 } else {
-  vr_all <- validation_kproto(
+    vr_all <- validation_kproto(
     method = idx,
-    object = kp_list,
+    data = scaled_data,
+    k = k_vals,
     kp_obj = "all",
+    nstart = 8,
     verbose = FALSE
   )
-  
-  #1.4.3 Save the validation index results
   saveRDS(vr_all, validation_file)
 
   #1.4.4 End the index timer and store in log

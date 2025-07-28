@@ -50,7 +50,7 @@ echo "Git commit: ${GIT_HASH}"
 echo "Container: ${IMG}"
 
 # Change directories to the appropriate script location
-cd "${REPO}/scripts/main_analysis/2_risk_group_k_calculation"
+cd "${REPO}/scripts/main_analysis/1_clustering"
 
 # Stream detailed log to watch progress in real time
 tail -F "${DETAILED_LOG}" & TAILPID=$!
@@ -90,9 +90,7 @@ srun -n1 \
 # Stop the background tail on exit
 kill "$TAILPID" 2>/dev/null || true
 
-#
-# 3) Post‐run usage accounting (on EXIT)
-#
+# Post‐run usage accounting (on EXIT)
 function log_usage {
   CSV="${USAGEDIR}/usage.csv"
   if [[ ! -s "${CSV}" ]]; then
