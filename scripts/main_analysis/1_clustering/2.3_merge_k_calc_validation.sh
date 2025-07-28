@@ -31,12 +31,21 @@ export VALID_DIR="${REPO}/data/data_processed/validation_results"
 # Ensure output directory exists
 mkdir -p "${VALID_DIR}"
 
+# Logging setup
+LOGDIR="${REPO}/slurm_logs/$(date +%F)"
+mkdir -p "${LOGDIR}"
+export DETAILED_LOG="${LOGDIR}/${SLURM_JOB_NAME}_${SLURM_JOB_ID}_merge_${IDX}.log"
+
 # GUARD: skip if this merge result already exists
 MERGED_FILE="${VALID_DIR}/val_robust_${IDX}.rds"
 if [[ -f "${MERGED_FILE}" ]]; then
   echo "Merged validation for ${IDX} already exists at ${MERGED_FILE}, skipping"
   exit 0
 fi
+
+# Mark the start of the current merge
+echo "$(date +'%Y-%m-%d %H:%M:%OS3')|MERGE_START|${IDX}" \
+  >> "${DETAILED_LOG}"
 
 # Run merge in R 
 apptainer exec \
@@ -96,3 +105,7 @@ saveRDS(vr_all, out_fn)
 
 # Exit script
 EOF
+
+# Mark the end of the current merge
+echo "$(date +'%Y-%m-%d %H:%M:%OS3')|MERGE_DONE|${IDX}" \
+  >> "${DETAILED_LOG}"
