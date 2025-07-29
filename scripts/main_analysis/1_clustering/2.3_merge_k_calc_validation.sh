@@ -7,14 +7,14 @@
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=sievertsen@ohsu.edu
 
-#SBATCH --account=basic
-#SBATCH --partition=basic
-#SBATCH --time=04:00:00
+#SBATCH --account=NagelLab
+#SBATCH --partition=batch
+#SBATCH --time=08:00:00
 
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=8G
+#SBATCH --mem=32G
 
 #SBATCH --export=ALL,IDX
 
@@ -85,7 +85,7 @@ if (idx %in% lower_idx) {
 # Rebuild the kp_obj list, embedding each kproto solution
 kp_obj <- lapply(k_vals, function(k) {
   list(
-    index  = indices[as.character(k)],
+    index = indices[as.character(k)],
     k = as.integer(k),
     object = kp_list[[paste0("k", k)]]
   )

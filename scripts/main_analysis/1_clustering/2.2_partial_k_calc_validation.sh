@@ -7,13 +7,14 @@
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=sievertsen@ohsu.edu
 
-#SBATCH --account=basic
-#SBATCH --partition=basic
+#SBATCH --account=NagelLab
+#SBATCH --partition=batch
+#SBATCH --qos=long_jobs
 
-#SBATCH --time=24:00:00
+#SBATCH --time=168:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=9
+#SBATCH --cpus-per-task=4
 #SBATCH --mem=64G
 
 #SBATCH --array=1-35%7
