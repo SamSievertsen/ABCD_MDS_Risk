@@ -644,12 +644,22 @@ dir_tbl <- tribble(
 )
 
 #3.2 Pull out full index‐vs‐k values from cached validation objects
-#3.2.1 Filter dir_tbl to only the indices we have
-dir_tbl <- dir_tbl %>% filter(index %in% indices)
+#3.2.1 Build a single data.frame with index, k, and value
+index_k_df <- purrr::map2_dfr(
+  indices, val_list,
+  function(idx, vr) {
+    ks <- as.integer(names(vr$indices))
+    vals<- as.numeric(vr$indices)
+    tibble(index = idx, k = ks, value = vals)
+  }
+)
 
-#3.2.2 Join the cached index results
+#3.2.2 Now filter dir_tbl to only the indices we actually have for the current run
+dir_tbl2 <- dir_tbl %>% filter(index %in% index_k_df$index)
+
+#3.2.3 Join direction & label onto the data
 index_k_df <- index_k_df %>%
-  left_join(dir_tbl, by = "index")
+  left_join(dir_tbl2, by = "index")
 
 #3.3 Compute each index’s best k
 summary_tbl <- index_k_df %>%
@@ -721,6 +731,7 @@ summary_tbl %>%
 
 - The elbow plot suggests a bend at *k* = `r print(as.numeric(knee))`, reinforced by Kneedle’s quantitative estimate
 
-- Among the `r nrow(summary_tbl)` validation indices we were able to run, `r sum(summary_tbl$k_opt == consensus_k)` (`r paste(summary_tbl$label[summary_tbl$k_opt == consensus_k], collapse = ", ")`) also vote for *k* = `r consensus_k`, while the others (`r paste0(summary_tbl$label[summary_tbl$k_opt != consensus_k], " (k=", summary_tbl$k_opt[summary_tbl$k_opt != consensus_k], ")", collapse = ", ")`) peak at neighboring values 
+- Among the `r nrow(summary_tbl)` validation indices we were able to run, `r sum(summary_tbl$k_opt == consensus_k)` (`r paste(summary_tbl$label[summary_tbl$k_opt == consensus_k], collapse = ", ")`) vote for *k* = `r print(consensus_k)`  
+  `r if (any(summary_tbl$k_opt != consensus_k)) { paste0("The others (", paste0(summary_tbl$label[summary_tbl$k_opt != consensus_k], " (k=", summary_tbl$k_opt[summary_tbl$k_opt != consensus_k], ")", collapse = ", "), ") peak at neighboring values.") }`
 
-- Taken together, these results indicate that *k* = `r consensus_k` likely balances cohesion and separation most consistently in our risk variable data; pending contextualization of these results post-completion of this script
+- Taken together, these results indicate that *k* = `r print(consensus_k)` likely balances cohesion and separation most consistently in our risk variable data; pending contextualization of these results post-completion of this script
