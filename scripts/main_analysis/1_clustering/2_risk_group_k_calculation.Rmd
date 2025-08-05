@@ -6,7 +6,7 @@ output:
   html_document:
     self_contained: true
 params:
-  validation_index: "all"
+  validation_index: "silhouette"
   scaling_method: "robust"
 ---
 
@@ -43,6 +43,8 @@ library(tidyclust)
 library(tidyquant)
 library(FeatureImpCluster)
 library(ggplot2)
+library(umap)
+library(fastDummies)
 library(inflection)
 library(furrr)
 library(purrr)
@@ -152,13 +154,13 @@ scaled_data <- apply_scaling(risk_variable_clustering_data, params$scaling_metho
 
 ## Overview of Determining Optimal Number of Clusters (*k* Value)
 
-Choosing the appropriate number of clusters (*k*) is critical for uncovering meaningful groupings in mixed‐type data. In this analysis, we combine descriptive elbow analysis with multiple internal validation indices to arrive at a robust, transparent recommendation for *k* between 2 and 8:
+Choosing the appropriate number of clusters (*k*) is critical for uncovering meaningful groupings in mixed‐type data. In this analysis, we combine descriptive elbow analysis with (ideally multiple) internal validation indices to arrive at a robust, transparent recommendation for *k* between 2 and 8:
 
 1. **Elbow method**
-   We plot the within‐cluster sum of squares (WCSS) across *k* = 2:8 and apply the Kneedle algorithm \[Satopaa *et al.*, 2011] via the `inflection` package (Emekes, 2017) to quantitatively identify the “elbow” point. This provides a visual and numeric guide, but is treated as descriptive rather than prescriptive for purposes of our analyses
+   We plot the within‐cluster sum of squares (WSS) across *k* = 2:8 and apply the Kneedle algorithm \[Satopaa *et al.*, 2011] via the `inflection` package (Emekes, 2017) to quantitatively identify the “elbow” point. This provides a visual and numeric guide, but is treated as descriptive rather than prescriptive for purposes of our analyses
 
 2. **Internal validation indices**
-   Using `validation_kproto()`, we compute six statistical validation indices: Silhouette, C-Index, Dunn, Gamma, Point-biserial, and Tau—for each *k*. Each index captures a different aspect of cluster compactness and separation without requiring true labels
+   Using `validation_kproto()`, we generate the silhouette statistical validation index, and loop in any of the other relevant validation indices (i.e., C-Index, Dunn, Gamma, Point-biserial, and Tau) that were able to be completed in the maximum alloed 7 day run-time for each *k*
 
 3. **Consensus evaluation**
    We record the optimal *k* returned by each index and examine patterns of agreement or discrepancy. A convergence of multiple indices on the same *k* will strengthen our confidence in that choice; though a nuanced examination of index scores, the distribution of index scores, and the elbow method will be consulted to 
@@ -171,25 +173,23 @@ In this step we:
   
   2. Extract within-cluster sum of squares (WSS) for elbow diagnostics  
   
-  3. Run exactly one internal validation index per SLURM task (silhouette, C-index, gamma, point-biserial or Tau)  
+  3. Run the silhouette index with one SLURM task per *k* value 
   
-  4. Log start/end times, WSS values, and per-index *k*ₒₚₜ for reproducibility  
+  4. Log start/end times, WSS values, and per-index *k*opt for reproducibility
 
-This modular, SLURM-array approach maximizes parallelism (one R process per index) while ensuring all results are captured in detailed logs
+```{r validation, include = FALSE, warning = FALSE, message = FALSE, eval = (idx == "silhouette")}
 
-```{r validation, include = FALSE, warning = FALSE, message = FALSE, eval = (idx != "all")}
-
-## Run kproto and validation for a single index and then exit ##
+## Run kproto and validation for the silhouette index and then exit ##
 
 #1.1 k values & file paths
 k_vals <- 2:8
 proto_file <- file.path(kproto_dir, sprintf("kproto_%s.rds", scaling_method))
-validation_file <- file.path(validation_dir, sprintf("val_%s_%s.rds", scaling_method, idx))
+validation_file<- file.path(validation_dir, sprintf("val_%s_silhouette.rds", scaling_method))
 
-#1.2 Load or compute k‐prototype list
+#1.2 Load or compute k‐prototype list depending upon whether it already exists or not
 if (! file.exists(proto_file)) {
   
-  #1.2.1 Start the kproto timer
+  #1.2.1 Start the kproto timer if it doesn't already exist
   proto_start <- Sys.time()
   cat(
     sprintf("%s|PROTO_START|%s\n", format(proto_start, "%Y-%m-%d %H:%M:%OS3"),
@@ -197,7 +197,7 @@ if (! file.exists(proto_file)) {
     file = log_file, append = TRUE
   )
   
-  #1.2.2 Execute kproto & create the list if doesn't already exist
+  #1.2.2 Execute kproto & cache results
   kp_list <- future_map(
     k_vals,
     ~ kproto(x = scaled_data,
@@ -217,107 +217,105 @@ if (! file.exists(proto_file)) {
     file = log_file, append = TRUE
   )
 
-  #1.2.4 Read in the kproto list if already computed
 } else {
+  
+  #1.2.4 Load cached kproto list if it already exists
   kp_list <- readRDS(proto_file)
   cat(
-    sprintf("%s|PROTO_SKIP|%s|loaded %d ks from cache\n",
-            format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"),
-            scaling_method,
-            length(k_vals)),
+    sprintf("%s|PROTO_SKIP|%s|loaded %d ks from cache\n", format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"),
+            scaling_method, length(k_vals)),
     file = log_file, append = TRUE
   )
 }
 
-#1.3 Extract WSS
+#1.3 Extract & log WSS for elbow analysis
 wss_vec <- map_dbl(kp_list, "tot.withinss")
 names(wss_vec) <- k_vals
 for (j in seq_along(k_vals)) {
   cat(
-    sprintf("%s|WSS|%s|k=%d|wss=%.1f\n",
-            format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"),
-            scaling_method,
-            k_vals[j],
-            wss_vec[j]),
+    sprintf("%s|WSS|%s|k=%d|wss=%.1f\n", format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"),
+            scaling_method, k_vals[j], wss_vec[j]),
     file = log_file, append = TRUE
   )
 }
 
-#1.4 Run the one‐index validation
+#1.4 Begin logging the run of the Silhouette validation index
 idx_start <- Sys.time()
-cat(sprintf("%s|VAL_START|%s|%s\n", format(idx_start, "%Y-%m-%d %H:%M:%OS3"),
-          scaling_method, idx),
+cat(
+  sprintf("%s|VAL_START|%s|silhouette\n", format(idx_start, "%Y-%m-%d %H:%M:%OS3"),
+          scaling_method),
   file = log_file, append = TRUE
 )
 
-#1.4.1 If validation already exists, read in and skip computing - start validation timer regardless
 if (file.exists(validation_file)) {
-  vr_all <- readRDS(validation_file)
-  cat(sprintf("%s|VAL_SKIP|%s|%s|k_opt=%d\n", format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"),
-            scaling_method, idx, vr_all$k_opt),
+  
+  #1.4.1 Reload cached Silhouette if it exists already
+  vr_sil <- readRDS(validation_file)
+  cat(
+    sprintf("%s|VAL_SKIP|%s|silhouette|k_opt=%d\n", format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"),
+            scaling_method, vr_sil$k_opt),
     file = log_file, append = TRUE
   )
-
-  #1.4.2 If validation index doesn't exist, compute independently in this job 
+  
 } else {
-    vr_all <- validation_kproto(
-    method = idx,
-    data = scaled_data,
-    k = k_vals,
+  
+  #1.4.2 Compute Silhouette index across all k if it doesn't already exist
+  vr_sil <- validation_kproto(
+    method = "silhouette",
+    object = kp_list,
     kp_obj = "all",
-    nstart = 8,
     verbose = FALSE
   )
-  saveRDS(vr_all, validation_file)
-
-  #1.4.4 End the index timer and store in log
+  
+  #1.4.2.1 Save the validation index as an RDS file at the checkpoint location
+  saveRDS(vr_sil, validation_file)
+  
+  #1.4.3 End the Silhouette timer & log
   idx_end <- Sys.time()
   cat(
-    sprintf("%s|VAL_END|%s|%s|k_opt=%d|duration=%.1fsec\n", format(idx_end, "%Y-%m-%d %H:%M:%OS3"),
-            scaling_method,
-            idx,
-            vr_all$k_opt,
-            as.numeric(difftime(idx_end, idx_start, units = "secs"))),
+    sprintf("%s|VAL_END|%s|silhouette|k_opt=%d|duration=%.1fsec\n", format(idx_end, "%Y-%m-%d %H:%M:%OS3"),
+            scaling_method, vr_sil$k_opt, as.numeric(difftime(idx_end, idx_start, units = "secs"))),
     file = log_file, append = TRUE
   )
 }
 
 #1.5 Write out the per‐index summary to the CSV
 cat(
-  sprintf("%s,validation_%s,%s,%s,%.1f\n", scaling_method, idx,
+  sprintf("%s,validation_silhouette,%s,%s,%.1f\n",
+          scaling_method,
           format(idx_start, "%Y-%m-%d %H:%M:%OS3"), format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"),
           as.numeric(difftime(Sys.time(), idx_start, units = "mins"))),
   file = summary_csv, append = TRUE
 )
 
-#1.6 now bail out: we do *not* want to run elbow or plots in this job
+#1.6 Bail out of the job prior to calculating the optimal k analyses
 quit(save = "no", status = 0)
 
 ```
 
 ## Checkpoint: aggregate diagnostics & prepare for consensus
 
-All five index‐specific jobs have now finished and written:
+The silhouette index‐specific job has now finished and written:
 
 - A single cached k-prototype list (k = 2:8)  
 
 - WSS values for each *k*  
 
-- Per-index validation objects (`val_<method>_<index>.rds`) with optimal *k*
+- A validation index object (`val_robust_silhouette.rds`) with optimal *k* for the silhouette 
 
 Next, we will:
 
   1. Read and combine all WSS into an elbow plot and run Kneedle  
 
-  2. Merge each index’s full *k*-vs-score trajectories  
+  2. Merge each available index’s full *k*-vs-score trajectories  
 
-  3. Compute each index’s preferred *k* and select a consensus *k*  
+  3. Compute each available index’s preferred *k* and select a consensus *k*  
 
   4. Visualize results via line plots and heatmaps for final inspection
 
 ```{r optimal k, warning = FALSE, eval = (idx == "all")}
 
-## Determining Optimal Number of Clusters (*k* Value) ##
+## Determining Optimal Number of Clusters (k Value) ##
 
 #1. Generate clustering solutions & validation indices of interest
 #1.1 Establish relevant parameters & paths
@@ -387,18 +385,29 @@ for (j in seq_along(k_vals)) {
   )
 }
 
-#1.3 *Now* read in all five validation objects and proceed to elbow & summary
-indices <- c("silhouette","cindex","gamma","ptbiserial","tau")
-val_list <- purrr::map(indices, ~ readRDS(
-  file.path(validation_dir, sprintf("val_%s_%s.rds", scaling_method, .x))
-))
+#1.3 Read in all available validation objects (silhouette always there; others if finished)
+#1.3.1 Find every val_<method>_<index>.rds for this scaling method
+val_files <- list.files(
+  validation_dir,
+  pattern = sprintf("^val_%s_.*\\.rds$", scaling_method),
+  full.names = TRUE
+)
+
+#1.3.2 Extract the validation index names from the filenames
+indices <- basename(val_files) %>%
+  stringr::str_remove(sprintf("^val_%s_", scaling_method)) %>%
+  stringr::str_remove("\\.rds$")
+
+#1.3.3 Read them all in and name the list
+val_list <- purrr::map(val_files, readRDS)
+names(val_list) <- indices
 
 #1.4 Bind & summarize all index results for plotting
 index_k_df <- purrr::map_dfr(
   val_list,
   function(vr) {
-    ks  <- as.integer(names(vr$indices))
-    vals<- as.numeric(vr$indices)
+    ks <- as.integer(names(vr$indices))
+    vals <- as.numeric(vr$indices)
     tibble(index = vr$method, k = ks, value = vals)
   }
 )
@@ -461,6 +470,155 @@ elbow_plot_uik <- ggplot(elbow_df, aes(x = k, y = wss)) +
 #2.4.2 Print the elbow plot with the UIK
 print(elbow_plot_uik)
 
+#2.5 Cluster compactness / separation metrics per k
+#2.5.1 Compute total sum of squares (TSS) once
+overall_mean <- colMeans(scaled_data)
+tss <- sum(rowSums((scaled_data - overall_mean)^2))
+
+#2.5.2 Loop over each k to compute RMSSD & R²
+cluster_metrics <- purrr::map_dfr(
+  k_vals,
+  function(k) {
+    
+    #2.5.2.1 Pull cluster assignments for this k
+    cl <- kp_list[[paste0("k", k)]]$cluster
+
+    #2.5.2.2 Within‐cluster SSD
+    wcss_per_cluster <- tapply(
+      seq_along(cl), cl,
+      function(idxs) {
+        sum(rowSums((scaled_data[idxs, ] - overall_mean)^2))
+      }
+    )
+    wcss_total <- sum(wcss_per_cluster)
+
+    #2.5.2.3 Get RMSSD
+    rmssd <- sqrt(mean(wcss_per_cluster / table(cl)))
+
+    #2.5.2.4 Get R squared
+    r2_val <- (tss - wcss_total) / tss
+
+    #2.5.2.5 log to detailed log
+    cat(
+      sprintf("%s|METRICS|%s|k=%d|RMSSD=%.4f|R2=%.4f\n", format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"),
+        scaling_method, k, rmssd, r2_val),
+      file = log_file, append = TRUE
+    )
+
+    #2.5.2.6 Return a one‐row tibble with results
+    tibble(
+      k = k,
+      RMSSD = rmssd,
+      R2 = r2_val)
+  }
+)
+
+#2.5.3 Print a summary table
+knitr::kable(
+  cluster_metrics,
+  caption = glue::glue("Compactness/separation metrics per k ({scaling_method} scaling)"),
+  digits = 3) %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped","hover","condensed","responsive"))
+
+#2.6 UMAP & blob diagnostics for selected k values
+#2.6.1 Function to one‐hot encode categorical variables + pipe in scaled numerics
+prepare_mixed_data <- function(data) {
+  cat_cols <- sapply(data, function(x) is.factor(x) || is.character(x))
+  num_cols <- sapply(data, is.numeric)
+  comps <- list()
+
+  if (any(cat_cols)) {
+    cd <- data[, cat_cols, drop = FALSE]
+    cd[] <- lapply(cd, function(x) if (is.character(x)) as.factor(x) else x)
+    comps$cat <- dummy_cols(cd, remove_first_dummy = TRUE, remove_selected_columns = TRUE)
+  }
+  if (any(num_cols)) {
+    nd <- data[, num_cols, drop = FALSE]
+    comps$num <- as.data.frame(nd)
+  }
+  do.call(cbind, comps)
+}
+
+#2.6.2 Choose the k’s to visualize - current most likely optimal candidates
+selected_k <- c(2, 3, 4)
+
+#2.6.3 Loop over each selected k and create UMAP plots + diagnostic plots
+for (k in selected_k) {
+
+  #2.6.3.1 Extract data & cluster labels
+  kp_obj <- kp_list[[paste0("k", k)]]
+  data_k <- kp_obj$data
+  cluster_labels <- factor(kp_obj$cluster)
+
+  #2.6.3.2 Prepare config for UMAP (slight deviation from default to see density in blob better)
+  df_umap <- prepare_mixed_data(data_k)
+  cfg <- umap.defaults
+  cfg$n_neighbors <- 15
+  cfg$min_dist <- 0.1
+  cfg$spread <- 1.5
+  cfg$n_epochs <- 500
+
+  #2.6.3.3 Generate the k specific UMAP results
+  umap_res <- umap(df_umap, config = cfg)
+  
+  #2.6.3.4 Store the UMAP results in a dataframe
+  umap_df <- data.frame(
+    UMAP1 = umap_res$layout[,1],
+    UMAP2 = umap_res$layout[,2],
+    Cluster = cluster_labels
+  )
+
+  #2.6.3.5 Plot UMAP scatter
+  p_umap <- ggplot(umap_df, aes(x = UMAP1, y = UMAP2, color = Cluster)) +
+    geom_point(size = 1.5, alpha = 0.6) +
+    labs(
+      title = glue::glue("UMAP scatter (k = {k})"),
+      subtitle = glue::glue("n_neighbors = {cfg$n_neighbors}, min_dist = {cfg$min_dist}"),
+      x = "UMAP 1",
+      y = "UMAP 2") +
+    theme_minimal(base_size = 14) +
+    theme(legend.title = element_text(size = 10))
+  
+  #2.6.3.6 Print the k-specific UMAP plot
+  print(p_umap)
+
+  #2.6.3.7 Plot blob density + overlay
+  p_blob <- ggplot(umap_df, aes(x = UMAP1, y = UMAP2)) +
+    geom_density_2d(alpha = 0.3, color = "gray40") +
+    geom_point(aes(color = Cluster), size = 1.2, alpha = 0.7) +
+    labs(
+      title = glue::glue("UMAP blob (k = {k})"),
+      subtitle = "Density contours + cluster overlay") +
+    theme_minimal(base_size = 14) +
+    theme(legend.title = element_text(size = 10))
+  
+  #2.6.3.8 Print the blob density plot
+  print(p_blob)
+
+  #2.6.3.9 Highlight each cluster with a unique scatter plot fixed over the UMAP results
+  clus_ids <- sort(unique(cluster_labels))
+  cluster_plots <- lapply(clus_ids, function(cl) {
+    df2 <- umap_df
+    df2$highlight <- ifelse(df2$Cluster == cl, paste("Cluster", cl), "Other")
+    ggplot(df2, aes(x = UMAP1, y = UMAP2)) +
+      geom_point(aes(color = highlight, alpha = highlight), size = 1) +
+      scale_color_manual(values = c("Other" = "gray80", paste("Cluster", cl) = "red")) +
+      scale_alpha_manual(values = c("Other" = 0.3, paste("Cluster", cl) = 0.8)) +
+      labs(title = glue::glue("k = {k} → Highlight: Cluster {cl}")) +
+      theme_minimal(base_size = 12) +
+      theme(legend.position = "none",
+            plot.title = element_text(size = 10),
+            axis.text = element_text(size = 8))
+  })
+  
+  #2.6.3.10 Arrange and print up to 6 per plots row (dependent upon k)
+  if (length(cluster_plots) <= 6) {
+    do.call(gridExtra::grid.arrange, c(cluster_plots, ncol = 2))
+  } else {
+    print(cluster_plots)
+  }
+}
+
 #3. Summarize & visualize validation indices & pick a consensus k 
 #3.1 Define which direction is “better” for each index
 dir_tbl <- tribble(
@@ -472,16 +630,12 @@ dir_tbl <- tribble(
   "tau", "higher", "Tau (higher = better)"
 )
 
-#3.2 Pull out full index‐vs‐k curves from cached validation objects
-index_k_df <- purrr::map_dfr(
-  indices,
-  function(idx) {
-    vr_all <- readRDS(file.path(validation_dir, sprintf("val_%s_%s.rds", scaling_method, idx)))
-    ks <- as.integer(names(vr_all$indices))
-    vals <- as.numeric(vr_all$indices)
-    tibble(index = idx, k = ks, value = vals)
-  }
-  ) %>%
+#3.2 Pull out full index‐vs‐k values from cached validation objects
+#3.2.1 Filter dir_tbl to only the indices we have
+dir_tbl <- dir_tbl %>% filter(index %in% indices)
+
+#3.2.2 Join the cached index results
+index_k_df <- index_k_df %>%
   left_join(dir_tbl, by = "index")
 
 #3.3 Compute each index’s best k
@@ -489,7 +643,7 @@ summary_tbl <- index_k_df %>%
   group_by(index, direction, label) %>%
   summarise(
     k_opt = if (direction[1] == "lower") k[which.min(value)] else k[which.max(value)],
-    index_opt = if (direction[1] == "lower") min(value)       else max(value),
+    index_opt = if (direction[1] == "lower") min(value) else max(value),
     .groups = "drop"
   )
 
@@ -554,6 +708,6 @@ summary_tbl %>%
 
 - The elbow plot suggests a bend at *k* = `r print(as.numeric(knee))`, reinforced by Kneedle’s quantitative estimate
 
-- Among the `r nrow(summary_tbl)` validation indices, `r sum(summary_tbl$k_opt == consensus_k)` (`r paste(summary_tbl$label[summary_tbl$k_opt == consensus_k], collapse = ", ")`) also vote for *k* = `r consensus_k`, while the others (`r paste0(summary_tbl$label[summary_tbl$k_opt != consensus_k], " (k=", summary_tbl$k_opt[summary_tbl$k_opt != consensus_k], ")", collapse = ", ")`) peak at neighboring values 
+- Among the `r nrow(summary_tbl)` validation indices we were able to run, `r sum(summary_tbl$k_opt == consensus_k)` (`r paste(summary_tbl$label[summary_tbl$k_opt == consensus_k], collapse = ", ")`) also vote for *k* = `r consensus_k`, while the others (`r paste0(summary_tbl$label[summary_tbl$k_opt != consensus_k], " (k=", summary_tbl$k_opt[summary_tbl$k_opt != consensus_k], ")", collapse = ", ")`) peak at neighboring values 
 
-- Taken together, these results indicate that *k* = `r consensus_k` balances cohesion and separation most consistently in our risk variable data
+- Taken together, these results indicate that *k* = `r consensus_k` likely balances cohesion and separation most consistently in our risk variable data; pending contextualization of these results post-completion of this script

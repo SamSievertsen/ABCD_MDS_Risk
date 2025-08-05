@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 
 ## 2.3_merge_k_calc_validation.sh ##
-## Merge 7 partial (index x k) validations into a full validation_kproto object ##
+## Merge the silhouette and any other partial (index x k) validations that already exist into a full validation_kproto object ##
 
 #SBATCH --job-name=merge_val
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=sievertsen@ohsu.edu
 
-#SBATCH --account=NagelLab
-#SBATCH --partition=batch
-#SBATCH --time=08:00:00
+#SBATCH --account=basic
+#SBATCH --partition=basic
+#SBATCH --time=04:00:00
 
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -36,21 +36,33 @@ LOGDIR="${REPO}/slurm_logs/$(date +%F)"
 mkdir -p "${LOGDIR}"
 export DETAILED_LOG="${LOGDIR}/${SLURM_JOB_NAME}_${SLURM_JOB_ID}_merge_${IDX}.log"
 
-# GUARD: skip if this merge result already exists
+# Redirect all stdout/stderr into the date stamped log folder
+exec > >(tee -a "${LOGDIR}/${SLURM_JOB_NAME}_${SLURM_JOB_ID}.out") \
+     2> >(tee -a "${LOGDIR}/${SLURM_JOB_NAME}_${SLURM_JOB_ID}.err" >&2)
+
+# GUARD 1: skip if this merge result already exists
 MERGED_FILE="${VALID_DIR}/val_robust_${IDX}.rds"
 if [[ -f "${MERGED_FILE}" ]]; then
-  echo "Merged validation for ${IDX} already exists at ${MERGED_FILE}, skipping"
+  echo "$(date +'%Y-%m-%d %H:%M:%OS3')|MERGE_SKIP_EXISTS|idx=${IDX}" \
+    >> "${DETAILED_LOG}"
+  exit 0
+fi
+
+# GUARD 2: only merge silhouette here; others will be picked up if already present
+if [[ "${IDX}" != "silhouette" ]]; then
+  echo "$(date +'%Y-%m-%d %H:%M:%OS3')|MERGE_SKIP_NON_SIL|idx=${IDX}" \
+    >> "${DETAILED_LOG}"
   exit 0
 fi
 
 # Mark the start of the current merge
-echo "$(date +'%Y-%m-%d %H:%M:%OS3')|MERGE_START|${IDX}" \
+echo "$(date +'%Y-%m-%d %H:%M:%OS3')|MERGE_START|idx=${IDX}" \
   >> "${DETAILED_LOG}"
 
-# Run merge in R 
+# Run merge in R
 apptainer exec \
   -B "${REPO}:${REPO}" \
-  /home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.3.sif \
+  /home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.4.sif \
   Rscript - <<'EOF'
 
 # Load necessary packages
@@ -60,27 +72,26 @@ library(dplyr)
 # Pull in the full kproto list
 kp_list <- readRDS(Sys.getenv("PROTO_FILE"))
 
-# Read in each of the 7 partial validations
-k_vals <- 2:8
-idx <- Sys.getenv("IDX")
+# Read in each of the 7 partial validations that actually exist
+k_vals=(2 3 4 5 6 7 8)
+idx="$IDX"
 partial <- lapply(k_vals, function(k) {
   fn <- sprintf("val_robust_%s_k%s.rds", idx, k)
-  readRDS(file.path(Sys.getenv("PARTIAL_DIR"), fn))
+  pth <- file.path(Sys.getenv("PARTIAL_DIR"), fn)
+  if (!file.exists(pth)) return(NULL)
+  readRDS(pth)
 })
-names(partial) <- as.character(k_vals)
+
+# Drop any NULLs (i.e., indices that do not exist)
+partial <- partial[!vapply(partial, is.null, logical(1))]
+names(partial) <- names(partial) %||% as.character(k_vals)[!vapply(partial, is.null, logical(1))]
 
 # Assemble the named vector of index values
 indices <- unlist(partial)
 
-# Decide whether lower=better
-lower_idx <- c("cindex")
-if (idx %in% lower_idx) {
-  k_opt <- as.integer(names(which.min(indices)))
-  index_opt <- min(indices)
-} else {
-  k_opt <- as.integer(names(which.max(indices)))
-  index_opt <- max(indices)
-}
+# Decide whether lower=better (none for silhouette)
+k_opt <- as.integer(names(which.max(indices)))
+index_opt <- max(indices)
 
 # Rebuild the kp_obj list, embedding each kproto solution
 kp_obj <- lapply(k_vals, function(k) {
@@ -107,5 +118,5 @@ saveRDS(vr_all, out_fn)
 EOF
 
 # Mark the end of the current merge
-echo "$(date +'%Y-%m-%d %H:%M:%OS3')|MERGE_DONE|${IDX}" \
+echo "$(date +'%Y-%m-%d %H:%M:%OS3')|MERGE_DONE|idx=${IDX}" \
   >> "${DETAILED_LOG}"

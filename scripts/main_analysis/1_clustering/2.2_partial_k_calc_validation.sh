@@ -7,15 +7,14 @@
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=sievertsen@ohsu.edu
 
-#SBATCH --account=NagelLab
-#SBATCH --partition=batch
-#SBATCH --qos=long_jobs
+#SBATCH --account=basic
+#SBATCH --partition=basic
 
-#SBATCH --time=168:00:00
+#SBATCH --time=24:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=64G
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=32G
 
 #SBATCH --array=1-35%7
 
@@ -26,7 +25,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # Paths and environment
-IMG="/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.3.sif"
+IMG="/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.4.sif"
 REPO="/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk"
 export APPTAINER_CACHEDIR="/home/exacloud/gscratch/NagelLab/staff/${USER}/.apptainer_cache"
 export PROTO_FILE="${REPO}/data/data_processed/kproto_results/kproto_robust.rds"
@@ -49,21 +48,32 @@ LOGDIR="${REPO}/slurm_logs/$(date +%F)"
 mkdir -p "${LOGDIR}"
 export DETAILED_LOG="${LOGDIR}/${SLURM_JOB_NAME}_${SLURM_JOB_ID}_partial_${SLURM_ARRAY_TASK_ID}.log"
 
-# Place where the output will go
-OUT_RDS="${PARTIAL_DIR}/val_robust_${IDX}_k${KVAL}.rds"
+# Redirect all stdout/stderr into the date stamped log folder
+exec > >(tee -a "${LOGDIR}/${SLURM_JOB_NAME}_${SLURM_JOB_ID}.out") \
+     2> >(tee -a "${LOGDIR}/${SLURM_JOB_NAME}_${SLURM_JOB_ID}.err" >&2)
 
-# GUARD: skip if this partial result already exists
+# Where the output RDS will go
 PARTIAL_FILE="${PARTIAL_DIR}/val_robust_${IDX}_k${KVAL}.rds"
+
+# GUARD 1: skip if this partial result already exists
 if [[ -f "${PARTIAL_FILE}" ]]; then
-  echo "Skipping ${IDX} k=${KVAL}, already done at ${PARTIAL_FILE}"
+  echo "$(date +'%Y-%m-%d %H:%M:%OS3')|PARTIAL_SKIP_EXISTS|idx=${IDX}|k=${KVAL}" \
+    >> "${DETAILED_LOG}"
   exit 0
 fi
 
-# Mark the start of the current index in the log
+# GUARD 2: only compute silhouette here & bail for all other indices since we will load in any that exist from previous runs but otherwise skip their calculation
+if [[ "${IDX}" != "silhouette" ]]; then
+  echo "$(date +'%Y-%m-%d %H:%M:%OS3')|PARTIAL_SKIP_NON_SIL|idx=${IDX}|k=${KVAL}" \
+    >> "${DETAILED_LOG}"
+  exit 0
+fi
+
+# Mark the start of the silhouette validation
 echo "$(date +'%Y-%m-%d %H:%M:%OS3')|PARTIAL_START|idx=${IDX}|k=${KVAL}" \
   >> "${DETAILED_LOG}"
 
-# Run the one-(index x k) validation inside the container
+# Run the singular silhouette (index x k) validation inside the container
 apptainer exec \
   -B "${REPO}:${REPO}" \
   "${IMG}" \
@@ -77,7 +87,7 @@ library(clustMixType)
 kp_list <- readRDS(Sys.getenv("PROTO_FILE"))
 one_kp <- kp_list[[paste0("k", Sys.getenv("KVAL"))]]
 
-# Compute validation index for this one k
+# Compute silhouette validation for this one k
 val <- validation_kproto(
   method = Sys.getenv("IDX"),
   object = one_kp,
@@ -94,9 +104,9 @@ saveRDS(
   )
 )
 
-# Exit out once completed
+# Exit the R script once completed
 EOF
 
-# Mark the end of the current index
+# Mark the end of the silhouette validation
 echo "$(date +'%Y-%m-%d %H:%M:%OS3')|PARTIAL_DONE|idx=${IDX}|k=${KVAL}" \
   >> "${DETAILED_LOG}"
