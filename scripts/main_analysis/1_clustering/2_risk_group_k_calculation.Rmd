@@ -602,13 +602,18 @@ for (k in selected_k) {
     df2$highlight <- ifelse(df2$Cluster == cl, paste("Cluster", cl), "Other")
     ggplot(df2, aes(x = UMAP1, y = UMAP2)) +
       geom_point(aes(color = highlight, alpha = highlight), size = 1) +
-      scale_color_manual(values = c("Other" = "gray80", paste("Cluster", cl) = "red")) +
-      scale_alpha_manual(values = c("Other" = 0.3, paste("Cluster", cl) = 0.8)) +
+      scale_color_manual(
+        values = c(
+          "Other" = "gray80", setNames("red", paste("Cluster", cl)))) +
+      scale_alpha_manual(
+        values = c("Other" = 0.3, setNames(0.8, paste("Cluster", cl)))) +
       labs(title = glue::glue("k = {k} → Highlight: Cluster {cl}")) +
       theme_minimal(base_size = 12) +
-      theme(legend.position = "none",
-            plot.title = element_text(size = 10),
-            axis.text = element_text(size = 8))
+      theme(
+        legend.position = "none",
+        plot.title = element_text(size = 10),
+        axis.text = element_text(size = 8)
+      )
   })
   
   #2.6.3.10 Arrange and print up to 6 per plots row (dependent upon k)
