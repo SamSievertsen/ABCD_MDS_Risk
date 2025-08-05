@@ -729,9 +729,9 @@ summary_tbl %>%
 
 **Interpretation:**
 
-- The elbow plot suggests a bend at *k* = `r print(as.numeric(knee))`, reinforced by Kneedle’s quantitative estimate
+- The elbow plot suggests a bend at *k* = `r knee`, reinforced by Kneedle’s quantitative estimate
 
-- Among the `r nrow(summary_tbl)` validation indices we were able to run, `r sum(summary_tbl$k_opt == consensus_k)` (`r paste(summary_tbl$label[summary_tbl$k_opt == consensus_k], collapse = ", ")`) vote for *k* = `r print(consensus_k)`  
+- Among the `r nrow(summary_tbl)` validation indices we were able to run, `r sum(summary_tbl$k_opt == consensus_k)` (`r paste(summary_tbl$label[summary_tbl$k_opt == consensus_k], collapse = ", ")`) vote for *k* = `r consensus_k`  
   `r if (any(summary_tbl$k_opt != consensus_k)) { paste0("The others (", paste0(summary_tbl$label[summary_tbl$k_opt != consensus_k], " (k=", summary_tbl$k_opt[summary_tbl$k_opt != consensus_k], ")", collapse = ", "), ") peak at neighboring values.") }`
 
-- Taken together, these results indicate that *k* = `r print(consensus_k)` likely balances cohesion and separation most consistently in our risk variable data; pending contextualization of these results post-completion of this script
+- Taken together, these results indicate that *k* = `r consensus_k` likely balances cohesion and separation most consistently in our risk variable data; pending contextualization of these results post-completion of this script
