@@ -44,6 +44,7 @@ library(tidyquant)
 library(FeatureImpCluster)
 library(ggplot2)
 library(umap)
+library(gridExtra)
 library(fastDummies)
 library(inflection)
 library(furrr)
@@ -262,8 +263,10 @@ if (file.exists(validation_file)) {
   #1.4.2 Compute Silhouette index across all k if it doesn't already exist
   vr_sil <- validation_kproto(
     method = "silhouette",
-    object = kp_list,
+    data = scaled_data,
+    k = k_vals,
     kp_obj = "all",
+    nstart = 8,
     verbose = FALSE
   )
   
@@ -471,45 +474,46 @@ elbow_plot_uik <- ggplot(elbow_df, aes(x = k, y = wss)) +
 print(elbow_plot_uik)
 
 #2.5 Cluster compactness / separation metrics per k
-#2.5.1 Compute total sum of squares (TSS) once
-overall_mean <- colMeans(scaled_data)
-tss <- sum(rowSums((scaled_data - overall_mean)^2))
+#2.5.1 Compute mixed‐type total sum of squares (TSS) once via 1-cluster prototype
+#2.5.1.1 Calculate the kproto object
+t1 <- kproto(
+  x = scaled_data,
+  k = 1,
+  nstart  = 1,
+  verbose = FALSE)
+
+#2.5.1.2 Store the total within SS value for the whole mixed dataset
+TSS_mixed <- t1$tot.withinss
 
 #2.5.2 Loop over each k to compute RMSSD & R²
 cluster_metrics <- purrr::map_dfr(
   k_vals,
   function(k) {
     
-    #2.5.2.1 Pull cluster assignments for this k
-    cl <- kp_list[[paste0("k", k)]]$cluster
-
-    #2.5.2.2 Within‐cluster SSD
-    wcss_per_cluster <- tapply(
-      seq_along(cl), cl,
-      function(idxs) {
-        sum(rowSums((scaled_data[idxs, ] - overall_mean)^2))
-      }
-    )
-    wcss_total <- sum(wcss_per_cluster)
-
-    #2.5.2.3 Get RMSSD
-    rmssd <- sqrt(mean(wcss_per_cluster / table(cl)))
-
-    #2.5.2.4 Get R squared
-    r2_val <- (tss - wcss_total) / tss
-
-    #2.5.2.5 log to detailed log
+    #2.5.2.1 Extract the k-prototype fit for this k by position
+    position <- which(k_vals == k)
+    kp <- kp_list[[position]]
+    wss_cl <- kp$withinss
+    sz <- as.numeric(kp$size)    
+    tot_wss<- kp$tot.withinss
+    
+    #2.5.2.2 RMSSD: sqrt(mean( SS_cl / cluster_size ))
+    rmssd <- sqrt(mean(wss_cl / sz))
+    
+    #2.5.2.3 R²: proportion of variance explained
+    r2 <- (TSS_mixed - tot_wss) / TSS_mixed
+    
+    #2.5.2.4 Log to detailed log
     cat(
-      sprintf("%s|METRICS|%s|k=%d|RMSSD=%.4f|R2=%.4f\n", format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"),
-        scaling_method, k, rmssd, r2_val),
-      file = log_file, append = TRUE
-    )
-
-    #2.5.2.6 Return a one‐row tibble with results
+      sprintf(
+        "%s|METRICS|%s|k=%d|RMSSD=%.4f|R2=%.4f\n", format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"),
+        scaling_method, k, rmssd, r2), file = log_file, append = TRUE)
+    
+    #2.5.2.5 Return a one-row tibble with our metrics
     tibble(
       k = k,
       RMSSD = rmssd,
-      R2 = r2_val)
+      R2 = r2)
   }
 )
 
@@ -518,15 +522,16 @@ knitr::kable(
   cluster_metrics,
   caption = glue::glue("Compactness/separation metrics per k ({scaling_method} scaling)"),
   digits = 3) %>%
-  kableExtra::kable_styling(bootstrap_options = c("striped","hover","condensed","responsive"))
+  kableExtra::kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "responsive"))
 
 #2.6 UMAP & blob diagnostics for selected k values
-#2.6.1 Function to one‐hot encode categorical variables + pipe in scaled numerics
+#2.6.1 Create a function to one‐hot encode categorical variables + pipe in scaled numerics
 prepare_mixed_data <- function(data) {
   cat_cols <- sapply(data, function(x) is.factor(x) || is.character(x))
   num_cols <- sapply(data, is.numeric)
   comps <- list()
-
+  
   if (any(cat_cols)) {
     cd <- data[, cat_cols, drop = FALSE]
     cd[] <- lapply(cd, function(x) if (is.character(x)) as.factor(x) else x)
@@ -542,73 +547,76 @@ prepare_mixed_data <- function(data) {
 #2.6.2 Choose the k’s to visualize - current most likely optimal candidates
 selected_k <- c(2, 3, 4)
 
-#2.6.3 Loop over each selected k and create UMAP plots + diagnostic plots
+#2.6.3 Loop over each selected k and create UMAP + diagnostics
 for (k in selected_k) {
-
-  #2.6.3.1 Extract data & cluster labels
-  kp_obj <- kp_list[[paste0("k", k)]]
-  data_k <- kp_obj$data
-  cluster_labels <- factor(kp_obj$cluster)
-
-  #2.6.3.2 Prepare config for UMAP (slight deviation from default to see density in blob better)
-  df_umap <- prepare_mixed_data(data_k)
-  cfg <- umap.defaults
-  cfg$n_neighbors <- 15
-  cfg$min_dist <- 0.1
-  cfg$spread <- 1.5
-  cfg$n_epochs <- 500
-
-  #2.6.3.3 Generate the k specific UMAP results
-  umap_res <- umap(df_umap, config = cfg)
   
-  #2.6.3.4 Store the UMAP results in a dataframe
+  #2.6.3.1 Extract data & cluster labels by position
+  pos <- which(k_vals == k)
+  kp_obj <- kp_list[[pos]]
+  data_k <- kp_obj$data
+  cluster_labels<- factor(kp_obj$cluster)
+  
+  #2.6.3.2 Prepare data_for_umap and run UMAP with tuned params
+  data_for_umap <- prepare_mixed_data(data_k)
+  umap_config <- umap.defaults
+  umap_config$n_neighbors <- 15
+  umap_config$min_dist <- 0.1
+  umap_config$spread <- 1.5
+  umap_config$n_epochs <- 500
+  
+  #2.6.3.3 Generate the UMAP results
+  umap_result <- umap(data_for_umap, config = umap_config)
+  
+  #2.6.3.4 Build a plotting dataframe
   umap_df <- data.frame(
-    UMAP1 = umap_res$layout[,1],
-    UMAP2 = umap_res$layout[,2],
-    Cluster = cluster_labels
+    UMAP1 = umap_result$layout[,1],
+    UMAP2 = umap_result$layout[,2],
+    Cluster = as.factor(cluster_labels)
   )
-
-  #2.6.3.5 Plot UMAP scatter
+  
+  #2.6.3.5 UMAP scatter plot
   p_umap <- ggplot(umap_df, aes(x = UMAP1, y = UMAP2, color = Cluster)) +
     geom_point(size = 1.5, alpha = 0.6) +
     labs(
-      title = glue::glue("UMAP scatter (k = {k})"),
-      subtitle = glue::glue("n_neighbors = {cfg$n_neighbors}, min_dist = {cfg$min_dist}"),
-      x = "UMAP 1",
-      y = "UMAP 2") +
-    theme_minimal(base_size = 14) +
-    theme(legend.title = element_text(size = 10))
-  
-  #2.6.3.6 Print the k-specific UMAP plot
+      title = glue::glue("UMAP Visualization of Clusters (k = {k})"),
+      subtitle = paste("n_neighbors =", umap_config$n_neighbors, ", min_dist =", umap_config$min_dist),
+      x = "UMAP Dimension 1",
+      y = "UMAP Dimension 2") +
+    theme_minimal() +
+    theme(
+      legend.title = element_text(size = 12),
+      plot.title = element_text(size = 14, hjust = 0.5),
+      plot.subtitle = element_text(size = 10, hjust = 0.5)) +
+    guides(color = guide_legend(override.aes = list(alpha = 1, size = 3)))
   print(p_umap)
-
-  #2.6.3.7 Plot blob density + overlay
-  p_blob <- ggplot(umap_df, aes(x = UMAP1, y = UMAP2)) +
-    geom_density_2d(alpha = 0.3, color = "gray40") +
-    geom_point(aes(color = Cluster), size = 1.2, alpha = 0.7) +
-    labs(
-      title = glue::glue("UMAP blob (k = {k})"),
-      subtitle = "Density contours + cluster overlay") +
-    theme_minimal(base_size = 14) +
-    theme(legend.title = element_text(size = 10))
   
-  #2.6.3.8 Print the blob density plot
-  print(p_blob)
-
-  #2.6.3.9 Highlight each cluster with a unique scatter plot fixed over the UMAP results
-  clus_ids <- sort(unique(cluster_labels))
-  cluster_plots <- lapply(clus_ids, function(cl) {
-    df2 <- umap_df
-    df2$highlight <- ifelse(df2$Cluster == cl, paste("Cluster", cl), "Other")
-    ggplot(df2, aes(x = UMAP1, y = UMAP2)) +
+  #2.6.3.6 UMAP blob analysis plot
+  p_blob_analysis <- ggplot(umap_df, aes(x = UMAP1, y = UMAP2)) +
+    geom_density_2d(alpha = 0.3, color = "gray50") +
+    geom_point(aes(color = Cluster), size = 1.2, alpha = 0.7) +
+    stat_summary_2d(aes(z = as.numeric(Cluster)), fun = mean, alpha = 0.7, bins = 10) +
+    labs(
+      title = glue::glue("UMAP Blob Analysis (k = {k})"),
+      subtitle = "Even overlapping clusters can show meaningful structure",
+      x = "UMAP Dimension 1",
+      y = "UMAP Dimension 2") +
+    theme_minimal() +
+    theme(legend.title = element_text(size = 12))
+  print(p_blob_analysis)
+  
+  #2.6.3.7 Individual cluster highlight plots
+  unique_clusters <- sort(unique(cluster_labels))
+  cluster_plots <- lapply(unique_clusters, function(cl_id) {
+    plot_data <- umap_df
+    plot_data$highlight <- ifelse(plot_data$Cluster == cl_id, paste("Cluster", cl_id), "Other")
+    
+    #2.6.3.8 Plot the cluster highlights
+    ggplot(plot_data, aes(x = UMAP1, y = UMAP2)) +
       geom_point(aes(color = highlight, alpha = highlight), size = 1) +
-      scale_color_manual(
-        values = c(
-          "Other" = "gray80", setNames("red", paste("Cluster", cl)))) +
-      scale_alpha_manual(
-        values = c("Other" = 0.3, setNames(0.8, paste("Cluster", cl)))) +
-      labs(title = glue::glue("k = {k} → Highlight: Cluster {cl}")) +
-      theme_minimal(base_size = 12) +
+      scale_color_manual(values = c("gray80", "red")) +
+      scale_alpha_manual(values = c(0.3, 0.8)) +
+      labs(title = paste("Cluster", cl_id, "Distribution")) +
+      theme_minimal() +
       theme(
         legend.position = "none",
         plot.title = element_text(size = 10),
@@ -616,9 +624,9 @@ for (k in selected_k) {
       )
   })
   
-  #2.6.3.10 Arrange and print up to 6 per plots row (dependent upon k)
+  #2.6.3.9 Arrange & print up to 6 per row
   if (length(cluster_plots) <= 6) {
-    do.call(gridExtra::grid.arrange, c(cluster_plots, ncol = 2))
+    do.call(grid.arrange, c(cluster_plots, ncol = 2, top = glue::glue("k = {k} → Individual Cluster Patterns")))
   } else {
     print(cluster_plots)
   }
