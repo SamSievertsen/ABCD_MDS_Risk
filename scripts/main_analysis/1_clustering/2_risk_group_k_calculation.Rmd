@@ -105,7 +105,17 @@ risk_variable_data <- read.csv(
 
 ## Data Prep for k Value Analysis 
 
-Include summary of what we are doing, which scaling method was chosen and why, etc.
+Prepare the risk variable data for clustering by: 
+
+  1. Converting categorical variables to factors for proper handling 
+  
+  2. Removing non-clustering variables (demographics, IDs) while preserving participant IDs as row names for later identification
+  
+  3. Separating continuous and categorical variables for differential processing
+  
+  4. Defining a flexible scaling function that supports multiple normalization methods (i.e., z-score, min-max, percentile, max absolute, and robust scaling) dependent upon which performs optimally in previous testing steps
+  
+  5. Applying the specified scaling method (i.e., robust median-IQR scaling) to standardize continuous variables while leaving categorical variables unchanged
 
 ```{r data prep, warning = FALSE}
 

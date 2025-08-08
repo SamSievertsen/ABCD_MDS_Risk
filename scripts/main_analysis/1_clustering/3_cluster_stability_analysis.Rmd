@@ -1,0 +1,301 @@
+---
+title: "Bipolar Disorder & Suicidality Risk Group Cluster Stability Analysis"
+author: "Sam A. Sievertsen"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    self_contained: true
+params:
+  scaling_method: "robust"
+  k_value: 2
+  n_boot: 1000
+  seed: 123
+  overwrite: false
+---
+
+```{r global, include = FALSE}
+
+# Set global env variables
+knitr::opts_chunk$set(echo = TRUE, cache = FALSE, message = TRUE, warning = TRUE, results = "markup", verbose = TRUE, comment = "")
+
+```
+
+```{r environment, echo = FALSE, include = FALSE, warning = FALSE}
+
+## Load packages & set env ##
+
+# Load necesasry packages
+library(dplyr)
+library(purrr)
+library(tidyr)
+library(knitr)
+library(kableExtra)
+library(tibble)
+library(ggplot2)
+library(readr)
+library(glue)
+library(scales)
+library(clustMixType)
+
+# Set paths to be used in reading in data & objects
+REPO <- "/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk"
+datapath <- file.path(REPO, "data", "data_processed")
+
+# Establish the path to the kproto object
+kproto_file <- file.path(datapath, "kproto_results", sprintf("kproto_%s.rds", params$scaling_method))
+
+# Establish the path to the stability results and write a new directory if it doesn't exist
+stability_dir <- file.path(datapath, "stability_results")
+dir.create(stability_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Set up logging (from SLURM)
+log_file <- Sys.getenv("DETAILED_LOG", unset = NA)
+
+# Set seed for reproducibility
+set.seed(params$seed)
+
+# Load k-prototype list & create a vector containing the relevant k range
+kp_list <- readRDS(kproto_file)
+k_vals  <- 2:8
+
+# Determine the list position for the current requested k (list is 1:7 for k=2:8, as index lags 1 behind k)
+pos <- match(params$k_value, k_vals)
+stopifnot(is.finite(pos), pos >= 1, pos <= length(k_vals))
+
+# Establish the current kproto object as the one with the requested position
+kp <- kp_list[[pos]]
+
+# Strip row names from the data embedded in the kproto object since stability_kproto() trips over them
+if (!is.null(rownames(kp$data))) {
+  rownames(kp$data) <- NULL
+}
+
+# Compose output file stems
+stem <- glue("stability_{params$scaling_method}_k{params$k_value}_nb{params$n_boot}")
+rds_out <- file.path(stability_dir, glue("{stem}.rds"))
+csv_out <- file.path(stability_dir, glue("{stem}.csv"))
+
+# Establish guards to skip compute if cached & overwrite=FALSE
+if (file.exists(rds_out) && isFALSE(params$overwrite)) {
+  if (!is.na(log_file)) cat(
+    sprintf("%s|STAB_SKIP|%s\n", format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"),
+            basename(rds_out)), file = log_file, append = TRUE)
+  boot_res <- readRDS(rds_out)
+} else {
+  boot_res <- NULL
+}
+
+```
+
+## Compute Stability of Specified Cluster Solution
+
+This code evaluates the stability of the chosen clustering solution by: 
+
+  1. Performing (B = 1000) bootstrap resampling with replacement analysis using Rand and Jaccard indices to measure cluster consistency across resampled datasets
+  
+  2. Extracting and organizing the bootstrap results into structured data frames containing individual bootstrap iterations and overall stability metrics
+  
+  3. Computing summary statistics including means, standard deviations, and 95% confidence intervals for both stability indices
+  
+  4. Outputting results displaying the stability assessment for the specified k-value and scaling method
+  
+To note, higher Rand and Jaccard values (i.e., closer to 1.0) indicate more stable, reproducible clustering solutions
+
+```{r cluster stability, echo = FALSE, warning = FALSE}
+
+## Bootstrap stability for chosen k (Rand & Jaccard) ##
+
+#1. Check if the bootstrapped stability object already exists, and only write over it if it does not
+if (is.null(boot_res)) {
+
+  #1.1 Announce start to log
+  if (!is.na(log_file)) cat(
+    sprintf("%s|STAB_START|k=%d|B=%d\n",
+            format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"),
+            params$k_value, params$n_boot),
+    file = log_file, append = TRUE
+  )
+
+  #1.2 Build call safely (function arg name for boots is 'B' in current clustMixType)
+  stab_formals <- names(formals(clustMixType::stability_kproto))
+  stab_args <- list(
+    object = kp,
+    method = c("rand","jaccard"),
+    nstart = 8,
+    verbose = TRUE
+  )
+  
+  #1.3 If the number of bootstraps is already listed in the function call, pull it in from there; if not, default to the number of bootstraps specified by the parameters call
+  if ("B" %in% stab_formals) {
+    stab_args$B <- params$n_boot
+  } else if ("nboot" %in% stab_formals) {
+    stab_args$nboot <- params$n_boot
+  } else {
+    
+    #1.3.1 Fallback: let default run if function & params are both empty, but note in log
+    if (!is.na(log_file)) cat(
+      sprintf("%s|STAB_WARN|unknown_boot_arg|default_used\n", format(Sys.time(), "%Y-%m-%d %H:%M:%OS3")),
+      file = log_file, append = TRUE
+    )
+  }
+
+  #1.4 Run bootstrap stability - to note, at this stage, kproto object has no rownames
+  boot_res <- tryCatch(
+    do.call(clustMixType::stability_kproto, stab_args),
+    error = function(e) {
+      stop(glue("stability_kproto() failed: {conditionMessage(e)}"))
+    }
+  )
+
+  #1.5 Persist raw result
+  saveRDS(boot_res, rds_out)
+
+  #1.6 Announce end of stability analysis and store in log
+  if (!is.na(log_file)) cat(
+    sprintf("%s|STAB_DONE|k=%d|B=%d|saved=%s\n", format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"),
+            params$k_value, params$n_boot, rds_out),
+    file = log_file, append = TRUE
+  )
+}
+
+#2. Unpack bootstrapped stability results into tidy objects
+overall_vec <- boot_res[[1]]
+boot_tbl <- as.data.frame(boot_res[[2]])
+colnames(boot_tbl) <- c("B","Rand","Jaccard")
+
+#3. Create a summary stats table outlining the results of the stability analysis
+sum_tbl <- tibble(
+  k = params$k_value,
+  boots = nrow(boot_tbl),
+  overall_Rand = unname(overall_vec["R"]),
+  overall_Jacc = unname(overall_vec["J"]),
+  mean_Rand = mean(boot_tbl$Rand, na.rm = TRUE),
+  mean_Jacc = mean(boot_tbl$Jaccard, na.rm = TRUE),
+  sd_Rand = sd(boot_tbl$Rand, na.rm = TRUE),
+  sd_Jacc = sd(boot_tbl$Jaccard, na.rm = TRUE),
+  q05_Rand = quantile(boot_tbl$Rand, 0.05, na.rm = TRUE),
+  q95_Rand = quantile(boot_tbl$Rand, 0.95, na.rm = TRUE),
+  q05_Jacc = quantile(boot_tbl$Jaccard, 0.05, na.rm = TRUE),
+  q95_Jacc = quantile(boot_tbl$Jaccard, 0.95, na.rm = TRUE)
+)
+
+#4. Write a CSV summary of the stability analysis results
+write_csv(sum_tbl, csv_out)
+
+#5. Print the summary table
+knitr::kable(
+  sum_tbl,
+  caption = glue("Bootstrap stability summary (scaling={params$scaling_method}, k={params$k_value}, B={params$n_boot})"),
+  digits = 3) %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped","hover","condensed","responsive"))
+
+```
+
+## Plot Results of Stability Analysis
+
+The following plots visualize the distribution and consistency of clustering stability metrics derived from bootstrap resampling (with replacement). The density plots with rug marks show the distribution of Rand and Jaccard indices across bootstrap samples, with reference lines indicating overall and mean values-higher, more concentrated distributions near 1.0 suggest stable clustering
+
+The violin-boxplot compares the two stability metrics side-by-side, revealing their central tendencies and variability
+
+The empirical cumulative distribution functions (ECDF) illustrate the probability that stability values fall below given thresholds, with steeper curves at higher values indicating better stability
+
+Finally ,the scatter plot with density contours examines the correlation between Rand and Jaccard indices across bootstrap iterations, helping assess whether both metrics agree on clustering quality
+
+Together, these visualizations provide some decent empirical visualizations for evaluating whether the chosen clustering solution produces consistent, reproducible partitions across resampled data 
+
+```{r cluster stability plots, echo = FALSE, warning = FALSE}
+
+## Create plots for Cluster Stability Metric Results ##
+
+#1. Generate rug + density plots for the Rand & Jaccard bootstrap results
+#1.1 Create an aesthetics helper for the density and rug plots
+vline_labs <- function(x, lbl) {
+  list(
+    geom_vline(xintercept = x, linetype = "dashed", linewidth = 0.7),
+    annotate("label", x = x, y = Inf, vjust = 1.2,
+             label = lbl, size = 3.5)
+  )
+}
+
+#1.2 Density + rug for Rand
+p_rand <- ggplot(boot_tbl, aes(x = Rand)) +
+  geom_density(linewidth = 1) +
+  geom_rug(alpha = 0.2) +
+  vline_labs(sum_tbl$overall_Rand, "overall") +
+  vline_labs(sum_tbl$mean_Rand,    "mean") +
+  labs(
+    title = glue("Bootstrap Rand index (k={params$k_value})"),
+    x = "Rand", y = "Density") +
+  coord_cartesian(xlim = c(0,1)) +
+  theme_minimal(base_size = 14)
+
+#1.3 Density + rug for Jaccard
+p_jacc <- ggplot(boot_tbl, aes(x = Jaccard)) +
+  geom_density(linewidth = 1) +
+  geom_rug(alpha = 0.2) +
+  vline_labs(sum_tbl$overall_Jacc, "overall") +
+  vline_labs(sum_tbl$mean_Jacc,    "mean") +
+  labs(
+    title = glue("Bootstrap Jaccard index (k={params$k_value})"),
+    x = "Jaccard", y = "Density") +
+  coord_cartesian(xlim = c(0,1)) +
+  theme_minimal(base_size = 14)
+
+#2. Create a violin boxplot for both metrics
+#2.1 Create a long pivoted version of the data for plotting
+long_tbl <- boot_tbl %>%
+  pivot_longer(c(Rand, Jaccard), names_to = "Metric", values_to = "Value")
+
+#2.2 Create a violin boxplot representing both metrics
+p_violin <- ggplot(long_tbl, aes(x = Metric, y = Value)) +
+  geom_violin(trim = FALSE, alpha = 0.7) +
+  geom_boxplot(width = 0.15, outlier.size = 0.8) +
+  coord_cartesian(ylim = c(0,1)) +
+  labs(
+    title = glue("Distribution of stability metrics (k={params$k_value})"),
+    x = NULL, y = "Value") +
+  theme_minimal(base_size = 14)
+
+#3. Create Empirical Cumulative Distribution Functions (ECDF's) side-by-side for both stability indices
+p_ecdf <- ggplot(long_tbl, aes(x = Value, color = Metric)) +
+  stat_ecdf(linewidth = 1) +
+  coord_cartesian(xlim = c(0,1)) +
+  labs(
+    title = glue("ECDF of stability metrics (k={params$k_value})"),
+    x = "Value", y = "ECDF") +
+  theme_minimal(base_size = 14)
+
+#4. Create Rand vs Jaccard + density contours with scatter
+p_scatter <- ggplot(boot_tbl, aes(x = Rand, y = Jaccard)) +
+  geom_point(alpha = 0.4, size = 1.2) +
+  stat_density_2d(color = "grey50", alpha = 0.5) +
+  coord_cartesian(xlim = c(0,1), ylim = c(0,1)) +
+  labs(
+    title = glue("Rand vs Jaccard across bootstraps (k={params$k_value})"),
+    x = "Rand", y = "Jaccard") +
+  theme_minimal(base_size = 14)
+
+#5. Print all plots for the stability analysis results
+#5.1 Print the density and rug plot for the Rand index
+print(p_rand)
+
+#5.2 #Print the density and rug plot for the Jaccard index
+print(p_jacc)
+
+#5.3 Print the violin boxplot displaying the distribution of both indices
+print(p_violin)
+
+#5.4 Print the side-by-side ECDF for both indices
+print(p_ecdf)
+
+#5.5 Print the density contours with scatter for both indices
+print(p_scatter)
+
+#6. Log successful completion of the stability analysis
+if (!is.na(log_file)) cat(
+  sprintf("%s|STAB_REPORT_DONE|k=%d|B=%d|rds=%s|csv=%s\n", format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"),
+          params$k_value, params$n_boot, basename(rds_out), basename(csv_out)),
+  file = log_file, append = TRUE
+)
+
+```
