@@ -23,61 +23,107 @@ library(dplyr)
 library(tidyr)
 library(skimr)
 options(scipen = 999, digits = 8)
+set.seed(123)
 
 # Read in raw data generated in DEAP
-raw_data <- read.csv("../../data/data_raw/dataset.csv")
+raw_data <- read.csv("../../../data/data_raw/dataset.csv")
 
 ```
 
 ## Data Wrangling for Outcome Variables
 
-This section prepares binary diagnostic and continuous symptom outcome variables for analysis via the following: 
+This section prepares binary diagnostic and continuous symptom outcomes for analysis by harmonizing KSADS-COMP and CBCL fields, correcting known inflation of past-episode bipolar diagnoses in KSADS v1.0 (baseline 00A and 2-year 02A), and producing validated bipolar-spectrum endpoints.
 
-| Step | Purpose |
-|------|---------|
-| **1. Retain & clean KSADS™ and CBCL columns** | Subset to all variables needed for outcome construction. Clean codes: convert 888 to 0, treat 555/999/"" as NA, and fix CBCL T-scores created with missing data. |
-| **2. Define outcome-specific KSADS variable sets** | List all parent/youth “current” and “past” diagnostic flags for each outcome: passive/active SI, suicide attempt, NSSI, BD-I, BD-II, and any BSD. |
-| **3. Create binary outcome variables** | Mark a variable as 1 if any relevant flag = 1, 0 if at least one flag = 0 but none are 1, and NA if all flags are missing—ensuring NA only when there is true data absence. |
-| **4. Gather depression disorder flags** | Identify all major depressive disorder (MDD) and persistent depressive disorder (PDD) parent/youth codes (current, past, partial-remission). |
-| **5. Identify “past mania/hypomania” flags** | Specify recent past manic (BD-I) and past hypomanic (BD-II) codes for proper rescoring. |
-| **6. Rescore BD-I/II at baseline & 2-year** | Per [Barch et al., 2021](https://doi.org/10.1016/j.dcn.2021.101031): If a row has only a “past mania/hypomania” flag, require at least one lifetime depression flag (MDD/PDD) to set diagnosis = 1; otherwise, set to 0. (“We recommend rescoring … so that the youth must also meet criteria for a current or past depressive disorder to satisfy diagnostic criteria.”) |
-| **7. Final selection** | Keep only those columns needed for outcome EDA and export to `outcome_data.csv`. |
+| Step                                                   | Purpose                                                                                                                                                                                                                                                                        |
+  |----------------------------------------------- |----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | **1 - Retain & clean KSADS columns**         | Subset to all variables needed for outcome construction. Normalize KSADS codes: convert 888 → 0; treat 555/999/"" → NA.                                                           |
+  | **2 - Define outcome-specific KSADS variable sets**    | Enumerate parent- and youth-report “current” and “past” flags for: passive SI, active SI (all subtypes), suicide attempt (interrupted/aborted/completed), NSSI, BD-I, BD-II, and BD NOS/Other Specified.                                                                       |
+  | **3 - Binary recode with robust NA rules**             | A composite = 1 if *any* constituent flag = 1; 0 if ≥1 constituent is observed and none are 1; NA only when all constituent flags are missing (ensures NA signifies true absence of data, not “all zeros”).                                                    |
+  | **4 - Gather depression qualifiers**                   | Collect lifetime MDD/PDD indicators (parent + youth; current, past, partial-remission) for use as validators.                                                                                                                                                                  |
+  | **5 - Identify “recent past” mania/hypomania flags**   | Mark KSADS v1.0 “recent past” manic (BD-I) and hypomanic (BD-II) items used in rescoring at 00A/02A.                                                                                                                                                                           |
+  | **6 - Rescore BD-I & BD-II at 00A/02A**                | Following [Barch et al., 2021](https://doi.org/10.1016/j.dcn.2021.101031), rows with *only* a past manic/hypomanic episode are set to 1 only if any lifetime depressive-disorder flag (MDD/PDD) is present; otherwise set to 0. Current-episode diagnoses and later waves retain the composite from Step 3. |
+  | **7 - Enforce BD-NOS/Other Specified rule at 00A/02A** | At KSADS v1.0 waves (00A/02A), require unspecified/other BD = 1 and lifetime MDD = 1; at later waves (v2.0+), keep KSADS algorithm as is.                                                                                                                          |
+  | **8 - Build Any BSD**                                  | Set Any\_BSD = 1 if BD-I = 1 or BD-II = 1 or validated BD-NOS/Other Specified = 1 (per Steps 6–7).                                                                                                                                                             |
+  | **9 - Final selection/export**                         | Keep only analysis-ready outcomes and key IDs for EDA and modeling; export to `outcome_data.csv` (and retain helper flags if needed for diagnostics).                                                                                                                          |
+  
+**Why the rescoring?** KSADS-COMP v1.0 over-endorses past mania/hypomania for BD-I and BD-II cases. As recommended by [Barch et al., 2021](https://doi.org/10.1016/j.dcn.2021.101031), we require a lifetime depressive disorder alongside past (hypo)mania at 00A/02A to reduce false positives and stabilize prevalence across waves
 
 ```{r data wrangling, warning = FALSE}
 
-## Data Wrangling ##
+## Data Wrangling for Outcome Variables ##
 
-#1. Clean the outcome data
-cat("Retaining Variables of Interest and Cleaning Values\n")
-#1.11 Retain only columns of interest
-raw_data_trimmed <- raw_data %>% 
-  dplyr::select(c(participant_id, session_id, mh_p_ksads__suic__pass__past_dx, mh_p_ksads__suic__actv__past_dx, mh_p_ksads__suic__actv__mthd__past_dx, mh_p_ksads__suic__actv__int__past_dx, mh_p_ksads__suic__actv__plan__past_dx, mh_p_ksads__suic__pass__pres_dx, mh_p_ksads__suic__actv__pres_dx, mh_p_ksads__suic__actv__mthd__pres_dx, mh_p_ksads__suic__actv__int__pres_dx, mh_p_ksads__suic__actv__plan__pres_dx, mh_y_ksads__suic__pass__past_dx, mh_y_ksads__suic__actv__past_dx, mh_y_ksads__suic__actv__mthd__past_dx, mh_y_ksads__suic__actv__int__past_dx, mh_y_ksads__suic__actv__plan__past_dx, mh_y_ksads__suic__pass__pres_dx, mh_y_ksads__suic__actv__pres_dx, mh_y_ksads__suic__actv__mthd__pres_dx, mh_y_ksads__suic__actv__int__pres_dx, mh_y_ksads__suic__actv__plan__pres_dx, mh_p_ksads__suic__atmpt__intr__past_dx, mh_p_ksads__suic__atmpt__abrt__past_dx, mh_p_ksads__suic__atmpt__past_dx, mh_p_ksads__suic__atmpt__intr__pres_dx, mh_p_ksads__suic__atmpt__abrt__pres_dx, mh_p_ksads__suic__atmpt__pres_dx, mh_y_ksads__suic__atmpt__intr__past_dx, mh_y_ksads__suic__atmpt__abrt__past_dx, mh_y_ksads__suic__atmpt__past_dx, mh_y_ksads__suic__atmpt__intr__pres_dx, mh_y_ksads__suic__atmpt__abrt__pres_dx, mh_y_ksads__suic__atmpt__pres_dx, mh_p_ksads__suic__slfinj__nosi__pres_dx, mh_p_ksads__suic__slfinj__nosi__past_dx, mh_y_ksads__suic__slfinj__nosi__pres_dx, mh_y_ksads__suic__slfinj__nosi__past_dx, mh_p_ksads__bpd__bpd1__curdep__partrem_dx, mh_p_ksads__bpd__bpd1__rcnt__manicmix__pres_dx, mh_p_ksads__bpd__bpd1__curmanic__pres_dx, mh_p_ksads__bpd__bpd1__curdep__pres_dx, mh_y_ksads__bpd__bpd1__curmanic__pres_dx, mh_y_ksads__bpd__bpd1__curdep__pres_dx, mh_y_ksads__bpd__bpd1__rcnt__manic__pres_dx, mh_p_ksads__bpd__bpd1__curhypo__pres_dx, mh_p_ksads__bpd__bpd1__rcnt__dep__pres_dx, mh_p_ksads__bpd__bpd1__rcnt__manic__pres_dx, mh_y_ksads__bpd__bpd1__rcnt__dep__pres_dx, mh_y_ksads__bpd__bpd1__curhypo__pres_dx, mh_y_ksads__bpd__bpd1__rcnt__manicmix__pres_dx, mh_y_ksads__bpd__bpd1__curdep__partrem_dx, mh_p_ksads__bpd__bpd2__curhypo__pres_dx, mh_p_ksads__bpd__bpd2__rcnt__hypo__pres_dx, mh_p_ksads__bpd__bpd2__curdep__pres_dx, mh_p_ksads__bpd__bpd2__curdep__partrem_dx, mh_y_ksads__bpd__bpd2__curdep__pres_dx, mh_y_ksads__bpd__bpd2__curdep__partrem_dx, mh_y_ksads__bpd__bpd2__rcnt__hypo__pres_dx, mh_y_ksads__bpd__bpd2__curhypo__pres_dx, mh_p_ksads__bpd__bpd2__rcnt__hypomix__pres_dx, mh_y_ksads__bpd__bpd2__rcnt__hypomix__pres_dx, mh_p_ksads__bpd__bpd2__oth__mindur_dx, mh_p_ksads__bpd__oth__mindur_dx, mh_y_ksads__bpd__bpd2__oth__mindur_dx, mh_y_ksads__bpd__oth__mindur_dx, mh_p_ksads__bpd__unspec__pres_dx, mh_p_ksads__bpd__unspec__past_dx, mh_y_ksads__bpd__unspec__pres_dx, mh_y_ksads__bpd__unspec__past_dx, mh_p_ksads__dep__mdd__partrem_dx, mh_p_ksads__dep__mdd__past_dx, mh_p_ksads__dep__mdd__pres_dx, mh_p_ksads__dep__pdd__oth__pres_dx, mh_p_ksads__dep__pdd__partrem_dx, mh_p_ksads__dep__pdd__past_dx, mh_p_ksads__dep__pdd__pres_dx, mh_y_ksads__dep__mdd__partrem_dx, mh_y_ksads__dep__mdd__past_dx, mh_y_ksads__dep__mdd__pres_dx, mh_y_ksads__dep__pdd__oth__pres_dx, mh_y_ksads__dep__pdd__partrem_dx, mh_y_ksads__dep__pdd__past_dx, mh_y_ksads__dep__pdd__pres_dx, mh_p_cbcl__dsm__dep_tscore, mh_p_cbcl__dsm__dep_nm, mh_p_cbcl__dsm__anx_tscore, mh_p_cbcl__dsm__anx_nm, mh_p_cbcl__synd__attn_tscore, mh_p_cbcl__synd__attn_nm, mh_p_cbcl__synd__aggr_tscore, mh_p_cbcl__synd__aggr_nm))
+#1. Clean the KSADS-COMP diagnosis data
+#1.1 Retain only columns of interest
+raw_data_trimmed <- raw_data %>%
+  dplyr::select(
+    participant_id, session_id,
+    
+    # SI passive
+    mh_p_ksads__suic__pass__past_dx, mh_p_ksads__suic__pass__pres_dx,
+    mh_y_ksads__suic__pass__past_dx, mh_y_ksads__suic__pass__pres_dx,
+    
+    # SI active (all subtypes)
+    mh_p_ksads__suic__actv__past_dx, mh_p_ksads__suic__actv__mthd__past_dx,
+    mh_p_ksads__suic__actv__int__past_dx, mh_p_ksads__suic__actv__plan__past_dx,
+    mh_p_ksads__suic__actv__pres_dx, mh_p_ksads__suic__actv__mthd__pres_dx,
+    mh_p_ksads__suic__actv__int__pres_dx, mh_p_ksads__suic__actv__plan__pres_dx,
+    mh_y_ksads__suic__actv__past_dx, mh_y_ksads__suic__actv__mthd__past_dx,
+    mh_y_ksads__suic__actv__int__past_dx, mh_y_ksads__suic__actv__plan__past_dx,
+    mh_y_ksads__suic__actv__pres_dx, mh_y_ksads__suic__actv__mthd__pres_dx,
+    mh_y_ksads__suic__actv__int__pres_dx, mh_y_ksads__suic__actv__plan__pres_dx,
+    
+    # Suicide attempt (interrupted/aborted/completed)
+    mh_p_ksads__suic__atmpt__intr__past_dx, mh_p_ksads__suic__atmpt__abrt__past_dx,
+    mh_p_ksads__suic__atmpt__past_dx, mh_p_ksads__suic__atmpt__intr__pres_dx,
+    mh_p_ksads__suic__atmpt__abrt__pres_dx, mh_p_ksads__suic__atmpt__pres_dx,
+    mh_y_ksads__suic__atmpt__intr__past_dx, mh_y_ksads__suic__atmpt__abrt__past_dx,
+    mh_y_ksads__suic__atmpt__past_dx, mh_y_ksads__suic__atmpt__intr__pres_dx,
+    mh_y_ksads__suic__atmpt__abrt__pres_dx, mh_y_ksads__suic__atmpt__pres_dx,
+    
+    # NSSI
+    mh_p_ksads__suic__slfinj__nosi__pres_dx, mh_p_ksads__suic__slfinj__nosi__past_dx,
+    mh_y_ksads__suic__slfinj__nosi__pres_dx, mh_y_ksads__suic__slfinj__nosi__past_dx,
+    
+    # Bipolar I (current/recent)
+    mh_p_ksads__bpd__bpd1__curdep__partrem_dx, mh_p_ksads__bpd__bpd1__rcnt__manicmix__pres_dx,
+    mh_p_ksads__bpd__bpd1__curmanic__pres_dx, mh_p_ksads__bpd__bpd1__curdep__pres_dx,
+    mh_y_ksads__bpd__bpd1__curmanic__pres_dx, mh_y_ksads__bpd__bpd1__curdep__pres_dx,
+    mh_y_ksads__bpd__bpd1__rcnt__manic__pres_dx,
+    mh_p_ksads__bpd__bpd1__curhypo__pres_dx, mh_p_ksads__bpd__bpd1__rcnt__dep__pres_dx,
+    mh_p_ksads__bpd__bpd1__rcnt__manic__pres_dx, mh_y_ksads__bpd__bpd1__rcnt__dep__pres_dx,
+    mh_y_ksads__bpd__bpd1__curhypo__pres_dx, mh_y_ksads__bpd__bpd1__rcnt__manicmix__pres_dx,
+    mh_y_ksads__bpd__bpd1__curdep__partrem_dx,
+    
+    # Bipolar II (current/recent)
+    mh_p_ksads__bpd__bpd2__curhypo__pres_dx, mh_p_ksads__bpd__bpd2__rcnt__hypo__pres_dx,
+    mh_p_ksads__bpd__bpd2__curdep__pres_dx, mh_p_ksads__bpd__bpd2__curdep__partrem_dx,
+    mh_y_ksads__bpd__bpd2__curdep__pres_dx, mh_y_ksads__bpd__bpd2__curdep__partrem_dx,
+    mh_y_ksads__bpd__bpd2__rcnt__hypo__pres_dx, mh_y_ksads__bpd__bpd2__curhypo__pres_dx,
+    mh_p_ksads__bpd__bpd2__rcnt__hypomix__pres_dx, mh_y_ksads__bpd__bpd2__rcnt__hypomix__pres_dx,
+    
+    # Bipolar NOS / Other Specified
+    mh_p_ksads__bpd__bpd2__oth__mindur_dx, mh_p_ksads__bpd__oth__mindur_dx,
+    mh_y_ksads__bpd__bpd2__oth__mindur_dx, mh_y_ksads__bpd__oth__mindur_dx,
+    mh_p_ksads__bpd__unspec__pres_dx, mh_p_ksads__bpd__unspec__past_dx,
+    mh_y_ksads__bpd__unspec__pres_dx, mh_y_ksads__bpd__unspec__past_dx,
+    
+    # Depression (MDD/PDD; current/past/partial-remission)
+    mh_p_ksads__dep__mdd__partrem_dx, mh_p_ksads__dep__mdd__past_dx, mh_p_ksads__dep__mdd__pres_dx,
+    mh_p_ksads__dep__pdd__oth__pres_dx, mh_p_ksads__dep__pdd__partrem_dx, mh_p_ksads__dep__pdd__past_dx,
+    mh_p_ksads__dep__pdd__pres_dx, mh_y_ksads__dep__mdd__partrem_dx, 
+    mh_y_ksads__dep__mdd__past_dx, mh_y_ksads__dep__mdd__pres_dx,
+    mh_y_ksads__dep__pdd__oth__pres_dx, mh_y_ksads__dep__pdd__partrem_dx, mh_y_ksads__dep__pdd__past_dx,
+    mh_y_ksads__dep__pdd__pres_dx
+  )
 
-#1.12 Turn all instances of empty, missing, 555, and 999 to NA; and 888 to 0 in KSADS columns
+#1.2 Normalize codes for missing or purposefully uncollected data: 888 -> 0; 555/999/""/NA -> NA
 raw_data_trimmed <- raw_data_trimmed %>%
   mutate(across(starts_with("mh_") & contains("ksads"),
-    ~ case_when(. == 888 ~ 0, . %in% c(555, 999, "") | is.na(.) ~ NA, TRUE ~ .)))
+    ~ dplyr::case_when(. == 888 ~ 0, . %in% c(555, 999, "") | is.na(.) ~ NA, TRUE ~ .))) %>%
+  mutate(across(starts_with("mh_") & contains("ksads"), ~ as.numeric(.)))
 
-#1.2 Clean the Continuous CBCL Outcomes of Interest
-raw_data_trimmed <- raw_data_trimmed %>% 
-  mutate(
-    
-    #1.21 Remove any depression t scores created with missing values
-    mh_p_cbcl__dsm__dep_tscore = if_else(mh_p_cbcl__dsm__dep_nm >= 1, NA_real_, mh_p_cbcl__dsm__dep_tscore),
-    
-    #1.22 Remove any anxiety t scores created with missing values
-    mh_p_cbcl__dsm__anx_tscore = if_else(mh_p_cbcl__dsm__anx_nm >= 1, NA_real_, mh_p_cbcl__dsm__anx_tscore), 
-    
-    #1.23 Remove any attention t scores created with missing values
-    mh_p_cbcl__synd__attn_tscore = if_else(mh_p_cbcl__synd__attn_nm >= 1, NA_real_, mh_p_cbcl__synd__attn_tscore),
-    
-    #1.24 Remove any aggression t scores created with missing values
-    mh_p_cbcl__synd__aggr_tscore = if_else(mh_p_cbcl__synd__aggr_nm >= 1, NA_real_, mh_p_cbcl__synd__aggr_tscore))
-
-#2. Preliminarily create relevant outcome variables of interest
-cat("Creating Diagnostic Outcome Variables of Interest to Analyses\n")
-#2.1 Define KSADS-COMP columns for each outcome
-#2.1.1 Suicidal Ideation – passive (past or present; parent or youth report)
+#2. Define column groups for composites
+#2.1 Suicidal ideation - passive
 si_passive_vars <- c(
   "mh_p_ksads__suic__pass__past_dx",
   "mh_p_ksads__suic__pass__pres_dx",
@@ -85,7 +131,7 @@ si_passive_vars <- c(
   "mh_y_ksads__suic__pass__pres_dx"
 )
 
-#2.1.2 Suicidal Ideation – active (all subtypes; past or present; parent or youth)
+#2.2 Suicidal ideation - active (all subtypes)
 si_active_vars <- c(
   "mh_p_ksads__suic__actv__past_dx",
   "mh_p_ksads__suic__actv__mthd__past_dx",
@@ -105,7 +151,7 @@ si_active_vars <- c(
   "mh_y_ksads__suic__actv__plan__pres_dx"
 )
 
-#2.1.3 Suicide Attempt – interrupted, aborted, or completed (past or present; parent or youth)
+#2.3 Suicide attempt
 sa_vars <- c(
   "mh_p_ksads__suic__atmpt__intr__past_dx",
   "mh_p_ksads__suic__atmpt__abrt__past_dx",
@@ -121,7 +167,7 @@ sa_vars <- c(
   "mh_y_ksads__suic__atmpt__pres_dx"
 )
 
-#2.1.4 Non-Suicidal Self-Injury (NSSI; past or present; parent or youth)
+#2.4 NSSI
 nssi_vars <- c(
   "mh_p_ksads__suic__slfinj__nosi__pres_dx",
   "mh_p_ksads__suic__slfinj__nosi__past_dx",
@@ -129,7 +175,7 @@ nssi_vars <- c(
   "mh_y_ksads__suic__slfinj__nosi__past_dx"
 )
 
-#2.1.5 Bipolar I Disorder – any current or recent past episode (parent or youth)
+#2.5 BD-I (current or recent)
 bd1_vars <- c(
   "mh_p_ksads__bpd__bpd1__curdep__partrem_dx",
   "mh_p_ksads__bpd__bpd1__rcnt__manicmix__pres_dx",
@@ -147,7 +193,7 @@ bd1_vars <- c(
   "mh_y_ksads__bpd__bpd1__curdep__partrem_dx"
 )
 
-#2.1.6 Bipolar II Disorder – any current or recent past hypomanic/depressive episode (parent or youth)
+#2.6 BD-II (current or recent)
 bd2_vars <- c(
   "mh_p_ksads__bpd__bpd2__curhypo__pres_dx",
   "mh_p_ksads__bpd__bpd2__rcnt__hypo__pres_dx",
@@ -161,9 +207,8 @@ bd2_vars <- c(
   "mh_y_ksads__bpd__bpd2__rcnt__hypomix__pres_dx"
 )
 
-#2.1.7 Any Bipolar Disorder – combine Bipolar I, II, OS & unspecified (parent or youth)
-any_bsd_vars <- c(
-  bd1_vars, bd2_vars,
+#2.7 BD NOS / Other Specified
+unspec_vars <- c(
   "mh_p_ksads__bpd__bpd2__oth__mindur_dx",
   "mh_p_ksads__bpd__oth__mindur_dx",
   "mh_y_ksads__bpd__bpd2__oth__mindur_dx",
@@ -174,7 +219,7 @@ any_bsd_vars <- c(
   "mh_y_ksads__bpd__unspec__past_dx"
 )
 
-# 2.1.8 Depression qualifiers for rescoring bipolar past mania/hypomania
+#2.8 Depression qualifiers (MDD/PDD) for BD-I/II rescoring
 dep_vars <- c(
   "mh_p_ksads__dep__mdd__partrem_dx",
   "mh_p_ksads__dep__mdd__past_dx",
@@ -192,83 +237,106 @@ dep_vars <- c(
   "mh_y_ksads__dep__pdd__pres_dx"
 )
 
-#2.1.9 Bipolar I past mania vars for rescoring
-bd1_past_mania_vars <- c(
-  "mh_p_ksads__bpd__bpd1__rcnt__manic__pres_dx",
-  "mh_y_ksads__bpd__bpd1__rcnt__manic__pres_dx"
+#2.9 MDD-only set for BD-NOS validation at 00A/02A
+mdd_only_vars <- c(
+  "mh_p_ksads__dep__mdd__pres_dx",
+  "mh_p_ksads__dep__mdd__past_dx",
+  "mh_p_ksads__dep__mdd__partrem_dx",
+  "mh_y_ksads__dep__mdd__pres_dx",
+  "mh_y_ksads__dep__mdd__past_dx",
+  "mh_y_ksads__dep__mdd__partrem_dx"
 )
 
-#2.1.10 Bipolar II past hypomania vars for rescoring
-bd2_past_mania_vars <- c(
-  "mh_p_ksads__bpd__bpd2__rcnt__hypo__pres_dx",
-  "mh_y_ksads__bpd__bpd2__rcnt__hypo__pres_dx"
-)
+#2.10 Past-(hypo)mania helper sets for v1.0 rescoring
+bd1_past_mania_vars <- c("mh_p_ksads__bpd__bpd1__rcnt__manic__pres_dx","mh_y_ksads__bpd__bpd1__rcnt__manic__pres_dx")
+bd2_past_mania_vars <- c("mh_p_ksads__bpd__bpd2__rcnt__hypo__pres_dx","mh_y_ksads__bpd__bpd2__rcnt__hypo__pres_dx")
 
-#2.2 Create binary outcomes according to the plan
-prelim_outcome_data <- raw_data_trimmed %>%
+#3. Build composite outcomes with robust NA rules + v1.0 corrections
+outcome_data <- raw_data_trimmed %>%
   mutate(
     
-    #2.2.1 Suicidal ideation – passive
+    #3.1 Suicidal ideation (passive)
     si_passive = case_when(
-      rowSums(select(., all_of(si_passive_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
-      rowSums(!is.na(select(., all_of(si_passive_vars)))) == 0 ~ NA_real_,
+      rowSums(dplyr::select(., all_of(si_passive_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(dplyr::select(., all_of(si_passive_vars)))) == 0 ~ NA_real_,
       TRUE ~ 0),
-    
-    #2.2.2 Suicidal ideation – active
+
+    #3.2 Suicidal ideation (active)
     si_active = case_when(
-      rowSums(select(., all_of(si_active_vars))  == 1, na.rm = TRUE) > 0 ~ 1,
-      rowSums(!is.na(select(., all_of(si_active_vars)))) == 0 ~ NA_real_,
+      rowSums(dplyr::select(., all_of(si_active_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(dplyr::select(., all_of(si_active_vars)))) == 0 ~ NA_real_,
       TRUE ~ 0),
-    
-    #2.2.3 Suicide Attempt
+
+    #3.3 Suicide attempt
     sa = case_when(
-      rowSums(select(., all_of(sa_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
-      rowSums(!is.na(select(., all_of(sa_vars)))) == 0 ~ NA_real_,
+      rowSums(dplyr::select(., all_of(sa_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(dplyr::select(., all_of(sa_vars)))) == 0 ~ NA_real_,
       TRUE ~ 0),
-    
-    #2.2.4 Non-Suicidal Self-Injury (NSSI)
+
+    #3.4 NSSI
     nssi = case_when(
-      rowSums(select(., all_of(nssi_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
-      rowSums(!is.na(select(., all_of(nssi_vars)))) == 0 ~ NA_real_,
+      rowSums(dplyr::select(., all_of(nssi_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(dplyr::select(., all_of(nssi_vars)))) == 0 ~ NA_real_,
       TRUE ~ 0),
-    
-    #2.2.5 Bipolar I Disorder
+
+    #3.5 BD-I (base composite)
     bipolar_I = case_when(
-      rowSums(select(., all_of(bd1_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
-      rowSums(!is.na(select(., all_of(bd1_vars)))) == 0 ~ NA_real_,
+      rowSums(dplyr::select(., all_of(bd1_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(dplyr::select(., all_of(bd1_vars)))) == 0 ~ NA_real_,
       TRUE ~ 0),
-    
-    #2.2.6 Bipolar II Disorder
+
+    #3.6 BD-II (base composite)
     bipolar_II = case_when(
-      rowSums(select(., all_of(bd2_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
-      rowSums(!is.na(select(., all_of(bd2_vars)))) == 0 ~ NA_real_,
+      rowSums(dplyr::select(., all_of(bd2_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(dplyr::select(., all_of(bd2_vars)))) == 0 ~ NA_real_,
       TRUE ~ 0),
-    
-    #2.2.7 Rescore Bipolar I at baseline & 2-year: past mania requires depression
+
+    #3.7 Lifetime MDD flag (for NOS correction + documentation)
+    mdd_flag = +(rowSums(dplyr::select(., all_of(mdd_only_vars)) == 1, na.rm = TRUE) > 0),
+
+    #3.8 BD-NOS / Other Specified (raw composite)
+    bd_nos_raw = case_when(
+      rowSums(dplyr::select(., all_of(unspec_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
+      rowSums(!is.na(dplyr::select(., all_of(unspec_vars)))) == 0 ~ NA_real_,
+      TRUE ~ 0),
+
+    #3.9 Rescore BD-I at baseline & 2-year (v1.0): past mania requires lifetime depression
     bipolar_I = case_when(
       session_id %in% c("ses-00A","ses-02A") &
-        rowSums(select(., all_of(bd1_past_mania_vars)) == 1, na.rm = TRUE) > 0 ~
-          if_else(rowSums(select(., all_of(dep_vars)) == 1, na.rm = TRUE) > 0, 1, 0),
+        rowSums(dplyr::select(., all_of(bd1_past_mania_vars)) == 1, na.rm = TRUE) > 0 ~
+        dplyr::if_else(rowSums(dplyr::select(., all_of(dep_vars)) == 1, na.rm = TRUE) > 0, 1, 0),
       TRUE ~ bipolar_I),
-    
-    #2.2.8 Rescore Bipolar II at baseline & 2-year: past hypomania requires depression
+
+    #3.10 Rescore BD-II at baseline & 2-year (v1.0): past hypomania requires lifetime depression
     bipolar_II = case_when(
       session_id %in% c("ses-00A","ses-02A") &
-        rowSums(select(., all_of(bd2_past_mania_vars)) == 1, na.rm = TRUE) > 0 ~
-          if_else(rowSums(select(., all_of(dep_vars)) == 1, na.rm = TRUE) > 0, 1, 0),
+        rowSums(dplyr::select(., all_of(bd2_past_mania_vars)) == 1, na.rm = TRUE) > 0 ~
+        dplyr::if_else(rowSums(dplyr::select(., all_of(dep_vars)) == 1, na.rm = TRUE) > 0, 1, 0),
       TRUE ~ bipolar_II),
-    
-    #2.2.9 Any Bipolar Spectrum Disorder
+
+    #3.11 Rescored BD-NOS/Other Specified at 00A/02A: require lifetime MDD
+    bd_nos = case_when(
+      
+      #3.11.1 enforce MDD requirement only at v1.0 waves
+      session_id %in% c("ses-00A","ses-02A") & bd_nos_raw == 1 ~ if_else(mdd_flag == 1, 1, 0, missing = 0),
+      
+      #3.11.2 other waves: keep raw composite
+      TRUE ~ bd_nos_raw
+    ),
+
+    #3.12 Any Bipolar Spectrum Disorder (validated components)
     any_bsd = case_when(
-      rowSums(select(., all_of(any_bsd_vars)) == 1, na.rm = TRUE) > 0 ~ 1,
-      rowSums(!is.na(select(., all_of(any_bsd_vars)))) == 0 ~ NA_real_,
-      TRUE ~ 0)
-  )
+      bipolar_I == 1 | bipolar_II == 1 | bd_nos == 1 ~ 1,
+      rowSums(!is.na(dplyr::select(., all_of(c(bd1_vars, bd2_vars, unspec_vars))))) == 0 ~ NA_real_,
+      TRUE ~ 0)) %>%
+  
+  #3.13 Drop helper columns you don’t want downstream
+  dplyr::select(-bd_nos_raw)
 
-#2.3 Retain only the columns of interest to EDA of outcome data
-outcome_data_trimmed <- prelim_outcome_data %>% 
-  dplyr::select(c(participant_id, session_id, si_passive, si_active, sa, nssi, bipolar_I, bipolar_II, any_bsd, mh_p_cbcl__dsm__dep_tscore, mh_p_cbcl__dsm__anx_tscore, mh_p_cbcl__synd__attn_tscore, mh_p_cbcl__synd__aggr_tscore))
-
+#4. Create a trimmed version of the outcome data
+outcome_data_trimmed <- outcome_data %>% 
+  dplyr::select(participant_id, session_id, si_passive, si_active, sa, nssi, bipolar_I, bipolar_II, bd_nos, any_bsd)
+  
 ```
 
 ## Outcome Variable Data Validation
@@ -285,119 +353,188 @@ This section validates the data to be used in analyses by:
 
 ## Outcome Variable Data Validation ##
 
-#1.1 Define validation function to check all derived outcome & CBCL vars
-validate_outcome_vars <- function(raw, final) {
-  
-  #1.1.1 Helper to count occurrences of a value in given vars
-  rs <- function(df, vars, val = 1) rowSums(df[vars] == val, na.rm = TRUE)
-  
-  #1.1.2 Helper to count non-missing entries in given vars
-  rn <- function(df, vars) rowSums(!is.na(df[vars]))
-  
-  #1.2 Expected binary outcomes 
-  #1.2.1 Suicidal Ideation – passive
-  expected_si_passive <- with(raw,
-    case_when(rs(raw, si_passive_vars) > 0 ~ 1, rn(raw, si_passive_vars) == 0 ~ NA_real_, TRUE  ~ 0))
-  mismatches_si_passive <- sum(expected_si_passive != final$si_passive, na.rm = TRUE)
-  
-  #1.2.2 Suicidal Ideation – active
-  expected_si_active <- with(raw,
-    case_when(rs(raw, si_active_vars) > 0 ~ 1, rn(raw, si_active_vars) == 0 ~ NA_real_, TRUE ~ 0))
-  mismatches_si_active <- sum(expected_si_active != final$si_active, na.rm = TRUE)
-  
-  #1.2.3 Suicide Attempt
-  expected_SA <- with(raw,
-    case_when(rs(raw, sa_vars) > 0 ~ 1, rn(raw, sa_vars) == 0 ~ NA_real_, TRUE ~ 0))
-  mismatches_SA <- sum(expected_SA != final$sa, na.rm = TRUE)
-  
-  #1.2.4 Non-Suicidal Self-Injury (NSSI)
-  expected_NSSI <- with(raw,
-    case_when(rs(raw, nssi_vars) > 0 ~ 1, rn(raw, nssi_vars) == 0 ~ NA_real_, TRUE ~ 0))
-  mismatches_NSSI <- sum(expected_NSSI != final$nssi, na.rm = TRUE)
-  
-  #1.2.5 Bipolar I – with rescoring at ses-00A & ses-02A
-  expected_BD1 <- with(raw,
-    case_when(
-      
-      #1.2.5.1 Past mania only at baseline/2yr: require depression
-      session_id %in% c("ses-00A","ses-02A") & rs(raw, bd1_past_mania_vars) > 0 ~
-        if_else(rs(raw, dep_vars) > 0, 1, 0),
-      
-        #1.2.5.2 Any other BD-I flag
-        rs(raw, bd1_vars) > 0 ~ 1,
-      
-        #1.2.5.3 All NA → NA
-        rn(raw, bd1_vars) == 0 ~ NA_real_, TRUE ~ 0))
-        mismatches_BD1 <- sum(expected_BD1 != final$bipolar_I, na.rm = TRUE)
-  
-  #1.2.6 Bipolar II – with rescoring at ses-00A & ses-02A
-  expected_BD2 <- with(raw, 
-    case_when(
-      
-      #1.2.6.1 Past hypomania only at baseline/2yr: require depression
-      session_id %in% c("ses-00A","ses-02A") & rs(raw, bd2_past_mania_vars) > 0 ~ if_else(rs(raw, dep_vars) > 0, 1, 0),
-      
-      #1.2.6.2 Any other BD-II flag
-      rs(raw, bd2_vars) > 0  ~ 1,
-      
-      #1.2.6.3 All NA → NA
-      rn(raw, bd2_vars) == 0 ~ NA_real_, TRUE ~ 0))
-      mismatches_BD2 <- sum(expected_BD2 != final$bipolar_II, na.rm = TRUE)
-  
-  #1.2.7 Any Bipolar Spectrum Disorder
-  expected_AnyBSD <- with(raw,
-    case_when(rs(raw, any_bsd_vars) > 0 ~ 1, rn(raw, any_bsd_vars) == 0 ~ NA_real_, TRUE ~ 0))
-  mismatches_AnyBSD <- sum(expected_AnyBSD != final$any_bsd, na.rm = TRUE)
-  
-  #1.3 Expected continuous CBCL outcomes
-  #1.3.1 Depression T-score
-  expected_dep_t <- if_else(raw$mh_p_cbcl__dsm__dep_nm >= 1, NA_real_, raw$mh_p_cbcl__dsm__dep_tscore)
-  mismatches_dep_t <- sum(expected_dep_t != final$mh_p_cbcl__dsm__dep_tscore, na.rm = TRUE)
-  
-  #1.3.2 Anxiety T-score
-  expected_anx_t <- if_else(raw$mh_p_cbcl__dsm__anx_nm >= 1, NA_real_, raw$mh_p_cbcl__dsm__anx_tscore)
-  mismatches_anx_t <- sum(expected_anx_t != final$mh_p_cbcl__dsm__anx_tscore, na.rm = TRUE)
-  
-  #1.3.3 Attention T-score
-  expected_attn_t <- if_else(raw$mh_p_cbcl__synd__attn_nm >= 1, NA_real_, raw$mh_p_cbcl__synd__attn_tscore)
-  mismatches_attn_t <- sum(expected_attn_t != final$mh_p_cbcl__synd__attn_tscore, na.rm = TRUE)
-  
-  #1.3.4 Aggression T-score
-  expected_aggr_t <- if_else(raw$mh_p_cbcl__synd__aggr_nm >= 1, NA_real_, raw$mh_p_cbcl__synd__aggr_tscore)
-  mismatches_aggr_t <- sum(expected_aggr_t != final$mh_p_cbcl__synd__aggr_tscore, na.rm = TRUE)
-  
-  #1.4 Summarize all mismatches 
-  tibble(
-    Variable = c(
-      "si_passive","si_active","sa","nssi",
-      "bipolar_I","bipolar_II","any_bsd",
-      "mh_p_cbcl__dsm__dep_tscore","mh_p_cbcl__dsm__anx_tscore",
-      "mh_p_cbcl__synd__attn_tscore","mh_p_cbcl__synd__aggr_tscore"),
-    Mismatches = c(
-      mismatches_si_passive, mismatches_si_active, mismatches_SA, mismatches_NSSI,
-      mismatches_BD1, mismatches_BD2, mismatches_AnyBSD,
-      mismatches_dep_t, mismatches_anx_t, mismatches_attn_t, mismatches_aggr_t)
-  )
+#1. Creaye helper functions
+#1.1 Count occurrences of a value across a set of columns
+rs <- function(df, vars, val = 1) rowSums(dplyr::select(df, dplyr::all_of(vars)) == val, na.rm = TRUE)
+
+#1.2 Count non-missing across a set of columns
+rn <- function(df, vars) rowSums(!is.na(dplyr::select(df, dplyr::all_of(vars))))
+
+#1.3 Safe compare against final column only if it exists
+compare_or_skip <- function(expected, final_df, col) {
+  if (!col %in% names(final_df)) return(NA_integer_)
+  sum(expected != final_df[[col]], na.rm = TRUE)
 }
 
-#1.5 Run the validation
-validation_outcomes <- validate_outcome_vars(
-  raw = raw_data_trimmed,
-  final = outcome_data_trimmed
+#2. Recompute “expected” outcomes from raw
+#2.1 Suicidal ideation - passive
+expected_si_passive <- with(raw_data_trimmed, dplyr::case_when(
+  rs(raw_data_trimmed, si_passive_vars) > 0 ~ 1,
+  rn(raw_data_trimmed, si_passive_vars) == 0 ~ NA_real_,
+  TRUE ~ 0
+))
+
+#2.2 Suicidal ideation - active
+expected_si_active <- with(raw_data_trimmed, dplyr::case_when(
+  rs(raw_data_trimmed, si_active_vars) > 0 ~ 1,
+  rn(raw_data_trimmed, si_active_vars) == 0 ~ NA_real_,
+  TRUE ~ 0
+))
+
+#2.3 Suicide attempt
+expected_sa <- with(raw_data_trimmed, dplyr::case_when(
+  rs(raw_data_trimmed, sa_vars) > 0 ~ 1,
+  rn(raw_data_trimmed, sa_vars) == 0 ~ NA_real_,
+  TRUE ~ 0
+))
+
+#2.4 NSSI
+expected_nssi <- with(raw_data_trimmed, dplyr::case_when(
+  rs(raw_data_trimmed, nssi_vars) > 0 ~ 1,
+  rn(raw_data_trimmed, nssi_vars) == 0 ~ NA_real_,
+  TRUE ~ 0
+))
+
+#2.5 BD-I with rescoring at 00A/02A
+expected_bd1 <- with(raw_data_trimmed, dplyr::case_when(
+  
+  #2.5.1 past mania at 00A/02A → require depression
+  session_id %in% c("ses-00A","ses-02A") &
+    rs(raw_data_trimmed, bd1_past_mania_vars) > 0 ~
+      dplyr::if_else(rs(raw_data_trimmed, dep_vars) > 0, 1, 0),
+  
+  #2.5.2 otherwise composite
+  rs(raw_data_trimmed, bd1_vars) > 0 ~ 1,
+  rn(raw_data_trimmed, bd1_vars) == 0 ~ NA_real_,
+  TRUE ~ 0
+))
+
+#2.6 BD-II with rescoring at 00A/02A
+expected_bd2 <- with(raw_data_trimmed, dplyr::case_when(
+  session_id %in% c("ses-00A","ses-02A") &
+    rs(raw_data_trimmed, bd2_past_mania_vars) > 0 ~
+      dplyr::if_else(rs(raw_data_trimmed, dep_vars) > 0, 1, 0),
+  rs(raw_data_trimmed, bd2_vars) > 0 ~ 1,
+  rn(raw_data_trimmed, bd2_vars) == 0 ~ NA_real_,
+  TRUE ~ 0
+))
+
+#2.7 BD-NOS / Other Specified “validated” flag used inside Any_BSD
+expected_bd_nos_valid <- with(raw_data_trimmed, dplyr::case_when(
+  session_id %in% c("ses-00A","ses-02A") ~
+    dplyr::if_else(
+      rs(raw_data_trimmed, unspec_vars) > 0 & rs(raw_data_trimmed, mdd_only_vars) > 0,
+      1, 0, missing = NA_real_),
+  TRUE ~ dplyr::case_when(
+    rs(raw_data_trimmed, unspec_vars) > 0 ~ 1,
+    rn(raw_data_trimmed, unspec_vars) == 0 ~ NA_real_,
+    TRUE ~ 0
+  )
+))
+
+#2.8 Any BSD from validated components
+expected_any_bsd <- dplyr::case_when(
+  expected_bd1 == 1 | expected_bd2 == 1 | expected_bd_nos_valid == 1 ~ 1,
+  is.na(expected_bd1) & is.na(expected_bd2) & is.na(expected_bd_nos_valid) ~ NA_real_,
+  TRUE ~ 0
 )
 
-#1.6 Print mismatch summary
-kable(validation_outcomes,
-      caption = "Mismatch Summary for Derived Outcome & CBCL Variables",
-      digits = 0) %>%
-  kable_styling(bootstrap_options = c("striped","hover","condensed","responsive"))
+#3. Mismatch counts (skip a comparison if the column doesn’t exist)
+mismatch_tbl <- tibble::tibble(
+  Variable = c("si_passive","si_active","sa","nssi","bipolar_I","bipolar_II","bd_nos_valid","any_bsd"),
+  Mismatches = c(
+    compare_or_skip(expected_si_passive, outcome_data_trimmed, "si_passive"),
+    compare_or_skip(expected_si_active , outcome_data_trimmed, "si_active"),
+    compare_or_skip(expected_sa, outcome_data_trimmed, "sa"),
+    compare_or_skip(expected_nssi, outcome_data_trimmed, "nssi"),
+    compare_or_skip(expected_bd1, outcome_data_trimmed, "bipolar_I"),
+    compare_or_skip(expected_bd2, outcome_data_trimmed, "bipolar_II"),
+    compare_or_skip(expected_bd_nos_valid, outcome_data_trimmed, "bd_nos_valid"),
+    compare_or_skip(expected_any_bsd, outcome_data_trimmed, "any_bsd")
+  )
+)
 
-#1.7 Assert zero mismatches (or not)
-if (all(validation_outcomes$Mismatches == 0)) {
-  cat("All derived outcome variables match expected values\n")
-  skimr::skim_without_charts(outcome_data_trimmed)
+#4. Domain & coherence checks
+#4.1 Ensure binary variables are only {0,1,NA}
+bin_cols <- intersect(c("si_passive","si_active","sa","nssi","bipolar_I","bipolar_II","bd_nos_valid","any_bsd"), names(outcome_data_trimmed))
+
+domain_violations <- purrr::map_int(bin_cols, \(cn) {
+  sum(!is.na(outcome_data_trimmed[[cn]]) & !outcome_data_trimmed[[cn]] %in% c(0,1))
+})
+domain_tbl <- tibble::tibble(Variable = bin_cols, InvalidValues = domain_violations)
+
+#4.2 Check for coherence: any_bsd must cover BD-I/BD-II/BD-NOS-validated when all are present
+coherence_viol <- NA_integer_
+if (all(c("any_bsd","bipolar_I","bipolar_II","bd_nos_valid") %in% names(outcome_data_trimmed))) {
+  implied_any <- pmax(outcome_data_trimmed$bipolar_I %||% 0,
+                      outcome_data_trimmed$bipolar_II %||% 0,
+                      outcome_data_trimmed$bd_nos_valid %||% 0, na.rm = TRUE)
+  
+  #4.2.1 rows where any_bsd=0 but implied_any=1 (and any_bsd not NA)
+  coherence_viol <- sum(!is.na(outcome_data_trimmed$any_bsd) &
+                          outcome_data_trimmed$any_bsd == 0 &
+                          implied_any == 1, na.rm = TRUE)
+}
+
+#4.3 Create a table outlining the coherence check and any related violations of assumed variables
+coherence_tbl <- tibble::tibble(Check = "any_bsd >= max(BD-I, BD-II, BD-NOS_valid)", Violations = coherence_viol)
+
+#5. Compute summaries by wave
+summ_by_wave <- outcome_data_trimmed %>%
+  dplyr::group_by(session_id) %>%
+  dplyr::summarise(
+    n = dplyr::n(),
+    si_passive_pos = mean(si_passive == 1, na.rm = TRUE),
+    si_active_pos = mean(si_active  == 1, na.rm = TRUE),
+    sa_pos = mean(sa == 1, na.rm = TRUE),
+    nssi_pos = mean(nssi == 1, na.rm = TRUE),
+    bd1_pos = mean(bipolar_I  == 1, na.rm = TRUE),
+    bd2_pos = mean(bipolar_II == 1, na.rm = TRUE),
+    any_bsd_pos = mean(any_bsd == 1, na.rm = TRUE),
+    si_passive_na = mean(is.na(si_passive)),
+    si_active_na = mean(is.na(si_active)),
+    sa_na = mean(is.na(sa)),
+    nssi_na = mean(is.na(nssi)),
+    bd1_na = mean(is.na(bipolar_I)),
+    bd2_na = mean(is.na(bipolar_II)),
+    any_bsd_na = mean(is.na(any_bsd)),
+    .groups = "drop"
+  )
+
+#6. Print results of data spot checks
+#6.1 Print the results of the mismatch table
+knitr::kable(mismatch_tbl,
+             caption = "Mismatch Summary for Derived Outcome Variables",
+             digits = 0) %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped","hover","condensed","responsive"))
+
+#6.2 Print the results of the domain check table
+knitr::kable(domain_tbl,
+             caption = "Domain Check: Non-binary values (should be 0 in all rows)",
+             digits = 0) %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped","hover","condensed","responsive"))
+
+#6.3 Print the results of the coherence table
+knitr::kable(coherence_tbl,
+             caption = "Coherence Check: Any_BSD covers BD-I/BD-II/BD-NOS_valid",
+             digits = 0) %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped","hover","condensed","responsive"))
+
+#6.4 Print the results of the sumarry by wave table
+knitr::kable(summ_by_wave %>%
+               dplyr::mutate(dplyr::across(-c(session_id, n), ~ scales::percent(., accuracy = 0.1))),
+             caption = "Prevalence and NA Rates by Wave",
+             align = "lrrrrrrrrrrrrr") %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped","hover","condensed","responsive"))
+
+#7. Run a skim as a last check if everything is clean
+if (all(mismatch_tbl$Mismatches %in% c(0, NA)) &&
+    all(domain_tbl$InvalidValues == 0) &&
+    (is.na(coherence_tbl$Violations) || coherence_tbl$Violations == 0)) {
+  cat("All outcome checks passed. Skim summary below.\n")
+  suppressWarnings(skimr::skim_without_charts(outcome_data_trimmed))
 } else {
-  cat("Some mismatches detected; please inspect `validation_outcomes` for details\n")
+  cat("Some checks failed - see tables above for details.\n")
 }
 
 ```
@@ -408,7 +545,7 @@ if (all(validation_outcomes$Mismatches == 0)) {
 
 ## Output ##
 
-#1. Write the cleaned and filtered outcome variable data as a csv file to be used in clustering
-write.csv(outcome_data_trimmed, "../../data/data_processed/outcome_variable_data.csv", row.names = FALSE)
+#1. Write the cleaned and filtered outcome variable data as a csv file to be used in statistical analyses
+write.csv(outcome_data_trimmed, "../../../data/data_processed/outcome_variable_data.csv", row.names = FALSE)
 
 ```
