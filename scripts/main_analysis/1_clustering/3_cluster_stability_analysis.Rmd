@@ -22,7 +22,7 @@ knitr::opts_chunk$set(echo = TRUE, cache = FALSE, message = TRUE, warning = TRUE
 
 ```{r environment, echo = FALSE, include = FALSE, warning = FALSE}
 
-## Load packages & set env ##
+## Load packages, data, & set env ##
 
 # Load necesasry packages
 library(dplyr)
@@ -36,9 +36,10 @@ library(readr)
 library(glue)
 library(scales)
 library(clustMixType)
+library(here)
 
 # Set paths to be used in reading in data & objects
-REPO <- "/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk"
+REPO <- here()
 datapath <- file.path(REPO, "data", "data_processed")
 
 # Establish the path to the kproto object

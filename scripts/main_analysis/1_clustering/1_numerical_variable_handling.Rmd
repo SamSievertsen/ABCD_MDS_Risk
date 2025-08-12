@@ -27,6 +27,7 @@ library(cluster)
 library(furrr)
 library(purrr)
 library(glue)
+library(here)
 library(progressr)
 handlers("txtprogressbar")
 
@@ -72,7 +73,7 @@ if (!file.exists(summary_csv)) {
 ## Project paths and data loading ##
 
 # Define the root of the project repository
-REPO <- "/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk"
+REPO <- here()
 
 # Read in the processed risk variable data
 risk_variable_data <- read.csv(

@@ -1,0 +1,800 @@
+---
+title: "Build Analysis Datasets: Person-Period Rows + Cluster Labels"
+author: "Sam A. Sievertsen"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    self_contained: true
+params:
+  scaling_method: "robust"
+  k_value: 2
+  overwrite: false
+  baseline_wave: "ses-00A"
+  start_wave: "ses-02A"
+  waves: ["ses-00A","ses-02A","ses-04A","ses-06A"]
+  max_suic_end_wave: "ses-04A"  # limit suicidality intervals if needed based on caveats of data collection (see notion log 07/09/25)
+  covariates_file: "../../../data/data_raw/dataset.csv"
+---
+
+```{r global, include = FALSE}
+
+# Set global env variables
+knitr::opts_chunk$set(echo = TRUE, cache = FALSE, message = TRUE, warning = TRUE, results = "markup", verbose = TRUE, comment = "")
+
+```
+
+```{r environment, echo = FALSE, include = FALSE, warning = FALSE}
+
+## Load packages, data, & set env ##
+
+# Read in required packages safely & quietly
+suppressPackageStartupMessages({
+  library(dplyr); 
+  library(tidyr); 
+  library(readr); 
+  library(purrr)
+  library(glue);  
+  library(tibble); 
+  library(forcats);
+  library(here);
+  library(ggplot2)
+})
+
+# Establish repo & data paths
+REPO <- here()
+proc_dir <- file.path(REPO, "data", "data_processed")
+raw_dir <- file.path(REPO, "data", "data_raw")
+analysis_dir <- file.path(proc_dir, "analysis_datasets")
+dir.create(analysis_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Establish paths to inputs
+outcome_file <- file.path(proc_dir, "outcome_variable_data.csv")
+kproto_file  <- file.path(proc_dir, "kproto_results", sprintf("kproto_%s.rds", params$scaling_method))
+
+# Establish paths to outputs
+lab_csv <- file.path(analysis_dir, sprintf("cluster_labels_k%d_%s.csv", params$k_value, params$scaling_method))
+bd_rds <- file.path(analysis_dir, sprintf("bd_person_period_k%d_%s.rds",  params$k_value, params$scaling_method))
+bd_csv <- sub("\\.rds$", ".csv", bd_rds)
+su_rds <- file.path(analysis_dir, sprintf("suic_person_period_k%d_%s.rds", params$k_value, params$scaling_method))
+su_csv <- sub("\\.rds$", ".csv", su_rds)
+bd_panel_rds <- file.path(analysis_dir, sprintf("bd_panel_k%d_%s.rds", params$k_value, params$scaling_method))
+bd_panel_csv <- sub("\\.rds$", ".csv", bd_panel_rds)
+su_panel_rds <- file.path(analysis_dir, sprintf("suic_panel_k%d_%s.rds", params$k_value, params$scaling_method))
+su_panel_csv <- sub("\\.rds$", ".csv", su_panel_rds)
+
+# Read in inputs
+out_df <- readr::read_csv(outcome_file, show_col_types = FALSE)
+kp_list <- readRDS(kproto_file)
+k_vals <- 2:8
+pos <- match(params$k_value, k_vals)
+stopifnot(is.finite(pos), pos >= 1, pos <= length(k_vals))
+kp <- kp_list[[pos]]
+
+# Establish ID's, and assessment waves as factors
+wave_levels <- params$waves
+out_df <- out_df %>%
+  mutate(
+    participant_id = as.character(participant_id),
+    session_id = factor(session_id, levels = wave_levels)
+  )
+
+```
+
+
+## 1. Create Helper Functions to Use in Cleaning Data for Statistical Analyses
+
+Utility functions to standardize dataset construction. We a) extract stable cluster labels from the chosen k-prototype solution, b) complete the ID by assessment timepoint grid, c) convert wave statuses into person-period intervals with a first-onset event coded at the interval end while excluding baseline-positive person-time, and d) join safely with row-count warnings
+
+``` {r helper functions, warning = FALSE}
+
+## 1. Establish helper functions for creating analysis ready data ##
+
+#1.1 Extract participant_id from kproto$data (rownames preferred)
+get_cluster_labels <- function(kp, k_value) {
+  dat <- as.data.frame(kp$data)
+  
+  #1.1.1 Try rownames of the kp obj first
+  if (!is.null(rownames(dat)) && all(nzchar(rownames(dat)))) {
+    ids <- rownames(dat)
+  } else if ("participant_id" %in% names(dat)) {
+    ids <- as.character(dat$participant_id)
+  } else {
+    stop("Could not infer participant_id for cluster labels from kproto$data. ",
+         "Ensure rownames carry IDs or participant_id is a column.")
+  }
+  cl <- factor(kp$cluster, levels = seq_len(k_value), labels = paste0("C", seq_len(k_value)))
+  tibble(participant_id = as.character(ids), cluster = cl)
+}
+
+#1.2 Ensure (id, session) grid is as expected and keep original values
+complete_id_wave <- function(df) {
+  df %>%
+    complete(
+      participant_id,
+      session_id = factor(session_id, levels = levels(df$session_id))
+    )
+}
+
+#1.3 Build person-period intervals from assessment wave-states
+#    - status_col: 0/1/NA status at each wave
+#    - returns one row per interval: (start_wave -> end_wave), event is first-onset at end_wave
+make_person_period <- function(df, status_col, baseline_wave, start_wave_cut) {
+  
+  #1.3.1 Precompute the index of the modeling start wave
+  start_cut_idx <- which(levels(df$session_id) == start_wave_cut)
+  if (length(start_cut_idx) != 1L) {
+    stop("start_wave_cut must match one of the session_id factor levels.")
+  }
+  
+  #1.3.2 Order df within id
+  df <- df %>%
+    arrange(participant_id, session_id) %>%
+    group_by(participant_id) %>%
+    mutate(
+      status = .data[[status_col]],
+      .first_wave = first(na.omit(as.character(session_id)))) %>%
+    ungroup()
+
+  #1.3.3 Collapse df to one row per (id, wave) with status
+  core <- df %>%
+    dplyr::select(participant_id, session_id, status) %>%
+    complete_id_wave()
+
+  #1.3.4 Derive interval ends and starts
+  core <- core %>%
+    group_by(participant_id) %>%
+    arrange(session_id, .by_group = TRUE) %>%
+    mutate(
+      wave_idx = as.integer(session_id),
+      start_idx = lag(wave_idx),
+      start_wave = lag(session_id),
+      end_wave = session_id,
+      is_pos = (status == 1),
+      is_obs = !is.na(status),
+      ever_pos_prior = dplyr::lag(cummax(replace_na(is_pos, FALSE)), default = FALSE),
+      event_end  = dplyr::case_when(
+        !is_obs ~ NA_integer_,
+        !ever_pos_prior & is_pos ~ 1L,
+        TRUE ~ 0L),
+      baseline_status = status[which(session_id == baseline_wave)][1]) %>%
+    ungroup() %>%
+    filter(!is.na(start_idx))
+
+  #1.3.5 Restrict intervals to modeling start
+  core <- core %>%
+    filter(as.integer(end_wave) >= start_cut_idx)
+
+  #1.3.6 Exclude at-risk time only if baseline-positive (coalesce NA baseline to 0 here)
+  core <- core %>%
+    filter(!(start_wave == baseline_wave & dplyr::coalesce(baseline_status, 0L) == 1L))
+
+  #1.3.7 Return analysis-ready person-period rows
+  core %>%
+    transmute(
+      participant_id,
+      start_wave = fct_drop(start_wave),
+      end_wave = fct_drop(end_wave),
+      event = event_end,
+      baseline_status = as.integer(baseline_status)
+    )
+}
+
+#1.4 Perform a safe left join & warn on drops
+left_join_guard <- function(x, y, by) {
+  before <- nrow(x)
+  out <- left_join(x, y, by = by)
+  after <- nrow(out)
+  if (after != before) warning(glue("Row count changed in join: {before} -> {after}"))
+  out
+}
+
+```
+
+## 2. Extract Cluster Labels from Chosen k Solution
+
+Pull participant-level cluster assignments for the requested k, recover IDs from 'kproto$data` (rownames preferred), label clusters C1…Ck, and persist to disk (with caching). Freezing labels here provides a single source of truth for downstream models and provenance
+
+``` {r cluster labels, warning = FALSE}
+
+## 2. Extract cluster labels for chosen k ##
+
+#2.1 Extract labels
+labels_tbl <- get_cluster_labels(kp, params$k_value)
+
+#2.2 Save (skip/overwrite logic)
+if (file.exists(lab_csv) && isFALSE(params$overwrite)) {
+  message("Cluster label file exists; loading cached: ", basename(lab_csv))
+  labels_tbl <- readr::read_csv(lab_csv, show_col_types = FALSE)
+} else {
+  readr::write_csv(labels_tbl, lab_csv)
+}
+
+#2.3 Quick check
+labels_tbl %>% count(cluster, name = "n") %>% arrange(cluster)
+
+```
+
+## 3. Merge Cluster Labels from Chosen k Solution to Outcome Data
+
+Subset the wrangled outcome fields to just those needed for analysis and attach one cluster label per participant. Waves remain ordered factors so longitudinal structure and interval building are preserved. This aligns clusters with outcomes before any modeling transforms 
+
+``` {r merge cluster labels to outcomes, warning = FALSE}
+
+## 3. Merge cluster labels to outcomes (baseline carried separately) ##
+
+#3.1 Keep only needed outcome columns
+needed_cols <- c("participant_id","session_id",
+                 "bipolar_I","bipolar_II","bd_nos","any_bsd",
+                 "si_passive","si_active","sa","nssi")
+
+#3.2 Select relevant outcome columns for analysis
+out_core <- out_df %>% 
+  dplyr::select(any_of(needed_cols))
+
+#3.3 Attach cluster labels (one per participant)
+out_core <- left_join_guard(out_core, labels_tbl, by = "participant_id")
+
+```
+
+## 4. Build the Person-Period Structured Outcome Data for Analysis
+
+Construct discrete-time survival datasets. For BD and suicidality outcomes we form intervals (00A->02A, 02A->04A, 04A->06A), define events as the first observed 1 at the interval end, and drop at-risk time for baseline-positive cases to prevent leakage. Suicidality intervals are optionally capped at Y4 given youth don’t report past diagnoses past that timepoint on the KSADS, and suicidality rows also receive time-varying BD indicators (start/end) to support temporal precedence tests further downstream
+
+``` {r build person period data, warning = FALSE}
+
+## 4. Build person-period datasets ##
+
+#4.1 BD outcomes: person-period from 02A onward; event = first-onset
+bd_pp <- bind_rows(
+  
+  #4.1.1 BD-I person-period
+  make_person_period(
+    out_core, "bipolar_I", params$baseline_wave, params$start_wave) %>% 
+  mutate(outcome = "BD_I"),
+  
+  #4.1.2 BD-II person-period
+  make_person_period(
+    out_core, "bipolar_II", params$baseline_wave, params$start_wave) %>% 
+    mutate(outcome = "BD_II"),
+  
+  #4.1.3 BD-NOS person-period
+  make_person_period(
+    out_core, "bd_nos", params$baseline_wave, params$start_wave)
+  %>% mutate(outcome = "BD_NOS"),
+  
+  #4.1.4 Any-BSD person-period
+  make_person_period(
+    out_core, "any_bsd", params$baseline_wave, params$start_wave) %>% 
+    mutate(outcome = "Any_BSD")) %>%
+  
+  #4.1.5 Left join and order the person-period data
+  left_join_guard(labels_tbl, by = "participant_id") %>%
+  relocate(participant_id, start_wave, end_wave, outcome, event, cluster, baseline_status)
+
+#4.2 Suicidality outcomes: person-period (limit to end wave if specified)
+su_pp_all <- bind_rows(
+  
+  #4.2.1 SI passive person-period
+  make_person_period(
+    out_core, "si_passive", params$baseline_wave, params$start_wave) %>% 
+    mutate(outcome = "SI_passive"),
+  
+  #4.2.2 SI active person-period
+  make_person_period(
+    out_core, "si_active", params$baseline_wave, params$start_wave) %>% 
+    mutate(outcome = "SI_active"),
+  
+  #4.2.3 SA person-period
+  make_person_period(
+    out_core, "sa", params$baseline_wave, params$start_wave) %>% 
+    mutate(outcome = "SuicideAttempt"),
+  
+  #4.2.4 NSSI person-period
+  make_person_period(out_core, "nssi", params$baseline_wave, params$start_wave) %>% mutate(outcome = "NSSI")) %>%
+  left_join_guard(labels_tbl, by = "participant_id") %>%
+  relocate(participant_id, start_wave, end_wave, outcome, event, cluster, baseline_status)
+
+#4.3 Place a modifiable cap on suicidality intervals based on data collected by ABCD study
+su_pp <- su_pp_all %>%
+  filter(as.character(end_wave) <= params$max_suic_end_wave)
+
+#4.4 Add time varying BD to suicidality person-period; use START for temporal precedence
+#4.4.1 Construct an any_bsd df with just the participant, session, & dx info
+any_bsd_df <- out_core %>% 
+  dplyr::select(participant_id, session_id, any_bsd)
+
+#4.4.2 Add in a time varying (across timepoints rather) BD indicator to the suicidality data
+su_pp <- su_pp %>%
+  left_join_guard(any_bsd_df %>% dplyr::rename(bd_any_end = any_bsd),
+                  by = c("participant_id","end_wave" = "session_id")) %>%
+  left_join_guard(any_bsd_df %>% dplyr::rename(bd_any_start = any_bsd),
+                  by = c("participant_id","start_wave" = "session_id"))
+
+```
+
+## 5. Build the Per-Assessment Timepoint Structured Outcome Data for Analysis
+
+Create per-assessment timepoint panel data for mixed-effects/GEEs: pivot outcomes long from Y2 onward, carry baseline status for adjustment, and (for suicidality) attach BD at wave and its lag. These tables support timepoint-specific odds models and interaction testing without ay interval manipulation required (hopefully)
+
+```{r build per wave data, warning = FALSE}
+
+#5.1 Build BD panel per-wave data
+#5.1.1 Baseline status for each BD outcome
+base_bd_long <- out_core %>%
+  dplyr::filter(session_id == params$baseline_wave) %>%
+  tidyr::pivot_longer(
+    c(bipolar_I, bipolar_II, bd_nos, any_bsd),
+    names_to = "outcome", values_to = "baseline_status_bd") %>%
+  dplyr::select(participant_id, outcome, baseline_status_bd)
+
+#5.1.2 Long per-wave statuses from Y2 onward
+bd_panel <- out_core %>%
+  dplyr::filter(as.integer(session_id) >= match(params$start_wave, wave_levels)) %>%
+  tidyr::pivot_longer(
+    c(bipolar_I, bipolar_II, bd_nos, any_bsd),
+    names_to = "outcome", values_to = "status") %>%
+  left_join_guard(base_bd_long, by = c("participant_id","outcome")) %>%
+  left_join_guard(labels_tbl, by = "participant_id") %>%
+  dplyr::rename(wave = session_id)
+
+#5.2 Build suicidality panel per-wave data
+#5.2.1 Baseline status for each suicidality outcome
+base_su_long <- out_core %>%
+  dplyr::filter(session_id == params$baseline_wave) %>%
+  tidyr::pivot_longer(
+    c(si_passive, si_active, sa, nssi),
+    names_to = "outcome", values_to = "baseline_status_su") %>%
+  dplyr::select(participant_id, outcome, baseline_status_su)
+
+#5.2.2 Any BSD at wave + lag for time-varying covariate
+bd_at_wave <- out_core %>%
+  dplyr::select(participant_id, session_id, any_bsd) %>%
+  dplyr::rename(wave = session_id, bd_any_wave = any_bsd) %>%
+  arrange(participant_id, wave) %>%
+  group_by(participant_id) %>%
+  mutate(bd_any_prior = dplyr::lag(bd_any_wave)) %>%
+  ungroup()
+
+#5.2.3 Long per-wave suicidality statuses from Y2 onward
+su_panel <- out_core %>%
+  dplyr::filter(as.integer(session_id) >= match(params$start_wave, wave_levels)) %>%
+  tidyr::pivot_longer(
+    c(si_passive, si_active, sa, nssi),
+    names_to = "outcome", values_to = "status") %>%
+  left_join_guard(base_su_long, by = c("participant_id","outcome")) %>%
+  left_join_guard(labels_tbl, by = "participant_id") %>%
+  dplyr::rename(wave = session_id) %>%
+  left_join_guard(bd_at_wave, by = c("participant_id","wave"))
+
+```
+
+
+## 6. Merge Covariate Data Into Outcome Data
+
+Normalize and merge covariates: age (per wave), sex, site, family ID, and race/ethnicity (though consider whether the latter will be used in any capacity very carefully). For person-period data we attach age at start and end to compute mid-interval age, then derive centered variants (grand-mean, within-person, and between-person components). The same centering is created for per-wave age
+
+``` {r merge covariates, warning = FALSE}
+
+## 6. Merge time-varying covariates (age), and static (sex, site, family ID, race) ##
+
+#6.1 Load and normalize covariates from the raw file
+if (!is.null(params$covariates_file) && file.exists(params$covariates_file)) {
+  cov_raw <- readr::read_csv(params$covariates_file, show_col_types = FALSE)
+
+  #6.1.1.1 Select the relevant ABCD columns
+  cov_df <- cov_raw %>%
+    dplyr::select(
+      participant_id,
+      session_id,
+      age_raw = ab_g_dyn__visit_age,
+      sex_raw = ab_g_stc__cohort_sex,
+      site_raw = ab_g_dyn__design_site,
+      fam_raw = ab_g_stc__design_id__fam,
+      race_ethnicity = ab_g_stc__cohort_ethnrace__meim) %>%
+    mutate(
+      participant_id = as.character(participant_id),
+      session_id     = factor(session_id, levels = wave_levels),
+      
+      #6.1.1.1.1 Coerce data types safely
+      age_raw = suppressWarnings(as.numeric(age_raw)),
+      fam_raw = as.character(fam_raw),
+      
+      #6.1.1.1.2 Clean sex to Male/Female if possible, else factorize as-is
+      sex = case_when(
+        sex_raw %in% c(1, "1", "M", "Male") ~ "Male",
+        sex_raw %in% c(2, "2", "F", "Female") ~ "Female",
+        sex_raw %in% c(3, "3", "Other", "Intersex") ~ "Intersex",
+        TRUE ~ as.character(sex_raw)),
+      
+      #6.1.1.1.3 Clean site to factor with readable labels
+      site_factor = forcats::fct_inorder(paste0("Site_", as.character(site_raw))),
+      
+      #6.1.1.1.4 Establish race-ethnicity as factor but keep original labels
+      race_ethnicity = factor(as.character(race_ethnicity))) %>%
+    
+    #6.1.1.2 Keep exactly one row per id×wave
+    arrange(participant_id, session_id) %>%
+    dplyr::distinct(participant_id, session_id, .keep_all = TRUE) %>%
+    
+    #6.1.1.3 Establish final renames to use in joins
+    dplyr::rename(age = age_raw, family_id = fam_raw) %>%
+    dplyr::select(participant_id, session_id, age, sex, site_factor, family_id, race_ethnicity)
+
+  #6.1.2 Create a helper function to attach end-wave covariates + start age, then derive centered ages
+  add_cov <- function(pp) {
+    
+    #6.1.2.1 Join covariates at END of interval
+    pp1 <- pp %>%
+      left_join_guard(
+        cov_df,
+        by = c("participant_id" = "participant_id", "end_wave" = "session_id")) %>%
+      dplyr::rename(age_end = age)
+
+    #6.1.2.2 Join age at START of interval (for midpoint)
+    pp2 <- pp1 %>%
+      left_join_guard(
+        cov_df %>% dplyr::select(participant_id, session_id, age) %>% 
+          dplyr::rename(age_start = age),
+        by = c("participant_id" = "participant_id", "start_wave" = "session_id"))
+
+    #6.1.2.3 Derive age midpoint and centered variants
+    pp3 <- pp2 %>%
+      mutate(
+        interval_index = as.integer(end_wave),
+        age_mid = dplyr::coalesce((age_start + age_end) / 2, age_end, age_start)) %>%
+      
+      #6.1.2.3.1 Grand-mean center age across all person-period rows with age_mid
+      mutate(age_mid_gmc = age_mid - mean(age_mid, na.rm = TRUE)) %>%
+      
+      #6.1.2.3.2 Person-mean center age within-person
+      group_by(participant_id) %>%
+      mutate(
+        age_mid_person_mean = mean(age_mid, na.rm = TRUE),
+        age_mid_cwc = age_mid - age_mid_person_mean) %>%
+      ungroup() %>%
+      
+      #6.1.2.3.3 Calculate between-person age (person mean - grand mean)
+      mutate(
+        age_mid_between = age_mid_person_mean - mean(age_mid, na.rm = TRUE)
+      )
+    
+    #6.1.2.4 Return a modified version of the person-period data to introduce to the rest of the outcome data
+    pp3
+  }
+
+  #6.1.3 Apply to BD and suicidality person-period datasets
+  bd_pp <- add_cov(bd_pp)
+  su_pp <- add_cov(su_pp)
+
+} else {
+  message("No covariates_file provided or found; proceeding without age/sex/site/family/race covariates.")
+}
+
+#6.2 Attach covariates to panel datasets per-wave
+#6.2.1 Check if the covariates dataframe exists before proceeding
+if (exists("cov_df")) {
+  
+  #6.2.2 Define a function to add covariates and create centering variables for panel data
+  add_cov_panel <- function(pn) {
+    out <- pn %>%
+      left_join_guard(
+        cov_df, 
+        by = c("participant_id" = "participant_id", "wave" = "session_id")) %>%
+      dplyr::rename(age_wave = age)
+
+    #6.2.3 Join the panel data with covariates, matching on participant ID and wave/session
+    out %>%
+      mutate(
+        age_wave_gmc = age_wave - mean(age_wave, na.rm = TRUE)) %>%
+      group_by(participant_id) %>%
+      mutate(
+        age_wave_person_mean = mean(age_wave, na.rm = TRUE),
+        age_wave_cwc = age_wave - age_wave_person_mean) %>%
+      ungroup() %>%
+      mutate(
+        age_wave_between = age_wave_person_mean - mean(age_wave, na.rm = TRUE))
+  }
+
+  #6.2.4 Apply the covariate addition function to both panel per-wave datasets
+  bd_panel <- add_cov_panel(bd_panel)
+  su_panel <- add_cov_panel(su_panel)
+}
+
+```
+
+## 7. Save Output Data 
+
+Write analysis-ready datasets (person-period and per-wave for BD and suicidality) to CSV and RDS using consistent filenames and overwrite guards
+
+```{r save outputs}
+
+## 7. Save outputs (with overwrite rules) ##
+
+#7.1 Save person-period data
+#7.1.1 BD person-period
+if ((file.exists(bd_rds) || file.exists(bd_csv)) && isFALSE(params$overwrite)) {
+  message("BD person-period exists; skipping write.")
+} else {
+  readr::write_csv(bd_pp, bd_csv)
+  saveRDS(bd_pp, bd_rds)
+}
+
+#7.1.2 Suicidality person-period
+if ((file.exists(su_rds) || file.exists(su_csv)) && isFALSE(params$overwrite)) {
+  message("Suicidality person-period exists; skipping write.")
+} else {
+  readr::write_csv(su_pp, su_csv)
+  saveRDS(su_pp, su_rds)
+}
+
+
+#7.2 Save panel per-wave datasets
+#7.2.1 BD panel per-wave data
+if ((file.exists(bd_panel_rds) || file.exists(bd_panel_csv)) && isFALSE(params$overwrite)) {
+  message("BD panel exists; skipping write.")
+} else {
+  readr::write_csv(bd_panel, bd_panel_csv); saveRDS(bd_panel, bd_panel_rds)
+}
+
+#7.2.2 Suicidality panel per-wave data
+if ((file.exists(su_panel_rds) || file.exists(su_panel_csv)) && isFALSE(params$overwrite)) {
+  message("Suicidality panel exists; skipping write.")
+} else {
+  readr::write_csv(su_panel, su_panel_csv); saveRDS(su_panel, su_panel_rds)
+}
+
+```
+
+
+## 8. Perform Checks that the Outcome Data was Generated as Expected
+
+Run dynamic QC: 
+
+* ID/coverage integrity, 
+* one-onset-per-subject rule, 
+* baseline-exclusion enforcement, 
+* parity between panel-detected onsets and person-period events, 
+* covariate missingness, 
+* age monotonicity, 
+* and cluster label presence post-merge
+
+We also include quick incidence-by-wave plots and a roll-up table so any logic errors will hopefully be caught before modeling
+
+```{r validation checks, echo = FALSE, warning = FALSE}
+
+## 8. Validation Checks: structure, coherence, and coverage ##
+
+#8.1 Basic shape & ID integrity
+#8.1.1 Cluster label coverage in outcomes
+ids_labels  <- unique(labels_tbl$participant_id)
+ids_outcome <- unique(out_core$participant_id)
+
+#8.1.2 Determine the difference between cluster label and outcome data
+id_only_in_labels  <- setdiff(ids_labels, ids_outcome)
+id_only_in_outcome <- setdiff(ids_outcome, ids_labels)
+
+#8.1.3 Build a table outlining cluster/outcome coverage
+shape_tbl <- tibble::tibble(
+  Check = c("N participants with cluster labels", "N participants with outcome rows", "Labels not found in outcome", "Outcome IDs missing labels"),
+  Value = c(length(ids_labels), length(ids_outcome), length(id_only_in_labels), length(id_only_in_outcome))
+)
+
+#8.1.4 Print the cluster/outcome coverage table
+knitr::kable(shape_tbl, caption = "8.1 ID/Shape Integrity") 
+
+#8.2 Check person-period invariants
+#8.2.1 At most one first-onset per (id,outcome)
+pp_one_onset <- function(pp) {
+  pp %>%
+    dplyr::group_by(participant_id, outcome) %>%
+    dplyr::summarise(
+      n_onsets = sum(event == 1L, na.rm = TRUE),
+      any_na = any(is.na(event)),
+      .groups = "drop") %>%
+    dplyr::summarise(
+      n_subjects = dplyr::n(),
+      n_multi_onsets = sum(n_onsets > 1L),
+      n_with_event_NA = sum(any_na),
+      .groups = "drop"
+    )
+}
+
+#8.2.2 Apply the person-period checks
+pp_bd_chk <- pp_one_onset(bd_pp)
+pp_su_chk <- pp_one_onset(su_pp)
+
+#8.2.3 Print the person-period checks
+knitr::kable(pp_bd_chk, caption = "8.2.1 BD person-period: one-onset rule") 
+knitr::kable(pp_su_chk, caption = "8.2.2 Suicidality person-period: one-onset rule")
+
+#8.2.4 No baseline-at-risk rows for baseline-positive cases
+#8.2.4.1 Create a function to check
+pp_baseline_viol <- function(pp, baseline_wave) {
+  sum(pp$start_wave == baseline_wave & dplyr::coalesce(pp$baseline_status, 0L) == 1L)
+}
+
+#8.2.4.2 Check for incorrect baseline BD and suicidality rows
+bd_baseline_viol <- pp_baseline_viol(bd_pp, params$baseline_wave)
+su_baseline_viol <- pp_baseline_viol(su_pp, params$baseline_wave)
+
+#8.2.4.3 Print the check for incorrect baseline BD and suicidality rows as a table
+knitr::kable(
+  tibble::tibble(Dataset = c("BD person-period","Suicidality person-period"),
+                 BaselineAtRiskViolations = c(bd_baseline_viol, su_baseline_viol)),
+  caption = "8.2.3 Baseline-positive excluded from at-risk time"
+)
+
+#8.2.5 Event<-> status coherence versus panel (onset-by-wave parity)
+#      Define onset in panels as: status==1 AND (prior status != 1), where prior for the first Y2 wave uses baseline status
+
+#8.2.5.1 Build onset counts for BD panel
+bd_onset_panel <- bd_panel %>%
+  dplyr::arrange(participant_id, outcome, wave) %>%
+  dplyr::group_by(participant_id, outcome) %>%
+  dplyr::mutate(
+    prev_status = dplyr::lag(status),
+    onset = dplyr::case_when(
+      is.na(prev_status) ~ (dplyr::coalesce(baseline_status_bd, 0L) == 0L & status == 1L),
+      TRUE ~ (prev_status != 1L & status == 1L))) %>%
+  dplyr::ungroup() %>%
+  dplyr::group_by(outcome, wave) %>%
+  dplyr::summarise(onsets_panel = sum(onset, na.rm = TRUE), .groups = "drop")
+
+#8.2.5.2 Build onset counts for BD person-period
+bd_onset_pp <- bd_pp %>%
+  dplyr::group_by(outcome, end_wave) %>%
+  dplyr::summarise(onsets_pp = sum(event == 1L, na.rm = TRUE), .groups = "drop") %>%
+  dplyr::rename(wave = end_wave)
+
+#8.2.5.3 Compare BD person-period & panel counts
+bd_onset_compare <- dplyr::full_join(bd_onset_panel, bd_onset_pp, by = c("outcome","wave")) %>%
+  dplyr::mutate(diff = onsets_panel - onsets_pp)
+
+#8.2.5.4 Print the BD panel x person-period comparison results
+knitr::kable(bd_onset_compare %>% dplyr::arrange(outcome, wave),
+             caption = "8.2.4 BD: panel-detected onsets vs person-period events (parity check)")
+
+#8.2.5.5 Build onset counts for Suicidality panel (restricted to end wave cap)
+su_onset_panel <- su_panel %>%
+  dplyr::filter(as.character(wave) <= params$max_suic_end_wave) %>%
+  dplyr::arrange(participant_id, outcome, wave) %>%
+  dplyr::group_by(participant_id, outcome) %>%
+  dplyr::mutate(
+    prev_status = dplyr::lag(status),
+    onset = dplyr::case_when(
+      is.na(prev_status) ~ (dplyr::coalesce(baseline_status_su, 0L) == 0L & status == 1L),
+      TRUE ~ (prev_status != 1L & status == 1L))) %>%
+  dplyr::ungroup() %>%
+  dplyr::group_by(outcome, wave) %>%
+  dplyr::summarise(onsets_panel = sum(onset, na.rm = TRUE), .groups = "drop")
+
+#8.2.5.6 Build onset counts for Suicidality person-period
+su_onset_pp <- su_pp %>%
+  dplyr::group_by(outcome, end_wave) %>%
+  dplyr::summarise(onsets_pp = sum(event == 1L, na.rm = TRUE), .groups = "drop") %>%
+  dplyr::rename(wave = end_wave)
+
+#8.2.5.7 Compare suicidality person-period & panel counts
+su_onset_compare <- dplyr::full_join(su_onset_panel, su_onset_pp, by = c("outcome","wave")) %>%
+  dplyr::mutate(diff = onsets_panel - onsets_pp)
+
+#8.2.5.8 Print the suicidality panel x person-period comparison results
+knitr::kable(su_onset_compare %>% dplyr::arrange(outcome, wave),
+             caption = "8.2.5 Suicidality: panel-detected onsets vs person-period events (parity check)")
+
+#8.3 Covariate coverage & centering sanity check
+#8.3.1 Missingness in key covariates for person-period data
+pp_missing <- function(df, label) {
+  vars <- intersect(c("age_start","age_end","age_mid","age_mid_gmc","age_mid_cwc",
+                      "sex","site_factor","family_id","race_ethnicity"), 
+                    names(df))
+  if (length(vars) == 0) return(NULL)
+  tibble::tibble(
+    Dataset = label,
+    Variable = vars,
+    N = nrow(df),
+    Missing = purrr::map_int(vars, ~ sum(is.na(df[[.x]]))),
+    PctMissing = round(100 * Missing / N, 2)
+  )
+}
+
+miss_bd <- pp_missing(bd_pp, "BD person-period")
+miss_su <- pp_missing(su_pp, "Suicidality person-period")
+
+miss_tbl <- dplyr::bind_rows(miss_bd, miss_su)
+if (!is.null(miss_tbl)) {
+  knitr::kable(miss_tbl, caption = "8.3.1 Covariate missingness in person-period datasets")
+}
+
+#8.3.2 Panel covariate missingness
+panel_missing <- function(df, label) {
+  vars <- intersect(c("age_wave","age_wave_gmc","age_wave_cwc",
+                      "sex","site_factor","family_id","race_ethnicity"),
+                    names(df))
+  if (length(vars) == 0) return(NULL)
+  tibble::tibble(
+    Dataset = label,
+    Variable = vars,
+    N = nrow(df),
+    Missing = purrr::map_int(vars, ~ sum(is.na(df[[.x]]))),
+    PctMissing = round(100 * Missing / N, 2)
+  )
+}
+
+miss_bd_p <- panel_missing(bd_panel, "BD panel (per-wave)")
+miss_su_p <- panel_missing(su_panel, "Suicidality panel (per-wave)")
+
+miss_panel_tbl <- dplyr::bind_rows(miss_bd_p, miss_su_p)
+if (!is.null(miss_panel_tbl)) {
+  knitr::kable(miss_panel_tbl, caption = "8.3.2 Covariate missingness in panel datasets")
+}
+
+#8.3.3 Monotonic age check across waves
+if (exists("cov_df")) {
+  age_mono <- cov_df %>%
+    dplyr::arrange(participant_id, session_id) %>%
+    dplyr::group_by(participant_id) %>%
+    dplyr::summarise(
+      has_violation = any(diff(age) < -1e-6, na.rm = TRUE),
+      .groups = "drop")
+  n_age_viols <- sum(age_mono$has_violation, na.rm = TRUE)
+  knitr::kable(
+    tibble::tibble(Check = "Participants with decreasing age across waves",
+                   Count = n_age_viols),
+    caption = "8.3.3 Age monotonicity check")
+}
+
+#8.4 Cluster availability after merges
+cluster_cov_chk <- tibble::tibble(
+  Dataset = c("BD person-period","Suicidality person-period","BD panel","Suicidality panel"),
+  N_rows  = c(nrow(bd_pp), nrow(su_pp), nrow(bd_panel), nrow(su_panel)),
+  Missing_cluster = c(sum(is.na(bd_pp$cluster)),
+                      sum(is.na(su_pp$cluster)),
+                      sum(is.na(bd_panel$cluster)),
+                      sum(is.na(su_panel$cluster)))
+)
+
+knitr::kable(cluster_cov_chk, caption = "8.4 Cluster label presence after joins")
+
+#8.5 Quick incidence-by-wave QC plots
+#8.5.1 BD events by outcome & wave
+bd_events_by_wave <- bd_pp %>%
+  dplyr::group_by(outcome, end_wave) %>%
+  dplyr::summarise(events = sum(event == 1L, na.rm = TRUE), .groups = "drop")
+
+p_bd_events <- ggplot(bd_events_by_wave, aes(x = end_wave, y = events)) +
+  geom_col() +
+  facet_wrap(~ outcome, scales = "free_y") +
+  labs(title = "First-onset events by wave (BD outcomes)",
+       x = "Wave (interval end)", y = "Event count") +
+  theme_minimal(base_size = 13)
+
+print(p_bd_events)
+
+#8.5.2 Suicidality events by outcome & wave
+su_events_by_wave <- su_pp %>%
+  dplyr::group_by(outcome, end_wave) %>%
+  dplyr::summarise(events = sum(event == 1L, na.rm = TRUE), .groups = "drop")
+
+p_su_events <- ggplot(su_events_by_wave, aes(x = end_wave, y = events)) +
+  geom_col() +
+  facet_wrap(~ outcome, scales = "free_y") +
+  labs(title = "First-onset events by wave (Suicidality outcomes)",
+       x = "Wave (interval end)", y = "Event count") +
+  theme_minimal(base_size = 13)
+
+print(p_su_events)
+
+#8.6 Compact roll-up summary
+rollup_tbl <- tibble::tibble(
+  Check  = c("PP one-onset violations (BD)", "PP one-onset violations (Suicidality)",
+             "Baseline-at-risk violations (BD)", "Baseline-at-risk violations (Suicidality)",
+             "Parity mismatches present (BD)", "Parity mismatches present (Suicidality)"),
+  Value  = c(pp_bd_chk$n_multi_onsets, pp_su_chk$n_multi_onsets,
+             bd_baseline_viol, su_baseline_viol,
+             sum(bd_onset_compare$diff != 0, na.rm = TRUE),
+             sum(su_onset_compare$diff != 0, na.rm = TRUE)))
+
+knitr::kable(rollup_tbl, caption = "8.6 Roll-up of key validation checks")
+
+```

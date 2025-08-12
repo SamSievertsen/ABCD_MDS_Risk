@@ -50,6 +50,7 @@ library(inflection)
 library(furrr)
 library(purrr)
 library(glue)
+library(here)
 library(progressr)
 handlers("txtprogressbar")
 
@@ -86,7 +87,7 @@ set.seed(123)
 scaling_method <- params$scaling_method
 
 # List project repository location
-REPO <- "/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk"
+REPO <- here()
 
 # List path to checkpoint dirs for kproto + validation RDS
 kproto_dir <- file.path(REPO, "data/data_processed", "kproto_results")
@@ -195,7 +196,7 @@ In this step we:
 #1.1 k values & file paths
 k_vals <- 2:8
 proto_file <- file.path(kproto_dir, sprintf("kproto_%s.rds", scaling_method))
-validation_file<- file.path(validation_dir, sprintf("val_%s_silhouette.rds", scaling_method))
+validation_file <- file.path(validation_dir, sprintf("val_%s_silhouette.rds", scaling_method))
 
 #1.2 Load or compute k‐prototype list depending upon whether it already exists or not
 if (! file.exists(proto_file)) {
