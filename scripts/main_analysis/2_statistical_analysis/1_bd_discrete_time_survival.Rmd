@@ -15,7 +15,7 @@ params:
   run_influence: false
   seed: 123
   link_primary: "logit"
-  #ages_pred: !r c(12,14,16)    # representative ages (~ the mean) for marginal hazard plots/tables if desired (currently using median ages)
+  ages_pred: !r c()    # representative ages (~ the mean) for marginal hazard plots/tables if desired (currently using median ages)
   wave_ref: "ses-04A"
 ---
 
