@@ -333,6 +333,19 @@
       ],
       "Hash": "45f0398006e83a5b10b72a90663d8d8c"
     },
+    "RSpectra": {
+      "Package": "RSpectra",
+      "Version": "0.16-2",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "Matrix",
+        "R",
+        "Rcpp",
+        "RcppEigen"
+      ],
+      "Hash": "5ffd7a70479497271e57cd0cc2465b3b"
+    },
     "Rcpp": {
       "Package": "Rcpp",
       "Version": "1.0.14",
@@ -381,6 +394,17 @@
         "Rcpp"
       ],
       "Hash": "6659c0ecb7b85f322f93e7f1e6ac7d35"
+    },
+    "RcppTOML": {
+      "Package": "RcppTOML",
+      "Version": "0.2.3",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R",
+        "Rcpp"
+      ],
+      "Hash": "23eeca7d3c7d63fc7449108c0a66178c"
     },
     "Rdpack": {
       "Package": "Rdpack",
@@ -1298,6 +1322,19 @@
       "Repository": "CRAN",
       "Hash": "680887028577f3fa2a81e410ed0d6e42"
     },
+    "fastDummies": {
+      "Package": "fastDummies",
+      "Version": "1.7.5",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R",
+        "data.table",
+        "stringr",
+        "tibble"
+      ],
+      "Hash": "cf5006965714fead6732d50eebbf2cde"
+    },
     "fastmap": {
       "Package": "fastmap",
       "Version": "1.2.0",
@@ -1777,6 +1814,16 @@
         "vctrs"
       ],
       "Hash": "9171f898db9d9c4c1b2c745adc2c1ef1"
+    },
+    "here": {
+      "Package": "here",
+      "Version": "1.0.1",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "rprojroot"
+      ],
+      "Hash": "24b224366f9c2e7534d2344d10d59211"
     },
     "highr": {
       "Package": "highr",
@@ -2804,6 +2851,16 @@
       ],
       "Hash": "6b8177fd19982f0020743fadbfdbd933"
     },
+    "png": {
+      "Package": "png",
+      "Version": "0.1-8",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R"
+      ],
+      "Hash": "bd54ba8a0a5faded999a7aab6e46b374"
+    },
     "polynom": {
       "Package": "polynom",
       "Version": "1.4-1",
@@ -3177,6 +3234,28 @@
       ],
       "Hash": "bb5996d0bd962d214a11140d77589917"
     },
+    "reticulate": {
+      "Package": "reticulate",
+      "Version": "1.43.0",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "Matrix",
+        "R",
+        "Rcpp",
+        "RcppTOML",
+        "graphics",
+        "here",
+        "jsonlite",
+        "methods",
+        "png",
+        "rappdirs",
+        "rlang",
+        "utils",
+        "withr"
+      ],
+      "Hash": "0b3db378d9940f6846a626b24352530a"
+    },
     "rlang": {
       "Package": "rlang",
       "Version": "1.1.5",
@@ -3251,6 +3330,16 @@
         "stats"
       ],
       "Hash": "b3d390424f41d04174cccf84d49676c2"
+    },
+    "rprojroot": {
+      "Package": "rprojroot",
+      "Version": "2.0.4",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R"
+      ],
+      "Hash": "4c8415e0ec1e29f3f4f6fc108bef0144"
     },
     "rrcov": {
       "Package": "rrcov",
@@ -3952,6 +4041,23 @@
         "cpp11"
       ],
       "Hash": "f561504ec2897f4d46f0c7657e488ae1"
+    },
+    "umap": {
+      "Package": "umap",
+      "Version": "0.2.10.0",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "Matrix",
+        "R",
+        "RSpectra",
+        "Rcpp",
+        "methods",
+        "openssl",
+        "reticulate",
+        "stats"
+      ],
+      "Hash": "249dae2d91909b98bc93086d82cd7c7f"
     },
     "urca": {
       "Package": "urca",
