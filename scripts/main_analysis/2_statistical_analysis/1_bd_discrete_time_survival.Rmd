@@ -54,7 +54,9 @@ suppressPackageStartupMessages({
   library(here); 
   library(stringr); 
   library(ggplot2);
-  library(kableExtra)
+  library(kableExtra);
+  library(DHARMa);
+  library(see)
 })
 
 # Set seed for reproducibility
@@ -113,7 +115,7 @@ knitr::kable(sizes_tbl, caption = "Dataset size check")  %>%
 cluster_levels <- levels(bd_pp$cluster)
 bd_pp_model <- bd_pp_model %>%
   mutate(
-    cluster = forcats::fct_relevel(cluster, cluster_levels),
+    cluster = forcats::fct_relevel(cluster, "C2"),
     end_wave = forcats::fct_relevel(end_wave, "ses-02A", "ses-04A", "ses-06A"),
     sex = forcats::fct_relevel(sex, "Female"),
     site_factor = forcats::fct_relevel(site_factor, "site01"))
@@ -145,60 +147,73 @@ Estimate discrete-time hazards with a logit link for first-onset bipolar outcome
 
 **Why discrete-time hazard (DTH)?**
 
-* DTH models the probability of an onset within an interval, conditional on no prior onset. With assessments at distinct waves in ABCD, it is good practice here for us to:
+-   DTH models the probability of an onset within an interval, conditional on no prior onset. With assessments at distinct waves in ABCD, it is good practice here for us to:
 
-  * Encode each interval as a row (person-period format)
-  * Flexibly estimate the baseline hazard via wave fixed effects (i.e., dummies for 02A, 04A, 06A)
-  * Include static and time-varying predictors alongside the hazard
-  * This matches standard practice for event occurrence with panel waves (Singer & Willett; UCLA tutorials)
+    -   Encode each interval as a row (person-period format)
+    -   Flexibly estimate the baseline hazard via wave fixed effects (i.e., dummies for 02A, 04A, 06A)
+    -   Include static and time-varying predictors alongside the hazard
+    -   This matches standard practice for event occurrence with panel waves (e.g., Singer & Willett)
+
+**Why discrete-time GLMM instead of a “true” survival model?**
+
+-   ABCD follow-ups occur at distinct waves (02A, 04A, 06A). Event times are interval-censored by design, so a discrete-time hazard is the natural model: each row is an interval with a Bernoulli first-onset indicator given survival up to the start of that interval
+-   With discrete time, a logistic link on person-period data and fixed effects for wave provide a flexible baseline hazard (no proportional hazards assumption on calendar time). Our inclusion of within- vs between-person age further disentangles age effects from assessment timepoint/cohort
+-   The GLMM formulation lets us model multilevel dependence (participant, family, site) and obtain cluster-robust inferences. This multilevel structure is less straightforward in a vanilla Cox model when time is only known at waves
+-   We still check a cloglog link as sensitivity. For small interval hazards, cloglog approximates a continuous-time proportional hazards model; our results can be compared to Cox-style interpretations
+-   If needed later, we can also fit a piece-wise exponential model or interval-censored survival for attained-age time scale; however, given ABCD’s assessment timepoint structure and our focus on wave-indexed hazards with rich random-effects structure, the discrete-time GLMM is well-aligned with the data-collection process and our scientific questions
 
 **How we handle age (critical for interpretation)**
 
-* Our build steps created:
+-   Our build steps created:
 
-  * `age_mid`: midpoint age for each interval
-  * `age_mid_cwc`: within-person centered age = `age_mid − person_mean(age_mid)` (captures aging within individuals)
-  * `age_mid_between`: between-person age = `person_mean(age_mid) − grand_mean(age_mid)` (captures older vs younger people on average)
-* Best practice in longitudinal models is to include both pieces (within & between) to avoid conflating them. This is the within-between (Mundlak/hybrid) decomposition
+    -   `age_mid`: midpoint age for each interval
+    -   `age_mid_cwc`: within-person centered age = `age_mid − person_mean(age_mid)` (captures aging within individuals)
+    -   `age_mid_between`: between-person age = `person_mean(age_mid) − grand_mean(age_mid)` (captures older vs younger people on average)
 
-  * Interpretation:
+-   Best practice in longitudinal models is to include both pieces (within & between) to avoid conflating them. This is the within-between (Mundlak/hybrid) decomposition
 
-    * `age_mid_cwc` -> change in hazard as the same person ages across waves (holding their average age constant).
-    * `age_mid_between` -> difference in hazard for people who are on average older vs younger in this sample.
-  * We interact cluster × age_mid_between to ask: do cluster differences widen or narrow at older average ages? We retain `age_mid_cwc` as a main effect to absorb within-person aging while wave FEs capture baseline time-since-baseline risk.
+    -   Interpretation:
+
+        -   `age_mid_cwc` -\> change in hazard as the same person ages across waves (holding their average age constant)
+        -   `age_mid_between` -\> difference in hazard for people who are on average older vs younger in this sample
+
+    -   We interact cluster × age_mid_between to ask: do cluster differences widen or narrow at older average ages? We retain `age_mid_cwc` as a main effect to absorb within-person aging while wave FEs capture baseline time-since-baseline risk
 
 **Model we fit per outcome**
 
-* Fixed effects (core):
+-   Fixed effects (core):
 
-  * `cluster * age_mid_between + age_mid_cwc + baseline_outcome + sex + site_factor + wave FEs`
-  * `baseline_outcome` excludes at-risk time for baseline-positive cases and adjusts residual differences at first modeled wave.
-* Random effects:
+    -   `cluster * age_mid_between + age_mid_cwc + baseline_outcome + sex + site_factor + wave FEs`
+    -   `baseline_outcome` excludes at-risk time for baseline-positive cases and adjusts residual differences at first modeled wave
 
-  * `(1 | participant_id)` to account for repeated intervals within individuals.
-  * `(1 | family_id)` to account for familial clustering.
-* Estimation and inference:
+-   Random effects:
 
-  * Fit with `lme4::glmer(family = binomial)`, optimizer fallback to bobyqa if needed.
-  * Report model-based CIs and cluster-robust (CR2) SEs using `clubSandwich::vcovCR(..., cluster = family_id, type = "CR2")`.
-* Diagnostics & reporting:
+    -   `(1 | participant_id)` to account for repeated intervals within individuals.
+    -   `(1 | family_id)` to account for familial clustering
 
-  * Convergence checks; leave-one-family-out sensitivity; predicted hazards by cluster across representative ages; calibration (deciles of risk) and interval AUCs; compact tables via `broom.mixed`/`performance`.
+-   Estimation and inference:
+
+    -   Fit with `lme4::glmer(family = binomial)`, optimizer fallback to bobyqa if needed
+    -   Report model-based CIs and cluster-robust (CR2) SEs using `clubSandwich::vcovCR(..., cluster = family_id, type = "CR2")`
+
+-   Diagnostics & reporting:
+
+    -   Convergence checks; leave-one-family-out sensitivity; predicted hazards by cluster across representative ages; calibration (deciles of risk) and interval AUCs; compact tables via `broom.mixed`/`performance`
 
 > *Note on time scale:* Here we use wave as the time scale with age decomposition (within & between). As a sensitivity, we may later re-express the data on attained age as the time scale; in that case, the baseline hazard would absorb age and we would omit age as a covariate, adjusting instead for cohort/period if needed.
 
 ## 1. Create Helper Functions to Use for Conducting Analyses
 
-* `build_formula()`: Discrete-time hazard GLMM with wave fixed effects (baseline hazard), within/between age decomposition, and random intercepts for site, participant, and family
-* `fit_glmer_safe()`: Robust GLMM fitter with `bobyqa` + fallback; supports logit (primary) and cloglog (sensitivity)
-* `tidy_wald()`: Fixed-effect ORs with Wald CIs
-* `tidy_cr2()`: Cluster-robust (CR2) SEs and CIs, clustered by `family_id` (recommended small/medium cluster correction)
-* `pred_grid_by_age()`: Marginal predicted first-onset hazards by cluster across chosen ages (empirical medians), fixing within-age = 0 and wave = `params$wave_ref`
-* `calibration_df()`: Decile-bin calibration (predicted vs observed)
-* `auc_interval()`: Interval-level ROC AUC (QC indicator; marginal)
-* `diag_report()`: Singularity and overdispersion checks
-* `cluster_contrasts_by_age()`: `emmeans` pairwise cluster ORs at the chosen ages
-    
+-   `build_formula()`: Discrete-time hazard GLMM with wave fixed effects (baseline hazard), within/between age decomposition, and random intercepts for site, participant, and family
+-   `fit_glmer_safe()`: Robust GLMM fitter with `bobyqa` + fallback; supports logit (primary) and cloglog (sensitivity)
+-   `tidy_wald()`: Fixed-effect ORs with Wald CIs
+-   `tidy_cr2()`: Cluster-robust (CR2) SEs and CIs, clustered by `family_id` (recommended small/medium cluster correction)
+-   `pred_grid_by_age()`: Marginal predicted first-onset hazards by cluster across chosen ages (empirical medians), fixing within-age = 0 and wave = `params$wave_ref`
+-   `calibration_df()`: Decile-bin calibration (predicted vs observed)
+-   `auc_interval()`: Interval-level ROC AUC (QC indicator; marginal)
+-   `diag_report()`: Singularity and overdispersion checks
+-   `cluster_contrasts_by_age()`: `emmeans` pairwise cluster ORs at the chosen ages
+
 ```{r helper function, warning = FALSE}
 
 ## 1. Create helper functions for building, fitting, and summarizing models ##
@@ -293,14 +308,23 @@ auc_interval <- function(fit, data) {
   pROC::roc(response = data$event, predictor = pr, quiet = TRUE)$auc %>% as.numeric()
 }
 
-#1.8 Create diagnostics helpers to ensure models meet assumption checks
+#1.8 Diagnostics: singularity, dispersion, groups, convergence, max VIF
 diag_report <- function(fit) {
   is_sing <- tryCatch(lme4::isSingular(fit, tol = 1e-4), error = function(e) NA)
   overK <- tryCatch(performance::check_overdispersion(fit)$dispersion_ratio, error = function(e) NA_real_)
-  n_id <- tryCatch(length(lme4::getME(fit, "flist")$participant_id), error = function(e) NA_integer_)
-  n_fam <- tryCatch(length(lme4::getME(fit, "flist")$family_id), error = function(e) NA_integer_)
-  n_site <- tryCatch(length(lme4::getME(fit, "flist")$site_factor), error = function(e) NA_integer_)
-  tibble(is_singular = is_sing, overdispersion_K = overK, n_groups_participant = n_id, n_groups_family = n_fam, n_groups_site = n_site)
+  conv <- tryCatch(performance::check_convergence(fit)$converged, error = function(e) NA)
+  vif_max <- tryCatch(max(performance::check_collinearity(fit)$VIF, na.rm = TRUE), error = function(e) NA_real_)
+  fl <- tryCatch(lme4::getME(fit, "flist"), error = function(e) NULL)
+  n_id <- if (!is.null(fl) && "participant_id" %in% names(fl)) nlevels(fl$participant_id) else NA_integer_
+  n_fam <- if (!is.null(fl) && "family_id" %in% names(fl)) nlevels(fl$family_id) else NA_integer_
+  n_site <- if (!is.null(fl) && "site_factor" %in% names(fl)) nlevels(fl$site_factor) else NA_integer_
+  tibble(is_singular = is_sing,
+         converged = conv,
+         overdispersion_K = overK,
+         max_VIF = vif_max,
+         n_groups_participant = n_id,
+         n_groups_family = n_fam,
+         n_groups_site = n_site)
 }
 
 #1.9 Build a function to conduct cluster contrasts at representative ages (emmeans on linear predictor) that builds EMMs at: within=0, wave=ref, and between set to represent ages
@@ -346,14 +370,96 @@ keep_terms <- function(df) {
     )
 }
 
+#1.13 Refit if boundary (drop ~0 variance RE)
+refit_if_boundary <- function(fit, form, data, link) {
+  vc <- tryCatch(lme4::VarCorr(fit), error = function(e) NULL)
+  if (is.null(vc)) return(fit)
+  vv <- sapply(vc, function(x) attr(x, "stddev")^2)
+  tiny <- names(vv)[vv < 1e-8]
+  if (length(tiny) == 0) return(fit)
+  msg <- paste0("Dropping near-zero RE: ", paste(tiny, collapse = ", "))
+  message(msg)
+  form2 <- update.formula(form, . ~ .)
+  if ("participant_id" %in% tiny) form2 <- update.formula(form2, . ~ . - (1 | participant_id))
+  if ("family_id" %in% tiny)      form2 <- update.formula(form2, . ~ . - (1 | family_id))
+  if ("site_factor" %in% tiny)    form2 <- update.formula(form2, . ~ . - (1 | site_factor))
+  fit_glmer_safe(form2, data, link = link)
+}
+
+#1.14 Compute Brier score (lower is better; calibration-weighted accuracy)
+brier_score <- function(obs, pr) {
+  obs <- as.numeric(obs)
+  mean((obs - pr)^2, na.rm = TRUE)
+}
+
+#1.15 Compute log loss (binary cross-entropy)
+log_loss <- function(obs, pr, eps = 1e-12) {
+  obs <- as.numeric(obs)
+  prc <- pmin(pmax(pr, eps), 1 - eps)
+  -mean(obs * log(prc) + (1 - obs) * log(1 - prc), na.rm = TRUE)
+}
+
+#1.16 Summarize performance per fit (R2, Brier, LogLoss); robust to GLMMs
+perf_metrics <- function(fit, data) {
+  pr <- try(predict(fit, type = "response", re.form = NA), silent = TRUE)
+  R2m <- R2c <- NA_real_
+  if (inherits(try(performance::r2_nakagawa, silent = TRUE), "function")) {
+    r2 <- try(performance::r2_nakagawa(fit), silent = TRUE)
+    if (!inherits(r2, "try-error")) {
+      R2m <- as.numeric(r2$R2_marginal)
+      R2c <- as.numeric(r2$R2_conditional)
+    }
+  }
+  bs <- if (!inherits(pr, "try-error")) brier_score(data$event, pr) else NA_real_
+  ll <- if (!inherits(pr, "try-error")) log_loss(data$event, pr) else NA_real_
+  tibble(R2_marginal = R2m, R2_conditional = R2c, Brier = bs, LogLoss = ll)
+}
+
+#1.17 Save performance::check_model() panel to file
+save_check_model_plots <- function(fit, tag, width = 9, height = 6, dpi = 220) {
+  cm <- try(performance::check_model(fit), silent = TRUE)
+  if (inherits(cm, "try-error")) return(NULL)
+  p <- try(if (requireNamespace("see", quietly = TRUE)) see::plot(cm) else cm, silent = TRUE)
+  if (inherits(p, "try-error")) return(NULL)
+  fn <- file.path(OUT_DIR, glue::glue("check_model_{tag}.png"))
+  if (requireNamespace("ragg", quietly = TRUE)) {
+    ggplot2::ggsave(filename = fn, plot = p, device = ragg::agg_png, width = width, height = height, units = "in", dpi = dpi)
+  } else {
+    ggplot2::ggsave(filename = fn, plot = p, width = width, height = height, units = "in", dpi = dpi)
+  }
+  tibble(file = fn)
+}
+
+#1.18 Save DHARMa residual plots and tests; guarded if DHARMa missing
+save_dharma_plots_and_tests <- function(fit, tag) {
+  if (!requireNamespace("DHARMa", quietly = TRUE)) return(NULL)
+  sr <- try(DHARMa::simulateResiduals(fit, n = 1000, refit = FALSE), silent = TRUE)
+  if (inherits(sr, "try-error")) return(NULL)
+  fn <- file.path(OUT_DIR, glue::glue("dharma_{tag}.png"))
+  try({
+    if (requireNamespace("ragg", quietly = TRUE)) {
+      ragg::agg_png(filename = fn, width = 1800, height = 1200, units = "px", res = 144)
+    } else {
+      png(filename = fn, width = 1800, height = 1200, res = 144)
+    }
+    plot(sr)
+    dev.off()
+  }, silent = TRUE)
+  td <- try(DHARMa::testDispersion(sr), silent = TRUE)
+  tz <- try(DHARMa::testZeroInflation(sr), silent = TRUE)
+  tibble(file = fn,
+         p_dispersion = if (!inherits(td, "try-error")) td$p.value else NA_real_,
+         p_zeroinfl = if (!inherits(tz, "try-error")) tz$p.value else NA_real_)
+}
+
 ```
 
 ## 2. Fit Discrete-Time Hazard Models
 
-* Iterate over BD outcomes and fit the GLMM once per outcome (primary logit link)
-* Extract Wald and CR2 summaries; compute predicted hazards across ages; calibration; AUC; diagnostics; and `emmeans` cluster contrasts
-* Fit a cloglog model for each outcome as a discrete-hazard sensitivity check and export parallel summaries
-* Persist all results to CSVs (effects, predictions, calibration, AUC, diagnostics, contrasts) and save model objects (`fit_primary_*`, `fit_cloglog_*`) to `OUT_DIR`
+-   Iterate over BD outcomes and fit the GLMM once per outcome (primary logit link)
+-   Extract Wald and CR2 summaries; compute predicted hazards across ages; calibration; AUC; diagnostics; and `emmeans` cluster contrasts
+-   Fit a cloglog model for each outcome as a discrete-hazard sensitivity check and export parallel summaries
+-   Persist all results to CSVs (effects, predictions, calibration, AUC, diagnostics, contrasts) and save model objects (`fit_primary_*`, `fit_cloglog_*`) to `OUT_DIR`
 
 ```{r fit dth models, warning = FALSE}
 
@@ -367,7 +473,11 @@ fits_primary <- list(); wald_primary <- list(); cr2_primary <- list()
 preds_primary <- list(); cal_primary <- list(); auc_primary <- list(); diag_primary <- list(); emm_primary <- list()
 
 #2.2.1 Establish cloglog sensitivity
-fits_sens <- list(); wald_sens <- list(); cr2_sens <- list()  
+fits_sens <- list(); wald_sens <- list(); cr2_sens <- list()
+
+#2.2.2 Also add for diagnostic tests (models)
+perf_primary <- list()
+dharma_tests_primary <- list()
 
 #2.3 Build formula once
 form <- build_formula(link = params$link_primary)
@@ -378,10 +488,13 @@ for (out in OUTCOMES) {
   #2.4.1 Begin the primray fit and levels checks
   message("Fitting primary (", params$link_primary, "): ", out)
   dat_o <- bd_pp_model %>% filter(outcome == out) %>% droplevels()
-  if (nlevels(dat_o$cluster) < nlevels(bd_pp_model$cluster)) message("Note: some clusters absent in outcome = ", out, "; predictions for absent clusters would be extrapolations.")
+  if (nlevels(dat_o$cluster) < nlevels(bd_pp_model$cluster))
+    message(
+      "Note: some clusters absent in outcome = ", out, "; predictions for absent clusters would be extrapolations.")
   
   #2.4.2 Establish primary fit
   fit_o <- fit_glmer_safe(form, dat_o, link = params$link_primary)
+  fit_o <- refit_if_boundary(fit_o, form, dat_o, link = params$link_primary)
   fits_primary[[out]] <- fit_o
   wald_primary[[out]] <- safe_or_null(tidy_wald(fit_o) %>% mutate(outcome = out, model = params$link_primary, .before = 1))
   cr2_primary[[out]] <- safe_or_null(tidy_cr2(fit_o) %>% mutate(outcome = out, model = params$link_primary, .before = 1))
@@ -389,9 +502,33 @@ for (out in OUTCOMES) {
   cal_primary[[out]] <- safe_or_null(calibration_df(fit_o, dat_o) %>% mutate(outcome = out, model = params$link_primary, .before = 1))
   auc_primary[[out]] <- safe_or_null(tibble(outcome = out, model = params$link_primary, AUC = auc_interval(fit_o, dat_o)))
   diag_primary[[out]] <- safe_or_null(diag_report(fit_o) %>% mutate(outcome = out, model = params$link_primary, .before = 1))
-  emm_primary[[out]] <- safe_or_null(cluster_contrasts_by_age(fit_o, dat_o) %>% dplyr::mutate(outcome = out, model = params$link_primary, .before = 1))
   
-  #2.4.3 Perform sensitivity analysis of complementary log-log link
+  #2.4.3 Add model performance metrics (R2, Brier, LogLoss)
+  perf_primary[[out]] <- safe_or_null(perf_metrics(fit_o, dat_o) %>% mutate(outcome = out, model = params$link_primary, .before = 1))
+
+  #2.4.4 Export check_model() panel to PNG (no inline print here)
+  cm_tag <- glue::glue("primary_{out}")
+  cm_info <- safe_or_null(save_check_model_plots(fit_o, cm_tag))
+  if (!is.null(cm_info)) message("check_model saved: ", cm_info$file)
+
+  #2.4.5 Export DHARMa plots and tests; store tests row
+  dh_tag <- glue::glue("primary_{out}")
+  dh_info <- safe_or_null(save_dharma_plots_and_tests(fit_o, dh_tag))
+  if (!is.null(dh_info)) {
+    dharma_tests_primary[[out]] <- dh_info
+    message("DHARMa saved: ", dh_info$file)
+  }
+  
+  #2.4.6 Only compute contrasts if model not singular and >= 2 cluster levels
+  ok_emm <- isTRUE(tryCatch(
+    !lme4::isSingular(fit_o, tol = 1e-4), error = function(e)FALSE)) &&
+    nlevels(dat_o$cluster) >= 2
+  emm_primary[[out]] <- if (ok_emm)
+    safe_or_null(cluster_contrasts_by_age(fit_o, dat_o) %>% dplyr::mutate(outcome = out, model = params$link_primary, .before = 1))
+  else
+    NULL
+  
+  #2.4.7 Perform sensitivity analysis of complementary log-log link
   message("Fitting sensitivity (cloglog): ", out)
   fit_s <- fit_glmer_safe(form, dat_o, link = "cloglog")
   fits_sens[[out]] <- fit_s
@@ -407,6 +544,8 @@ cal_all <- dplyr::bind_rows(purrr::compact(cal_primary))
 auc_all <- dplyr::bind_rows(purrr::compact(auc_primary))
 diag_all <- dplyr::bind_rows(purrr::compact(diag_primary))
 emm_all <- dplyr::bind_rows(purrr::compact(emm_primary))
+perf_all <- dplyr::bind_rows(purrr::compact(perf_primary))
+dharma_tests_all <- dplyr::bind_rows(purrr::compact(dharma_tests_primary))
 
 #2.5.1 Filter tables to terms of interest
 wald_all <- keep_terms(wald_all_raw)
@@ -422,6 +561,8 @@ readr::write_csv(cal_all, file.path(OUT_DIR, "bd_dth_calibration.csv"))
 readr::write_csv(auc_all, file.path(OUT_DIR, "bd_dth_auc.csv"))
 readr::write_csv(diag_all, file.path(OUT_DIR, "bd_dth_diagnostics.csv"))
 readr::write_csv(emm_all, file.path(OUT_DIR, "bd_dth_cluster_contrasts_by_age.csv"))
+readr::write_csv(perf_all, file.path(OUT_DIR, "bd_dth_performance.csv"))
+readr::write_csv(dharma_tests_all, file.path(OUT_DIR, "bd_dth_dharma_tests.csv"))
 
 #2.7 Save models
 purrr::iwalk(fits_primary, ~ saveRDS(.x, file.path(OUT_DIR, glue("fit_primary_{.y}.rds"))))
@@ -443,6 +584,22 @@ if (nrow(diag_all) > 0) {
   message("Diagnostics table empty.")
 }
 
+#2.10 Output model performance diagnostics in the HTML
+if (nrow(perf_all) > 0) {
+  knitr::kable(perf_all, digits = 3, caption = "Model performance (R2 Nakagawa, Brier, LogLoss) - primary link") %>%
+    kableExtra::kable_styling(bootstrap_options = c("striped","hover","condensed","responsive"))
+} else {
+  message("Performance table empty.")
+}
+
+#2.11 Output model DHARMa tests in the HTML
+if (nrow(dharma_tests_all) > 0) {
+  knitr::kable(dharma_tests_all, digits = 3, caption = "DHARMa tests (dispersion, zero-inflation) - primary link") %>%
+    kableExtra::kable_styling(bootstrap_options = c("striped","hover","condensed","responsive"))
+} else {
+  message("DHARMa tests table empty.")
+}
+
 ```
 
 ## 3. Determine Marginal Effects: Hazard by Cluster Across Age
@@ -453,15 +610,21 @@ Generates visualizations of predicted first-onset hazard vs age for each outcome
 
 ## 3. Marginal hazard by cluster across age (wave fixed; within-age = 0) ##
 
-#3.1 Create a plot helper function
+#3.1 Plot helper: clearer labels, wrapped title, compact legend, finer y-axis ticks
 plot_pred <- function(df, title) {
   ggplot(df, aes(x = age_years, y = pred, color = cluster, group = cluster)) +
-    geom_line(size = 1.1) +
-    geom_point(size = 2) +
-    scale_y_continuous(labels = scales::percent_format(accuracy = 0.1)) +
-    labs(title = wrap_title(title, 70), x = "Age (years)", y = "Predicted first-onset hazard (per interval)", color = "Cluster") +
-    theme_minimal(base_size = 9) +
-    theme(legend.position = "bottom", legend.box = "horizontal", plot.title = element_text(lineheight = 0.95))
+    geom_line(size = 1.0) +
+    geom_point(size = 1.8) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 0.01)) +
+    labs(title = wrap_title(title, 70),
+         x = "Age (years)",
+         y = "Predicted first-onset hazard (per interval)",
+         color = "Cluster") +
+    theme_minimal(base_size = 8) +
+    theme(legend.position = "bottom",
+          legend.box = "horizontal",
+          plot.title = element_text(lineheight = 0.95)) +
+    guides(color = guide_legend(nrow = 1))
 }
 
 #3.2 Execute one plot panel per outcome (primary link)
@@ -490,7 +653,7 @@ plot_wave_hazard <- function(fit, data, title) {
   nd$pred <- predict(fit, newdata = nd, type = "response", re.form = NA)
   ggplot(nd, aes(x = end_wave, y = pred)) +
     geom_col() +
-    scale_y_continuous(labels = scales::percent_format(accuracy = 0.1)) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 0.01)) +
     labs(title = wrap_title(title, 70), x = "Wave (interval end)", y = "Baseline hazard (marginal)") +
     theme_minimal(base_size = 9) +
     theme(plot.title = element_text(lineheight = 0.95))
@@ -516,14 +679,18 @@ Creates decile-bin calibration plots (mean predicted vs observed event rate). Th
 
 ## 5. Calibration (decile bins) - primary link ##
 
-#5.1 Create a helper function to plot the decile bin calibration for each primary link
+#5.1 Calibration helper: connect points and wrap title
 plot_cal <- function(df, title) {
+  df <- dplyr::arrange(df, pred_mean)
   ggplot(df, aes(x = pred_mean, y = obs_mean)) +
     geom_point(size = 2) +
+    geom_line() +
     geom_abline(slope = 1, intercept = 0, linetype = 2) +
-    scale_x_continuous(labels = scales::percent_format(accuracy = 0.1)) +
-    scale_y_continuous(labels = scales::percent_format(accuracy = 0.1)) +
-    labs(title = wrap_title(title, 70), x = "Mean predicted hazard", y = "Observed event rate") +
+    scale_x_continuous(labels = scales::percent_format(accuracy = 0.01)) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 0.01)) +
+    labs(title = wrap_title(title, 70),
+         x = "Mean predicted hazard",
+         y = "Observed event rate") +
     theme_minimal(base_size = 11) +
     theme(plot.title = element_text(lineheight = 0.95))
 }
@@ -610,16 +777,14 @@ if (exists("emm_all") && is.data.frame(emm_all) && nrow(emm_all) > 0) {
 
 **Why decompose age?**
 
-* In longitudinal hazards, naive "age" conflates two distinct things:
-  * Aging within the same child (time passing)
-  * Older vs younger children on average (between families/ids)
+-   In longitudinal hazards, naive "age" conflates two distinct things:
+    -   Aging within the same child (time passing)
+    -   Older vs younger children on average (between families/ids)
+-   Including age_mid_cwc + age_mid_between separates these. Interpretation:
+    -   age_mid_cwc: per-person change in hazard as they age (holding their own mean age fixed)
+    -   age_mid_between: difference in hazard for a child whose typical age is higher vs lower than the cohort mean
 
-* Including age_mid_cwc + age_mid_between separates these. Interpretation:
-  * age_mid_cwc: per-person change in hazard as they age (holding their own mean age fixed)
-  * age_mid_between: difference in hazard for a child whose typical age is higher vs lower than the cohort mean
-
-An optional parsimonious alternative would be to use a single centered age. If we end up needing a simpler reporting model, we could fit:
-`event ~ cluster * age_mid_gmc + baseline_status + sex + site_factor + end_wave + (1|id) + (1|family)`; and keep the decomposed model as a sensitivity analysis (this is currently not run here though, to keep runtime minimal)
+An optional parsimonious alternative would be to use a single centered age. If we end up needing a simpler reporting model, we could fit: `event ~ cluster * age_mid_gmc + baseline_status + sex + site_factor + end_wave + (1|id) + (1|family)`; and keep the decomposed model as a sensitivity analysis (this is currently not run here though, to keep runtime minimal)
 
 ## Rounding Out Script
 
@@ -635,4 +800,3 @@ git_hash <- try(system(glue::glue("git -C {REPO} rev-parse --short HEAD"), inter
 if (!inherits(git_hash, "try-error")) writeLines(git_hash, file.path(OUT_DIR, "git_commit.txt"))
 
 ```
-
