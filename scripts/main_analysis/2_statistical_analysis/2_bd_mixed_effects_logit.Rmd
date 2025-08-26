@@ -1,0 +1,328 @@
+---
+title: "2. BD Mixed-Effects Logit (Repeated Status)"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+params:
+  repo: !r Sys.getenv("REPO", unset = here::here())
+  data_dir: "data/data_processed/analysis_datasets/"
+  out_dir: "results/main_analysis/2_bd_mixed_logit"
+  bd_pp_rds: "bd_person_period_k2_robust.rds"
+  bd_pp_csv: "bd_person_period_k2_robust.csv"
+  outcomes: !r c("bipolar_I","bipolar_II","bd_nos","any_bsd")   # levels in `outcome`
+  response_var: "status"                                         # column with interval-status (0/1) at end_wave
+  link_primary: "logit"
+  seed: 123
+  wave_ref: "ses-04A"
+  ages_pred: !r c()                                              # leave empty to use empirical medians
+---
+
+```{r global, include = FALSE}
+# Set global env variables
+knitr::opts_chunk$set(echo = TRUE, cache = FALSE, message = TRUE, warning = TRUE, results = "markup", verbose = TRUE, comment = "")
+
+```
+
+## Data Wrangling
+
+This mirrors script 1: load packages, read the person-period dataset, set references (C2, Female, site01), filter complete cases, compute empirical wave-median ages for plotting, and store them for reproducibility.
+
+```{r environment, echo = FALSE, include = FALSE, warning = FALSE}
+## Load packages, data, & set env ##
+
+suppressPackageStartupMessages({
+  library(dplyr); library(tidyr); library(glue); library(forcats)
+  library(broom); library(broom.mixed); library(lme4); library(performance)
+  library(emmeans); library(pROC); library(patchwork); library(here)
+  library(stringr); library(ggplot2); library(kableExtra); library(readr)
+  library(see); library(DHARMa)
+})
+
+set.seed(params$seed)
+options(scipen = 999, digits = 8)
+
+REPO <- params$repo
+DATA_DIR <- file.path(REPO, params$data_dir)
+OUT_DIR <- file.path(REPO, params$out_dir)
+dir.create(OUT_DIR, recursive = TRUE, showWarnings = FALSE)
+
+read_pp <- function(rds_path, csv_path) {
+  if (file.exists(rds_path)) readRDS(rds_path) else readr::read_csv(csv_path, show_col_types = FALSE)
+}
+
+bd_pp <- read_pp(file.path(DATA_DIR, params$bd_pp_rds), file.path(DATA_DIR, params$bd_pp_csv)) %>%
+  mutate(
+    participant_id = as.character(participant_id),
+    family_id = factor(as.character(family_id)),
+    site_factor = factor(site_factor),
+    cluster = factor(cluster),
+    start_wave = factor(start_wave),
+    end_wave = factor(end_wave),
+    outcome = factor(outcome),
+    sex = factor(sex)
+  ) %>%
+  filter(outcome %in% params$outcomes)
+
+# Require the response column to exist and be 0/1
+stopifnot(params$response_var %in% names(bd_pp))
+bd_pp <- bd_pp %>% mutate(!!params$response_var := as.integer(.data[[params$response_var]]))
+
+bd_pp_model <- bd_pp %>%
+  filter(.data[[params$response_var]] %in% c(0L,1L)) %>%
+  filter(!is.na(cluster), !is.na(age_mid), !is.na(sex), !is.na(site_factor), !is.na(family_id))
+
+cluster_levels <- levels(bd_pp_model$cluster)
+bd_pp_model <- bd_pp_model %>%
+  mutate(
+    cluster = forcats::fct_relevel(cluster, "C2"),
+    end_wave = forcats::fct_relevel(end_wave, "ses-02A", "ses-04A", "ses-06A"),
+    sex = forcats::fct_relevel(sex, "Female"),
+    site_factor = forcats::fct_relevel(site_factor, "site01"))
+
+wave_age_medians <- bd_pp_model %>%
+  group_by(end_wave) %>%
+  summarise(age_med = median(age_mid, na.rm = TRUE), .groups = "drop") %>%
+  arrange(match(end_wave, levels(bd_pp_model$end_wave)))
+readr::write_csv(wave_age_medians, file.path(OUT_DIR, "wave_age_medians.csv"))
+ages_empirical <- wave_age_medians$age_med %>% as.numeric() %>% round(1)
+
+ages_pred_vec <- if (!is.null(params$ages_pred) && length(params$ages_pred) > 0) params$ages_pred else ages_empirical
+
+sizes_tbl <- tibble(Dataset = "BD person-period (model-ready, repeated-status)", Rows = nrow(bd_pp_model), Unique_IDs = dplyr::n_distinct(bd_pp_model$participant_id))
+knitr::kable(sizes_tbl, caption = "Dataset size check") %>% kableExtra::kable_styling(bootstrap_options = c("striped","hover","condensed","responsive"))
+```
+
+## Analysis Overview
+
+**Goal.** Estimate repeated-measures *status* at each wave via a mixed-effects logistic regression. This is *not* first-onset; it targets point-in-time status while adjusting for age, wave, sex, and clustering.
+
+**Model**
+  
+* Fixed: `cluster * age_mid_between + age_mid_cwc + sex + end_wave`
+* Random: `(1 | participant_id) + (1 | family_id) + (1 | site_factor)`
+* Link: `logit` (primary).
+* We optionally add `lag_status` later for state persistence if wanted.
+
+**Outputs** 
+
+OR tables (Wald + CR2), predicted probabilities by cluster × age, calibration and AUC, diagnostics (convergence, singularity, VIF), DHARMa and check\_model panels.
+
+## 1. Helper Functions
+
+```{r helpers, warning = FALSE}
+#1.1 Formula builder
+build_formula <- function(link = c("logit","cloglog")) {
+  link <- match.arg(link)
+  rhs <- paste("cluster * age_mid_between", "age_mid_cwc", "sex", "end_wave", "(1 | site_factor)", "(1 | participant_id)", "(1 | family_id)", sep = " + ")
+  as.formula(paste(params$response_var, "~", rhs))
+}
+
+#1.2 Safe glmer
+fit_glmer_safe <- function(formula, data, link = c("logit","cloglog")) {
+  link <- match.arg(link)
+  fam <- if (link == "logit") binomial(link = "logit") else binomial(link = "cloglog")
+  ctrl <- glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5))
+  fit <- tryCatch(glmer(formula, data = data, family = fam, control = ctrl),
+                  error = function(e) { message("Retrying nAGQ=0 due to: ", conditionMessage(e)); glmer(formula, data = data, family = fam, control = ctrl, nAGQ = 0) })
+  fit
+}
+
+#1.3 Tidy tables
+tidy_wald <- function(fit) {
+  broom.mixed::tidy(fit, effects = "fixed", conf.int = TRUE, conf.method = "Wald") %>%
+    mutate(term = as.character(term), OR = exp(estimate), CI_lo = exp(conf.low), CI_hi = exp(conf.high), SE = std.error) %>%
+    select(term, estimate, SE, OR, CI_lo, CI_hi, p.value)
+}
+
+tidy_cr2 <- function(fit, cluster_var = NULL) {
+  test_method <- if (inherits(fit, "glmerMod")) "z" else "Satterthwaite"
+  if (is.null(cluster_var)) {
+    mf <- try(model.frame(fit), silent = TRUE)
+    if (!inherits(mf, "try-error") && "family_id" %in% names(mf)) cluster_var <- mf$family_id
+  }
+  ct <- try(clubSandwich::coef_test(fit, vcov = "CR2", cluster = cluster_var, test = test_method), silent = TRUE)
+  if (inherits(ct, "try-error")) {
+    return(broom.mixed::tidy(fit, effects = "fixed", conf.int = TRUE, conf.method = "Wald") %>%
+             mutate(term = as.character(term), estimate = estimate, SE = std.error, df = NA_real_, OR = exp(estimate), CI_lo = exp(conf.low), CI_hi = exp(conf.high), p.value = NA_real_, note = "CR2_failed") %>%
+             select(term, estimate, SE, df, OR, CI_lo, CI_hi, p.value, note))
+  }
+  as_tibble(ct) %>% mutate(term = as.character(term), OR = exp(beta), CI_lo = exp(CI_L), CI_hi = exp(CI_U)) %>%
+    select(term, estimate = beta, SE = SE, df, OR, CI_lo, CI_hi, p.value = p_Satt)
+}
+
+#1.4 Predictions across ages at a fixed wave
+pred_grid_by_age <- function(fit, data, ages = ages_pred_vec, wave_ref = params$wave_ref) {
+  grand_mean <- mean(data$age_mid, na.rm = TRUE)
+  age_between_vals <- ages - grand_mean
+  nd <- expand.grid(cluster = levels(data$cluster), age_mid_between = age_between_vals, age_mid_cwc = 0, sex = levels(data$sex)[1], site_factor = levels(data$site_factor)[1], end_wave = factor(wave_ref, levels = levels(data$end_wave)))
+  nd$age_years <- rep(ages, each = length(levels(data$cluster)))
+  nd$pred <- predict(fit, newdata = nd, type = "response", re.form = NA)
+  nd
+}
+
+#1.5 Calibration and AUC
+calibration_df <- function(fit, data) {
+  pr <- predict(fit, type = "response", re.form = NA)
+  df <- data %>% mutate(pred = pr, dec = dplyr::ntile(pred, 10))
+  df %>% group_by(dec) %>% summarise(pred_mean = mean(pred, na.rm = TRUE), obs_mean = mean(.data[[params$response_var]] == 1L, na.rm = TRUE), n = n(), .groups = "drop")
+}
+
+auc_interval <- function(fit, data) {
+  pr <- predict(fit, type = "response", re.form = NA)
+  pROC::roc(response = data[[params$response_var]], predictor = pr, quiet = TRUE)$auc %>% as.numeric()
+}
+
+#1.6 Diagnostics
+diag_report <- function(fit) {
+  is_sing <- tryCatch(lme4::isSingular(fit, tol = 1e-4), error = function(e) NA)
+  overK <- tryCatch(performance::check_overdispersion(fit)$dispersion_ratio, error = function(e) NA_real_)
+  conv <- tryCatch(performance::check_convergence(fit)$converged, error = function(e) NA)
+  vif_max <- tryCatch(max(performance::check_collinearity(fit)$VIF, na.rm = TRUE), error = function(e) NA_real_)
+  tibble(is_singular = is_sing, converged = conv, overdispersion_K = overK, max_VIF = vif_max)
+}
+
+#1.7 EMMs per age
+cluster_contrasts_by_age <- function(fit, data, ages = ages_pred_vec, wave_ref = params$wave_ref) {
+  grand_mean <- mean(data$age_mid, na.rm = TRUE)
+  age_between_vals <- ages - grand_mean
+  ref_list <- list(age_mid_between = age_between_vals, age_mid_cwc = 0, end_wave = factor(wave_ref, levels = levels(data$end_wave)), sex = levels(data$sex)[1], site_factor = levels(data$site_factor)[1])
+  em <- emmeans::emmeans(fit, ~ cluster | age_mid_between, at = ref_list, type = "response", regrid = "response")
+  contrast(em, method = "revpairwise") %>% broom::tidy() %>% mutate(age_years = round(age_mid_between + grand_mean, 2)) %>%
+    select(age_years, contrast, estimate, conf.low, conf.high, p.value)
+}
+
+#1.8 Utilities
+safe_or_null <- function(expr) { out <- try(expr, silent = TRUE); if (inherits(out, "try-error")) NULL else out }
+wrap_title <- function(x, width = 70) { stringr::str_wrap(x, width = width) }
+keep_terms <- function(df) {
+  if (!"term" %in% names(df)) return(df)
+  df %>% filter(!grepl("^(Intercept)$", term),
+                grepl("^cluster", term) | grepl("^age_mid_between$", term) | grepl("^age_mid_cwc$", term) | grepl("^sex", term) | grepl("^cluster.*:age_mid_between$", term))
+}
+
+save_check_model_plots <- function(fit, tag, width = 9, height = 6, dpi = 220) {
+  cm <- try(performance::check_model(fit), silent = TRUE); if (inherits(cm, "try-error")) return(NULL)
+  p <- try(if (requireNamespace("see", quietly = TRUE)) see::plot(cm) else cm, silent = TRUE); if (inherits(p, "try-error")) return(NULL)
+  fn <- file.path(OUT_DIR, glue::glue("check_model_{tag}.png"))
+  if (requireNamespace("ragg", quietly = TRUE)) ggplot2::ggsave(fn, p, device = ragg::agg_png, width = width, height = height, units = "in", dpi = dpi) else ggplot2::ggsave(fn, p, width = width, height = height, units = "in", dpi = dpi)
+  tibble(file = fn)
+}
+
+save_dharma_plots_and_tests <- function(fit, tag) {
+  if (!requireNamespace("DHARMa", quietly = TRUE)) return(NULL)
+  sr <- try(DHARMa::simulateResiduals(fit, n = 1000, refit = FALSE), silent = TRUE); if (inherits(sr, "try-error")) return(NULL)
+  fn <- file.path(OUT_DIR, glue::glue("dharma_{tag}.png"))
+  try({
+    if (requireNamespace("ragg", quietly = TRUE)) ragg::agg_png(filename = fn, width = 1800, height = 1200, units = "px", res = 144) else png(filename = fn, width = 1800, height = 1200, res = 144)
+    plot(sr); dev.off()
+  }, silent = TRUE)
+  td <- try(DHARMa::testDispersion(sr), silent = TRUE)
+  tz <- try(DHARMa::testZeroInflation(sr), silent = TRUE)
+  tibble(file = fn, p_dispersion = if (!inherits(td, "try-error")) td$p.value else NA_real_, p_zeroinfl = if (!inherits(tz, "try-error")) tz$p.value else NA_real_)
+}
+```
+
+## 2. Fit Mixed-Effects Logit Models
+
+```{r fit, warning = FALSE}
+## 2. Fit models (primary link + sensitivity), summarize, and save ##
+
+OUTCOMES <- params$outcomes
+
+fits_primary <- list(); wald_primary <- list(); cr2_primary <- list()
+preds_primary <- list(); cal_primary <- list(); auc_primary <- list(); diag_primary <- list(); emm_primary <- list()
+fits_sens <- list(); wald_sens <- list(); cr2_sens <- list()
+perf_primary <- list(); dharma_tests_primary <- list()
+
+form <- build_formula(link = params$link_primary)
+
+for (out in OUTCOMES) {
+  
+  #2.1 Outcome subset and checks
+  message("Fitting primary (", params$link_primary, "): ", out)
+  dat_o <- bd_pp_model %>% filter(outcome == out) %>% droplevels()
+  if (nlevels(dat_o$cluster) < nlevels(bd_pp_model$cluster)) message("Note: some clusters absent in outcome = ", out)
+  
+  #2.2 Fit primary
+  fit_o <- fit_glmer_safe(form, dat_o, link = params$link_primary)
+  fits_primary[[out]] <- fit_o
+  
+  #2.3 Summaries and predictions
+  wald_primary[[out]] <- safe_or_null(tidy_wald(fit_o) %>% mutate(outcome = out, model = params$link_primary, .before = 1))
+  cr2_primary[[out]]  <- safe_or_null(tidy_cr2(fit_o) %>% mutate(outcome = out, model = params$link_primary, .before = 1))
+  preds_primary[[out]] <- safe_or_null(pred_grid_by_age(fit_o, dat_o) %>% mutate(outcome = out, model = params$link_primary, .before = 1))
+  cal_primary[[out]] <- safe_or_null(calibration_df(fit_o, dat_o) %>% mutate(outcome = out, model = params$link_primary, .before = 1))
+  auc_primary[[out]] <- safe_or_null(tibble(outcome = out, model = params$link_primary, AUC = auc_interval(fit_o, dat_o)))
+  diag_primary[[out]] <- safe_or_null(diag_report(fit_o) %>% mutate(outcome = out, model = params$link_primary, .before = 1))
+  emm_primary[[out]] <- safe_or_null(cluster_contrasts_by_age(fit_o, dat_o) %>% mutate(outcome = out, model = params$link_primary, .before = 1))
+  
+  #2.4 Diagnostics panels
+  cm_info <- safe_or_null(save_check_model_plots(fit_o, glue::glue("primary_{out}")))
+  dh_info <- safe_or_null(save_dharma_plots_and_tests(fit_o, glue::glue("primary_{out}")))
+  if (!is.null(dh_info)) dharma_tests_primary[[out]] <- dh_info
+  
+  #2.5 Sensitivity: cloglog
+  message("Fitting sensitivity (cloglog): ", out)
+  fit_s <- fit_glmer_safe(form, dat_o, link = "cloglog")
+  fits_sens[[out]] <- fit_s
+  wald_sens[[out]] <- safe_or_null(tidy_wald(fit_s) %>% mutate(outcome = out, model = "cloglog", .before = 1))
+  cr2_sens[[out]]  <- safe_or_null(tidy_cr2(fit_s) %>% mutate(outcome = out, model = "cloglog", .before = 1))
+}
+
+#2.6 Bind and filter
+wald_all_raw <- dplyr::bind_rows(purrr::compact(c(wald_primary, wald_sens)))
+cr2_all_raw  <- dplyr::bind_rows(purrr::compact(c(cr2_primary, cr2_sens)))
+pred_all     <- dplyr::bind_rows(purrr::compact(preds_primary))
+cal_all      <- dplyr::bind_rows(purrr::compact(cal_primary))
+auc_all      <- dplyr::bind_rows(purrr::compact(auc_primary))
+diag_all     <- dplyr::bind_rows(purrr::compact(diag_primary))
+emm_all      <- dplyr::bind_rows(purrr::compact(emm_primary))
+dharma_tests_all <- dplyr::bind_rows(purrr::compact(dharma_tests_primary))
+
+wald_all <- keep_terms(wald_all_raw)
+cr2_all  <- keep_terms(cr2_all_raw)
+
+#2.7 Save outputs
+readr::write_csv(wald_all, file.path(OUT_DIR, "bd_mixed_wald.csv"))
+readr::write_csv(cr2_all,  file.path(OUT_DIR, "bd_mixed_cr2.csv"))
+readr::write_csv(wald_all_raw, file.path(OUT_DIR, "bd_mixed_wald_full.csv"))
+readr::write_csv(cr2_all_raw,  file.path(OUT_DIR, "bd_mixed_cr2_full.csv"))
+readr::write_csv(pred_all, file.path(OUT_DIR, "bd_mixed_preds_by_age.csv"))
+readr::write_csv(cal_all,  file.path(OUT_DIR, "bd_mixed_calibration.csv"))
+readr::write_csv(auc_all,  file.path(OUT_DIR, "bd_mixed_auc.csv"))
+readr::write_csv(diag_all, file.path(OUT_DIR, "bd_mixed_diagnostics.csv"))
+readr::write_csv(emm_all,  file.path(OUT_DIR, "bd_mixed_cluster_contrasts_by_age.csv"))
+readr::write_csv(dharma_tests_all, file.path(OUT_DIR, "bd_mixed_dharma_tests.csv"))
+```
+
+## 3–6 Plots and Tables
+
+You can reuse Sections 3–6 from script 1 with only the file base-names changed (e.g., titles “Mixed-effects logit”). Keep the same wrapped titles, percent axis ticks, and table filters.
+
+## 7 Diagnostics Panels
+
+```{r diagnostic panels, echo=FALSE, fig.align='center', out.width='100%'}
+for (out in OUTCOMES) {
+  cm_path <- file.path(OUT_DIR, glue::glue("check_model_primary_{out}.png"))
+  dh_path <- file.path(OUT_DIR, glue::glue("dharma_primary_{out}.png"))
+  ttl <- wrap_title(glue::glue("Diagnostics – {out} (top: check_model, bottom: DHARMa)"), 70)
+  if (file.exists(cm_path) || file.exists(dh_path)) {
+    cat("\n\n### ", ttl, "\n\n")
+    imgs <- c(if (file.exists(cm_path)) cm_path else NULL, if (file.exists(dh_path)) dh_path else NULL)
+    knitr::include_graphics(imgs)
+  }
+}
+```
+
+
+
+## Session Info
+
+```{r session, warning = FALSE}
+writeLines(c(capture.output(sessionInfo()), ""), file.path(OUT_DIR, "sessionInfo.txt"))
+git_hash <- try(system(glue::glue("git -C {REPO} rev-parse --short HEAD"), intern = TRUE), silent = TRUE)
+if (!inherits(git_hash, "try-error")) writeLines(git_hash, file.path(OUT_DIR, "git_commit.txt"))
+```
+
