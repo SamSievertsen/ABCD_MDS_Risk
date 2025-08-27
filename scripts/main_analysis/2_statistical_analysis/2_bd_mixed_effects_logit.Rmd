@@ -21,6 +21,7 @@ params:
 ---
 
 ```{r global, include = FALSE}
+
 # Set global env variables
 knitr::opts_chunk$set(echo = TRUE, cache = FALSE, message = TRUE, warning = TRUE, results = "markup", verbose = TRUE, comment = "")
 
@@ -61,7 +62,7 @@ options(scipen = 999, digits = 8)
 
 REPO <- params$repo
 DATA_DIR <- file.path(REPO, params$data_dir)
-OUT_DIR  <- file.path(REPO, params$out_dir)
+OUT_DIR <- file.path(REPO, params$out_dir)
 dir.create(OUT_DIR, recursive = TRUE, showWarnings = FALSE)
 
 # Prefer RDS; fallback to CSV

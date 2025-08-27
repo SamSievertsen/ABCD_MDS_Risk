@@ -45,6 +45,27 @@
       ],
       "Hash": "53a0299b56b4cbe418b12e3b65587211"
     },
+    "DHARMa": {
+      "Package": "DHARMa",
+      "Version": "0.4.7",
+      "Source": "Repository",
+      "Repository": "RSPM",
+      "Requirements": [
+        "Matrix",
+        "R",
+        "ape",
+        "gap",
+        "grDevices",
+        "graphics",
+        "lme4",
+        "lmtest",
+        "parallel",
+        "qgam",
+        "stats",
+        "utils"
+      ],
+      "Hash": "1ce015f138dd74b3695fc60a86fcce98"
+    },
     "DT": {
       "Package": "DT",
       "Version": "0.33",
@@ -537,6 +558,25 @@
       ],
       "Hash": "a1db66ce27bcfb58cb67ad4e04d48b79"
     },
+    "ape": {
+      "Package": "ape",
+      "Version": "5.8-1",
+      "Source": "Repository",
+      "Repository": "RSPM",
+      "Requirements": [
+        "R",
+        "Rcpp",
+        "digest",
+        "graphics",
+        "lattice",
+        "methods",
+        "nlme",
+        "parallel",
+        "stats",
+        "utils"
+      ],
+      "Hash": "54e5b03e928da23e75dc5bb633648d27"
+    },
     "askpass": {
       "Package": "askpass",
       "Version": "1.2.1",
@@ -639,6 +679,26 @@
         "tidyr"
       ],
       "Hash": "8fcc818f3b9887aebaf206f141437cc9"
+    },
+    "broom.mixed": {
+      "Package": "broom.mixed",
+      "Version": "0.2.9.6",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "broom",
+        "coda",
+        "dplyr",
+        "forcats",
+        "furrr",
+        "methods",
+        "nlme",
+        "purrr",
+        "stringr",
+        "tibble",
+        "tidyr"
+      ],
+      "Hash": "e27ed8cc90f6cbb7d9d42bcedf2781ff"
     },
     "bslib": {
       "Package": "bslib",
@@ -783,6 +843,19 @@
       ],
       "Hash": "64780087d11447eb617fc566f26bee15"
     },
+    "clubSandwich": {
+      "Package": "clubSandwich",
+      "Version": "0.6.1",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R",
+        "lifecycle",
+        "sandwich",
+        "stats"
+      ],
+      "Hash": "f43ca0dff70cb4818aca95c0df36b200"
+    },
     "clustMixType": {
       "Package": "clustMixType",
       "Version": "0.4-2",
@@ -835,6 +908,17 @@
       "Source": "Repository",
       "Repository": "CRAN",
       "Hash": "13296ea98446d11ebbba32d55a7b9383"
+    },
+    "coda": {
+      "Package": "coda",
+      "Version": "0.19-4.1",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R",
+        "lattice"
+      ],
+      "Hash": "af436915c590afc6fffc3ce3a5be1569"
     },
     "codetools": {
       "Package": "codetools",
@@ -1124,6 +1208,20 @@
         "utils"
       ],
       "Hash": "bd269daa182b205fa471c89ee9dcc8df"
+    },
+    "doParallel": {
+      "Package": "doParallel",
+      "Version": "1.0.17",
+      "Source": "Repository",
+      "Repository": "RSPM",
+      "Requirements": [
+        "R",
+        "foreach",
+        "iterators",
+        "parallel",
+        "utils"
+      ],
+      "Hash": "451e5edf411987991ab6a5410c45011f"
     },
     "donut": {
       "Package": "donut",
@@ -1550,6 +1648,31 @@
       ],
       "Hash": "0efead26b03bb60716ed29971b1953dc"
     },
+    "gap": {
+      "Package": "gap",
+      "Version": "1.6",
+      "Source": "Repository",
+      "Repository": "RSPM",
+      "Requirements": [
+        "R",
+        "Rdpack",
+        "dplyr",
+        "gap.datasets",
+        "ggplot2",
+        "plotly"
+      ],
+      "Hash": "4db3fe42566c96213b8bcb7bf71a43f6"
+    },
+    "gap.datasets": {
+      "Package": "gap.datasets",
+      "Version": "0.0.6",
+      "Source": "Repository",
+      "Repository": "RSPM",
+      "Requirements": [
+        "R"
+      ],
+      "Hash": "779651ac2943370c5453c2d907429fc9"
+    },
     "generics": {
       "Package": "generics",
       "Version": "0.1.3",
@@ -1560,6 +1683,21 @@
         "methods"
       ],
       "Hash": "15e9634c0fcd294799e9b2e929ed1b86"
+    },
+    "ggeffects": {
+      "Package": "ggeffects",
+      "Version": "2.3.0",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R",
+        "datawizard",
+        "graphics",
+        "insight",
+        "stats",
+        "utils"
+      ],
+      "Hash": "630367eab25b1e666b7bb360f14f916f"
     },
     "ggplot2": {
       "Package": "ggplot2",
@@ -2611,6 +2749,18 @@
       ],
       "Hash": "37a7f0abce0349f5950ce49f38c7626b"
     },
+    "pROC": {
+      "Package": "pROC",
+      "Version": "1.19.0.1",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R",
+        "Rcpp",
+        "methods"
+      ],
+      "Hash": "983b42de92b81b94e7bcfa59aee6b517"
+    },
     "padr": {
       "Package": "padr",
       "Version": "0.6.3",
@@ -3020,6 +3170,22 @@
       ],
       "Hash": "3f2d0de5587aa6e11144c43562b0e00d"
     },
+    "qgam": {
+      "Package": "qgam",
+      "Version": "1.3.4",
+      "Source": "Repository",
+      "Repository": "RSPM",
+      "Requirements": [
+        "R",
+        "doParallel",
+        "grDevices",
+        "mgcv",
+        "parallel",
+        "plyr",
+        "shiny"
+      ],
+      "Hash": "e3bd5ade848251657381d2a0668def59"
+    },
     "quadprog": {
       "Package": "quadprog",
       "Version": "1.5-8",
@@ -3063,6 +3229,17 @@
         "survival"
       ],
       "Hash": "2a91b35971a5eb01e2d0c01664755495"
+    },
+    "ragg": {
+      "Package": "ragg",
+      "Version": "1.4.0",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "systemfonts",
+        "textshaping"
+      ],
+      "Hash": "1591adde9ce8ff7de58072e4a32b66ce"
     },
     "rappdirs": {
       "Package": "rappdirs",
@@ -3700,6 +3877,22 @@
         "utils"
       ],
       "Hash": "f8b2924480a2679e2bad9750646112fe"
+    },
+    "textshaping": {
+      "Package": "textshaping",
+      "Version": "1.0.1",
+      "Source": "Repository",
+      "Repository": "CRAN",
+      "Requirements": [
+        "R",
+        "cpp11",
+        "lifecycle",
+        "stats",
+        "stringi",
+        "systemfonts",
+        "utils"
+      ],
+      "Hash": "75b5813527f4154cb467e4cf60911333"
     },
     "tibble": {
       "Package": "tibble",
