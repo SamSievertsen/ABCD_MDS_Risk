@@ -663,14 +663,3 @@ writeLines(c(capture.output(sessionInfo()), ""), file.path(OUT_DIR, "sessionInfo
 git_hash <- try(system(glue::glue("git -C {REPO} rev-parse --short HEAD"), intern = TRUE), silent = TRUE)
 if (!inherits(git_hash, "try-error")) writeLines(git_hash, file.path(OUT_DIR, "git_commit.txt"))
 ```
-
-
-
-## Session Info
-
-```{r session, warning = FALSE}
-writeLines(c(capture.output(sessionInfo()), ""), file.path(OUT_DIR, "sessionInfo.txt"))
-git_hash <- try(system(glue::glue("git -C {REPO} rev-parse --short HEAD"), intern = TRUE), silent = TRUE)
-if (!inherits(git_hash, "try-error")) writeLines(git_hash, file.path(OUT_DIR, "git_commit.txt"))
-```
-

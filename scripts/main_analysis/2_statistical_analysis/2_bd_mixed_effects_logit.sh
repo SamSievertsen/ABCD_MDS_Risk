@@ -7,9 +7,8 @@
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=sievertsen@ohsu.edu
 
-#SBATCH --account=NagelLab
-#SBATCH --partition=batch
-#SBATCH --qos=long_jobs
+#SBATCH --account=basic
+#SBATCH --partition=basic
 
 #SBATCH --time=23:59:00
 #SBATCH --nodes=1
@@ -60,8 +59,8 @@ rmarkdown::render(
     repo = "${REPO}",
     data_dir = "data/data_processed/analysis_datasets/",
     out_dir = "results/main_analysis/2_bd_mixed_logit",
-    bd_pp_rds = "bd_person_period_k2_robust.rds",
-    bd_pp_csv = "bd_person_period_k2_robust.csv",
+    bd_panel_rds = "bd_panel_k2_robust.rds",
+    bd_panel_csv = "bd_panel_k2_robust.csv",
     outcomes = strsplit("${OUTCOMES}", ",")[[1]],
     response_var = "${RESPVAR}",
     link_primary = "${LINK_PRIMARY}",
