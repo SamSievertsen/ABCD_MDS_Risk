@@ -1,0 +1,417 @@
+---
+title: "2. BD Mixed-Effects Logit (vNEXT): Robust Ladder"
+author: "ABCD MDS Risk BD chapter"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    number_sections: false
+    df_print: paged
+params:
+  repo: !r getwd()
+  data_dir: "data/data_processed/analysis_datasets/"
+  out_dir: "results/main_analysis/2_bd_mixed_logit"
+  bd_panel_rds: "bd_panel_k2_robust.rds"
+  bd_panel_csv: "bd_panel_k2_robust.csv"
+  outcomes: !r c("bipolar_I","bipolar_II","bd_nos","any_bsd")
+  response_var: "status"
+  link_primary: "logit"
+  wave_ref: "ses-02A"
+  ages_pred: !r NULL
+---
+
+<!--
+Refactor summary (vNEXT):
+- Ladder: GLMM (lme4) GEE (geepack; EXC primary, AR1 sensitivity) glmmTMB (mirror) and GAM (mgcv::bam) for smooth age curves.
+- Fixed effects (primary): status ~ cluster + wave + sex + post_baseline
+- Sensitivity: add baseline status column (outcome-specific if present, else baseline_status_bd)
+- Random effects: (1 | participant_id) only; optionally site_factor in a try() wrapper (but OFF by default for stability)
+- Diagnostics: convergence/singularity/dispersion + simple AUC; NO DHARMa; minimal emmeans
+- Outputs: tidy CSVs for estimates; forest-style GEE cluster OR by wave; GAM age curves with 95% CI
+- Runtime hygiene: optimizer = "bobyqa", maxfun=2e5; nAGQ=0 fallback; bam(..., discrete=TRUE)
+Hooks present for porting to nested suicidality chapter.
+-->
+
+```{r setup, message=FALSE, warning=FALSE}
+options(width = 120, pillar.sigfig = 3, dplyr.summarise.inform = FALSE)
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(forcats)
+  library(ggplot2)
+  library(tidyr)
+  library(stringr)
+  library(data.table)
+  library(lme4)
+  library(glmmTMB)
+  library(geepack)
+  library(mgcv)
+  library(broom)
+  library(broom.mixed)
+  library(pROC)
+  library(emmeans)
+  library(janitor)
+  library(glue)
+  library(readr)
+  library(performance)
+  library(DHARMa)
+  library(yardstick)
+  library(clubSandwich)
+  library(blme)
+})
+theme_set(theme_bw())
+```
+
+# Data
+
+```{r data-load}
+# Resolve paths
+REPO      <- params$repo
+DATA_DIR  <- file.path(REPO, params$data_dir)
+OUT_DIR   <- file.path(REPO, params$out_dir)
+dir.create(file.path(OUT_DIR, "csv"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(OUT_DIR, "figures"), recursive = TRUE, showWarnings = FALSE)
+
+# Prefer RDS, fall back to CSV
+rds_path <- file.path(DATA_DIR, params$bd_panel_rds)
+csv_path <- file.path(DATA_DIR, params$bd_panel_csv)
+
+if (file.exists(rds_path)) {
+  bd <- readRDS(rds_path)
+} else {
+  bd <- read_csv(csv_path, show_col_types = FALSE)
+}
+
+# Standardize and sanity-check
+bd <- bd %>%
+  mutate(
+    wave = factor(wave, levels = c("ses-02A","ses-04A","ses-06A")),
+    cluster = factor(cluster, levels = c("C2","C1")),
+    sex = factor(sex, levels = c("Female","Male")),
+    participant_id = as.factor(participant_id),
+    site_factor = as.factor(site_factor),
+    family_id = as.factor(family_id),
+    post_baseline = as.integer(wave != "ses-02A")
+  )
+
+stopifnot(all(c("outcome","status","age_wave","cluster","wave","sex","participant_id") %in% names(bd)))
+
+# Helper to select baseline variable
+pick_baseline_col <- function(df, outcome_name) {
+  # Prefer outcome-specific baseline column if present, else fallback to baseline_status_bd
+  cand <- paste0("baseline_status_", outcome_name)
+  if (cand %in% names(df)) return(cand)
+  if ("baseline_status_bd" %in% names(df)) return("baseline_status_bd")
+  return(NULL)
+}
+
+# Age grid for GAM predictions
+if (!is.null(params$ages_pred)) {
+  age_grid <- sort(unique(params$ages_pred))
+} else {
+  rng <- range(bd$age_wave, na.rm = TRUE)
+  age_grid <- seq(floor(rng[1]), ceiling(rng[2]), by = 0.1)
+}
+```
+
+# Utility functions
+
+```{r utils}
+logit_to_or_ci <- function(est, se) {
+  tibble(
+    estimate = est,
+    std.error = se,
+    OR = exp(est),
+    CI_low = exp(est - 1.96*se),
+    CI_high = exp(est + 1.96*se)
+  )
+}
+
+dispersion_check <- function(mod) {
+  # Simple Pearson dispersion for binomial GLMM/GLM(TMB)
+  r <- residuals(mod, type = "pearson")
+  df <- df.residual(mod)
+  if (is.null(df) || df <= 0) return(NA_real_)
+  sum(r^2, na.rm = TRUE) / df
+}
+
+safe_predict <- function(mod, newdata = NULL, type = "response") {
+  pr <- tryCatch(predict(mod, newdata = newdata, type = type), error = function(e) NA_real_)
+  pr
+}
+
+fit_glmm_primary <- function(df, link = "logit") {
+  fml <- as.formula(status ~ cluster + wave + sex + post_baseline + (1 | participant_id))
+  family_bin <- binomial(link = link)
+  ctrl <- glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5))
+  fit <- try(suppressWarnings(glmer(fml, data = df, family = family_bin, control = ctrl)), silent = TRUE)
+  if (inherits(fit, "try-error")) {
+    fit <- try(suppressWarnings(glmer(fml, data = df, family = family_bin, control = ctrl, nAGQ = 0)), silent = TRUE)
+  }
+  fit
+}
+
+fit_glmm_baseline <- function(df, baseline_col, link = "logit") {
+  rhs <- paste("cluster + wave + sex + post_baseline", baseline_col, sep = " + ")
+  fml <- as.formula(glue("status ~ {rhs} + (1 | participant_id)"))
+  family_bin <- binomial(link = link)
+  ctrl <- glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5))
+  fit <- try(suppressWarnings(glmer(fml, data = df, family = family_bin, control = ctrl)), silent = TRUE)
+  if (inherits(fit, "try-error")) {
+    fit <- try(suppressWarnings(glmer(fml, data = df, family = family_bin, control = ctrl, nAGQ = 0)), silent = TRUE)
+  }
+  fit
+}
+
+fit_glmmtmb_primary <- function(df, link = "logit") {
+  fml <- as.formula(status ~ cluster + wave + sex + post_baseline + (1 | participant_id))
+  fit <- try(suppressWarnings(glmmTMB(formula = fml, data = df, family = binomial(link = link))), silent = TRUE)
+  fit
+}
+
+fit_gee <- function(df, corstr = "exchangeable", link = "logit") {
+  fml <- as.formula(status ~ cluster + wave + sex + post_baseline)
+  fit <- try(suppressWarnings(geeglm(fml, id = participant_id, data = df,
+                                     family = binomial(link = link),
+                                     corstr = corstr, std.err = "san.se")), silent = TRUE)
+  fit
+}
+
+gee_cluster_by_wave_or <- function(fit) {
+  # Pairwise cluster contrast within each wave on the link scale OR by wave
+  emm <- try(emmeans(fit, ~ cluster | wave, type = "link"), silent = TRUE)
+  if (inherits(emm, "try-error")) return(tibble())
+  contr <- contrast(emm, method = "revpairwise") %>% # C1 vs C2, by wave
+    summary(infer = TRUE) %>%
+    as_tibble() %>%
+    mutate(
+      OR = exp(estimate),
+      CI_low = exp(lower.CL),
+      CI_high = exp(upper.CL)
+    ) %>%
+    select(wave, contrast, estimate, SE, OR, CI_low, CI_high)
+  contr
+}
+
+auc_from_fit <- function(fit, df) {
+  p <- safe_predict(fit, type = "response")
+  if (all(is.na(p))) return(NA_real_)
+  out <- tryCatch(pROC::roc(df$status, p, quiet = TRUE), error = function(e) NULL)
+  if (is.null(out)) NA_real_ else as.numeric(out$auc)
+}
+
+tidy_or <- function(x, term_keep = c("cluster", "wave", "sex", "post_baseline", "^(cluster|wave|sex)")) {
+  # Tidy and convert to ORs for key terms
+  tx <- tryCatch({
+    if (inherits(x, "merMod")) broom.mixed::tidy(x, effects = "fixed")
+    else broom::tidy(x)
+  }, error = function(e) tibble())
+  if (!nrow(tx)) return(tx)
+  tx %>%
+    filter(str_detect(term, paste(term_keep, collapse = "|"))) %>%
+    mutate(OR = exp(estimate),
+           CI_low = exp(estimate - 1.96*std.error),
+           CI_high = exp(estimate + 1.96*std.error))
+}
+
+get_or_from_tbl <- function(tb, pattern = '^clusterC1$') {
+  if (!is.data.frame(tb) || !('term' %in% names(tb))) return(NA_real_)
+  ii <- which(stringr::str_detect(tb$term, pattern))
+  if (!length(ii)) return(NA_real_)
+  est <- tb$estimate[ii[1]]
+  if (!is.numeric(est) || is.na(est)) return(NA_real_)
+  exp(est)
+}
+```
+
+# Per-outcome modeling
+
+```{r main-loop, message=FALSE, warning=FALSE}
+OUTS <- params$outcomes
+res_summary <- list()
+
+for (oc in OUTS) {
+  df_o <- bd %>% filter(outcome == oc) %>% drop_na(status, cluster, wave, sex, participant_id)
+  baseline_col <- pick_baseline_col(df_o, oc)
+
+  # --- GLMM primary ---
+  glmm_fit <- fit_glmm_primary(df_o, link = params$link_primary)
+  glmm_ok <- !inherits(glmm_fit, "try-error") && isTRUE(is.finite(logLik(glmm_fit)))
+  glmm_sing <- if (glmm_ok) isSingular(glmm_fit, tol = 1e-4) else NA
+  glmm_phi <- if (glmm_ok) dispersion_check(glmm_fit) else NA_real_
+  glmm_auc <- if (glmm_ok) auc_from_fit(glmm_fit, df_o) else NA_real_
+  glmm_tbl <- if (glmm_ok) tidy_or(glmm_fit) else tibble()
+
+  # --- GLMM + baseline sensitivity ---
+  glmmb_ok <- FALSE
+  glmmb_tbl <- tibble()
+  glmmb_auc <- NA_real_
+  if (!is.null(baseline_col)) {
+    glmmb_fit <- fit_glmm_baseline(df_o, baseline_col, link = params$link_primary)
+    glmmb_ok <- !inherits(glmmb_fit, "try-error") && isTRUE(is.finite(logLik(glmmb_fit)))
+    glmmb_tbl <- if (glmmb_ok) tidy_or(glmmb_fit) else tibble()
+    glmmb_auc <- if (glmmb_ok) auc_from_fit(glmmb_fit, df_o) else NA_real_
+  }
+
+  # --- glmmTMB ---
+  tmb_fit <- fit_glmmtmb_primary(df_o, link = params$link_primary)
+  tmb_ok <- !inherits(tmb_fit, "try-error")
+  tmb_auc <- if (tmb_ok) auc_from_fit(tmb_fit, df_o) else NA_real_
+  tmb_tbl <- if (tmb_ok) tidy_or(tmb_fit) else tibble()
+
+  # --- GEE primary (EXC) and sensitivity (AR1) ---
+  gee_exc <- fit_gee(df_o, corstr = "exchangeable", link = params$link_primary)
+  gee_ok <- !inherits(gee_exc, "try-error")
+  gee_tbl <- if (gee_ok) tidy_or(gee_exc) else tibble()
+  gee_auc <- if (gee_ok) auc_from_fit(gee_exc, df_o) else NA_real_
+  gee_ex_pair <- if (gee_ok) gee_cluster_by_wave_or(gee_exc) else tibble()
+
+  gee_ar1 <- fit_gee(df_o, corstr = "ar1", link = params$link_primary)
+  ar1_ok <- !inherits(gee_ar1, "try-error")
+  ar1_tbl <- if (ar1_ok) tidy_or(gee_ar1) else tibble()
+  gee_ar_pair <- if (ar1_ok) gee_cluster_by_wave_or(gee_ar1) else tibble()
+
+  # --- GAM for age curves ---
+  gam_fit <- try(
+    suppressWarnings(
+      bam(status ~ cluster + s(age_wave, by = cluster, bs = "cs", k = 6) + sex + post_baseline,
+          data = df_o, family = binomial(link = params$link_primary), discrete = TRUE)
+    ), silent = TRUE)
+  gam_ok <- !inherits(gam_fit, "try-error")
+  # Predictions by cluster across age grid
+  gam_pred <- tibble()
+  if (gam_ok) {
+    newdat <- expand_grid(age_wave = age_grid,
+                          cluster = factor(c("C2","C1"), levels = c("C2","C1")),
+                          sex = factor("Female", levels = c("Female","Male")),
+                          post_baseline = 1L,      # marginal post-baseline
+                          wave = factor(params$wave_ref, levels = levels(df_o$wave))) # carried for emmeans consistency
+    pr <- predict(gam_fit, newdata = newdat, type = "link", se.fit = TRUE)
+    gam_pred <- newdat %>%
+      mutate(eta = as.numeric(pr$fit),
+             se_eta = as.numeric(pr$se.fit),
+             prev = plogis(eta),
+             prev_low = plogis(eta - 1.96*se_eta),
+             prev_high = plogis(eta + 1.96*se_eta))
+  }
+
+  # --- Save tidy outputs ---
+  write_csv(glmm_tbl %>% mutate(outcome = oc), file.path(OUT_DIR, "csv", glue("{oc}_glmm_fixed_ORs.csv")))
+  write_csv(tmb_tbl %>% mutate(outcome = oc), file.path(OUT_DIR, "csv", glue("{oc}_glmmTMB_fixed_ORs.csv")))
+  if (glmmb_ok) write_csv(glmmb_tbl %>% mutate(outcome = oc), file.path(OUT_DIR, "csv", glue("{oc}_glmm_with_baseline_fixed_ORs.csv")))
+
+  if (gee_ok) {
+    write_csv(gee_tbl %>% mutate(outcome = oc), file.path(OUT_DIR, "csv", glue("{oc}_GEE_EXC_fixed_ORs.csv")))
+    write_csv(gee_ex_pair %>% mutate(outcome = oc), file.path(OUT_DIR, "csv", glue("{oc}_GEE_EXC_cluster_OR_by_wave.csv")))
+  }
+  if (ar1_ok) {
+    write_csv(ar1_tbl %>% mutate(outcome = oc), file.path(OUT_DIR, "csv", glue("{oc}_GEE_AR1_fixed_ORs.csv")))
+    write_csv(gee_ar_pair %>% mutate(outcome = oc), file.path(OUT_DIR, "csv", glue("{oc}_GEE_AR1_cluster_OR_by_wave.csv")))
+  }
+  if (gam_ok) {
+    write_csv(gam_pred %>% mutate(outcome = oc), file.path(OUT_DIR, "csv", glue("{oc}_GAM_age_curves.csv")))
+  }
+
+  # --- GEE forest-style plot (cluster OR by wave) ---
+  if (gee_ok && nrow(gee_ex_pair)) {
+    g <- gee_ex_pair %>%
+      mutate(wave = as.factor(as.character(wave))) %>%
+      ggplot(aes(x = wave, y = OR, ymin = CI_low, ymax = CI_high)) +
+      geom_hline(yintercept = 1, linetype = 2) +
+      geom_pointrange(position = position_dodge(width = 0.2)) +
+      scale_y_log10() +
+      labs(title = glue("{oc}: GEE (EXC) Cluster C1 vs C2 OR by Wave"),
+           y = "Odds Ratio (log scale)", x = "Wave") +
+      theme(panel.grid.minor = element_blank())
+    ggsave(file.path(OUT_DIR, "figures", glue("{oc}_GEE_EXC_cluster_OR_by_wave.png")),
+           g, width = 6.5, height = 4.2, dpi = 300)
+  }
+
+  # --- GAM curve plot ---
+  if (gam_ok && nrow(gam_pred)) {
+    g2 <- gam_pred %>%
+      mutate(cluster = fct_recode(cluster, "Risk cluster C1" = "C1", "Risk cluster C2" = "C2")) %>%
+      ggplot(aes(age_wave, prev, ymin = prev_low, ymax = prev_high, color = cluster, fill = cluster)) +
+      geom_ribbon(alpha = 0.15, color = NA) +
+      geom_line(size = 0.7) +
+      labs(title = glue("{oc}: Predicted prevalence over age by cluster (GAM)"),
+           x = "Age (years)", y = "Predicted prevalence") +
+      theme(legend.position = "top")
+    ggsave(file.path(OUT_DIR, "figures", glue("{oc}_GAM_age_curves.png")),
+           g2, width = 6.8, height = 4.2, dpi = 300)
+  }
+
+  # --- Raw proportions (QC) ---
+  raw_by_wave <- df_o %>%
+    group_by(wave, cluster) %>% summarise(p = mean(status, na.rm = TRUE), n = dplyr::n(), .groups = "drop")
+
+  # --- One-line interpretation helper ---
+  interp <- NA_character_
+  if (gee_ok && nrow(gee_ex_pair)) {
+    or_mid <- gee_ex_pair %>% summarise(OR_med = median(OR, na.rm = TRUE)) %>% pull(OR_med)
+    raw_gap <- raw_by_wave %>%
+      group_by(wave) %>%
+      summarise(diff = diff(p[order(cluster)]), .groups = "drop")
+    dir_raw <- ifelse(median(raw_gap$diff, na.rm = TRUE) > 0, "C1 > C2", "C1/C2")
+    interp <- glue("Primary (GEE EXC): cluster OR ~{round(or_mid,2)}; raw proportions suggest {dir_raw}.")
+  }
+
+  # --- Baseline sensitivity material change? ---
+  material_change <- NA_character_
+  if (gee_ok && ar1_ok) {
+    or_exc <- get_or_from_tbl(gee_tbl, "^clusterC1$")
+    or_ar1 <- get_or_from_tbl(ar1_tbl, "^clusterC1$")
+    if (length(or_exc) && length(or_ar1)) {
+      ratio <- or_ar1 / or_exc
+      material_change <- ifelse(is.finite(ratio) && abs(log(ratio)) > log(1.1), "AR1 materially differs", "EXC ~ AR1")
+    }
+  }
+
+  base_change <- NA_character_
+  if (glmmb_ok && glmm_ok) {
+    or0 <- glmm_tbl %>% filter(term == "clusterC1") %>% summarise(OR = exp(first(estimate))) %>% pull(OR)
+    or1 <- glmmb_tbl %>% filter(term == "clusterC1") %>% summarise(OR = exp(first(estimate))) %>% pull(OR)
+    if (length(or0) && length(or1)) {
+      ratio <- or1 / or0
+      base_change <- ifelse(is.finite(ratio) && abs(log(ratio)) > log(1.1), "Baseline materially shifts cluster OR", "Baseline has no material impact")
+    }
+  }
+
+  # Collect summary row
+  res_summary[[oc]] <- tibble::tibble(
+    outcome = oc,
+    GLMM_converged = glmm_ok,
+    GLMM_singular = glmm_sing,
+    GLMM_phi = round(glmm_phi, 3),
+    GLMM_AUC = round(glmm_auc, 3),
+    glmmTMB_ok = tmb_ok,
+    glmmTMB_AUC = round(tmb_auc, 3),
+    GEE_EXC_ok = gee_ok,
+    GEE_EXC_cluster_OR = round(get_or_from_tbl(gee_tbl, "^clusterC1$"), 3),
+    GEE_EXC_AUC = round(gee_auc, 3),
+    GEE_AR1_ok = ar1_ok,
+    Sensitivity_baseline = base_change,
+    EXC_vs_AR1 = material_change,
+    Interpretation = interp
+  )
+}
+summary_tbl <- bind_rows(res_summary)
+write_csv(summary_tbl, file.path(OUT_DIR, "csv", "summary_table.csv"))
+```
+
+# One-page per-outcome summary
+
+```{r one-pager, results='asis'}
+cat("## Model ladder summary (primary = GEE), by outcome\n\n")
+summary_tbl %>%
+  mutate(across(where(is.numeric), ~replace_na(., NA_real_))) %>%
+  knitr::kable()
+```
+
+# Notes & toggles
+
+- Primary fixed effects are *additive* (no interactions), by design for stability. Cluster-by-wave contrasts are provided from **GEE** via `emmeans` pairs even when identical across waves (no interaction).
+- DHARMa is intentionally skipped; dispersion check uses Pearson residuals.
+- Age smooths use `bam(..., discrete=TRUE)` with shrinkage basis (`bs="cs"`, `k=6`).
+- Hooks: the core functions (`fit_*`, `gee_cluster_by_wave_or`, etc.) are outcome-agnostic and can be reused in the nested suicidality script.
+
