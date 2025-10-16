@@ -45,7 +45,7 @@ RMD_FILE="3_nested_suicidality_discrete_time_hazard.Rmd"
 
 # Allow param overrides at submit time
 LINK_PRIMARY="${LINK_PRIMARY:-logit}"
-WAVE_REF="${WAVE_REF:-ses-04A}"
+WAVE_REF="${WAVE_REF:-ses-02A}"
 AGES_PRESET="${AGES_PRESET:-}"
 SEED="${SEED:-123}"
 

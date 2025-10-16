@@ -255,6 +255,25 @@ message(
   "Models omit a baseline term because only baseline-negative youth remain."
 )
 
+# Censor after first onset (per outcome x participant); keep all intervals up to and including the first event==1 row; drop any later rows
+bd_pp_model <- bd_pp_model %>%
+  arrange(outcome, participant_id,
+          if ("interval_index" %in% names(.)) interval_index else as.integer(end_wave)) %>%
+  group_by(outcome, participant_id) %>%
+  mutate(after_onset = dplyr::lag(cummax(event == 1L), default = FALSE)) %>%
+  filter(!after_onset) %>%
+  ungroup() %>%
+  dplyr::select(-after_onset)
+
+# Check to make sure that censoring was performed correctly
+aud <- bd_pp_model %>%
+  arrange(outcome, participant_id,
+          if ("interval_index" %in% names(.)) interval_index else as.integer(end_wave)) %>%
+  group_by(outcome, participant_id) %>%
+  mutate(had_onset = cummax(event == 1L)) %>%
+  summarise(post_onset_rows = max(0L, sum(had_onset) - 1L), .groups = "drop")
+message("Any post-onset rows remain? ", any(aud$post_onset_rows > 0))
+
 # Establish empirical wave-median ages for plotting/prediction
 wave_age_medians <- bd_pp_model %>%
   dplyr::group_by(end_wave) %>%

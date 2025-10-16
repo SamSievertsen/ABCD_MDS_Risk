@@ -14,7 +14,7 @@ params:
   suic_pp_rds: "nested_suic_person_period_k2_robust.rds"
   suic_pp_csv: "nested_suic_person_period_k2_robust.csv"
   link_primary: "logit"
-  wave_ref: "ses-04A"
+  wave_ref: "ses-02A"
   ages_pred: !r c()
   seed: 123
 ---
@@ -148,6 +148,29 @@ message(
   "No baseline term in models (all baseline-negative by design)."
 )
 
+# Censor at the first onset (per outcome x participant) ; keeps all rows up to and including first event==1L; drops rows strictly after it. 
+su_pp_model <- su_pp_model %>%
+  arrange(
+    outcome, participant_id,
+    if ("interval_index" %in% names(.)) interval_index else as.integer(end_wave)) %>% 
+  group_by(outcome, participant_id) %>%
+  mutate(
+    first_onset_row = match(TRUE, event == 1L),
+    row_id = dplyr::row_number()) %>% 
+  filter(is.na(first_onset_row) | row_id <= first_onset_row) %>%
+  ungroup() %>%
+  dplyr::select(-first_onset_row, -row_id) 
+
+# Audit to ensure censoring was done correctly
+aud <- su_pp_model %>%
+  arrange(outcome, participant_id,
+    if ("interval_index" %in% names(.)) interval_index else as.integer(end_wave)) %>%
+  group_by(outcome, participant_id) %>%
+  mutate(had_onset = cummax(event == 1L)) %>%
+  summarise(post_onset_rows = max(0L, sum(had_onset) - 1L), .groups = "drop")
+aud %>% summarise(any_post = any(post_onset_rows > 0),
+  n_ids_with_post = sum(post_onset_rows > 0))
+
 # Empirical wave-median ages (for plotting/prediction)
 wave_age_medians <- su_pp_model %>%
   group_by(end_wave) %>%
@@ -211,11 +234,9 @@ build_formula <- function(bd_var = "bd_any_start", link = c("logit","cloglog")) 
     "age_mid_between",
     "age_mid_cwc",
     "sex",
-    "post_baseline",
+    "end_wave",
     bd_var,
     "(1 | participant_id)",
-    "(1 | family_id)",
-    "(1 | site_factor)",
     sep = " + "
   )
   as.formula(paste("event ~", rhs))
@@ -414,7 +435,6 @@ save_dharma_plots_and_tests <- function(fit, tag) {
 }
 
 # Predictions: hazards by cluster across ages, for BD=0 vs BD=1 (emmeans; robust vcov if needed)
-# Robust age-by-cluster predictions with fallback if emmeans grid fails
 pred_by_age_by_bd <- function(fit, dat, bd_var = "bd_any_start", ages = ages_pred_vec, wave_ref = params$wave_ref) {
   # Clamp requested ages to the observed range for this subset
   a_min <- suppressWarnings(min(dat$age_mid, na.rm = TRUE))
@@ -427,33 +447,38 @@ pred_by_age_by_bd <- function(fit, dat, bd_var = "bd_any_start", ages = ages_pre
   }
 
   grand_mean <- mean(dat$age_mid, na.rm = TRUE)
-  age_between_vals <- as.numeric(ages_safe - grand_mean)
+  age_between_vals <- as.numeric(ages_safe - grand_mean)  # raw "between" units
+  scales <- get_age_scales(dat)
+  # map raw -> model scale if needed
+  age_between_for_model <- if (!is.null(scales$between)) apply_age_scales(age_between_vals, scales$between) else age_between_vals
+  age_cwc_for_model     <- if (!is.null(scales$cwc))     apply_age_scales(0,                   scales$cwc)     else 0
 
   # Utilities to coerce factors in newdata to the same levels as the fit data
   lvl <- function(x) levels(droplevels(x))
   fct_like <- function(vals, like) factor(vals, levels = lvl(like))
 
-  # Try emmeans first ---------------------------------------------------------
+  n_clu <- length(lvl(dat$cluster))
+  age_years_rep <- rep(round(as.numeric(ages_safe), 2), each = n_clu)
+
   emmeans_try <- function(bd_state) {
-    vc <- robust_vcov_for(fit, dat)  # may be NULL, that's fine
+    vc <- robust_vcov_for(fit, dat)  # may be NULL
     at_list <- list(
       cluster          = lvl(dat$cluster),
-      age_mid_between  = age_between_vals,
-      age_mid_cwc      = 0,
-      post_baseline    = mean(dat$post_baseline, na.rm = TRUE),
+      age_mid_between  = age_between_for_model,
+      age_mid_cwc      = age_cwc_for_model,
+      end_wave         = mean(dat$end_wave, na.rm = TRUE),
       sex              = lvl(dat$sex)[1],
       site_factor      = lvl(dat$site_factor)[1]
     )
     at_list[[bd_var]] <- bd_state
 
-    em <- emmeans::emmeans(fit, ~ cluster | age_mid_between,
-                           at = at_list, vcov. = vc, type = "response")
+    em <- emmeans::emmeans(fit, ~ cluster | age_mid_between, at = at_list, vcov. = vc, type = "response")
     sm <- as.data.frame(summary(em, infer = TRUE))
     resp <- emm_resp_col(sm); ci <- emm_ci_cols(sm)
 
     tibble::tibble(
       cluster   = sm$cluster,
-      age_years = round(as.numeric(sm$age_mid_between + grand_mean), 2),
+      age_years = age_years_rep,
       pred      = if (is.null(resp)) NA_real_ else as.numeric(sm[[resp]]),
       lower     = if (is.null(ci$lo)) NA_real_ else as.numeric(sm[[ci$lo]]),
       upper     = if (is.null(ci$hi)) NA_real_ else as.numeric(sm[[ci$hi]]),
@@ -461,36 +486,25 @@ pred_by_age_by_bd <- function(fit, dat, bd_var = "bd_any_start", ages = ages_pre
     )
   }
 
-  # Fallback: predict() on an explicit grid -----------------------------------
   fallback_try <- function(bd_state) {
     grid <- tidyr::expand_grid(
       cluster         = lvl(dat$cluster),
-      age_mid_between = age_between_vals
+      age_mid_between = age_between_for_model
     ) %>%
       dplyr::mutate(
-        # Build a newdata with proper types/levels
-        age_mid_cwc   = 0,
-        post_baseline = mean(dat$post_baseline, na.rm = TRUE),
+        age_mid_cwc   = age_cwc_for_model,
+        end_wave      = mean(dat$end_wave, na.rm = TRUE),
         sex           = lvl(dat$sex)[1],
         site_factor   = lvl(dat$site_factor)[1]
-      )
-
-    # Coerce to factor levels of the analysis data
-    grid <- grid %>%
+      ) %>%
       dplyr::mutate(
         cluster     = fct_like(cluster, dat$cluster),
         sex         = fct_like(sex, dat$sex),
         site_factor = fct_like(site_factor, dat$site_factor)
       )
-
-    # Add BD state
     grid[[bd_var]] <- as.integer(bd_state)
 
-    # Predict marginal over RE
-    pr <- suppressWarnings(try(
-      stats::predict(fit, newdata = grid, type = "response", re.form = NA),
-      silent = TRUE
-    ))
+    pr <- suppressWarnings(try(stats::predict(fit, newdata = grid, type = "response", re.form = NA), silent = TRUE))
     if (inherits(pr, "try-error")) {
       return(tibble::tibble(cluster = character(), age_years = double(),
                             pred = double(), lower = double(), upper = double(),
@@ -499,7 +513,7 @@ pred_by_age_by_bd <- function(fit, dat, bd_var = "bd_any_start", ages = ages_pre
 
     tibble::tibble(
       cluster   = grid$cluster,
-      age_years = round(as.numeric(grid$age_mid_between + grand_mean), 2),
+      age_years = rep(round(as.numeric(ages_safe), 2), each = length(lvl(dat$cluster))),
       pred      = as.numeric(pr),
       lower     = NA_real_,
       upper     = NA_real_,
@@ -507,26 +521,16 @@ pred_by_age_by_bd <- function(fit, dat, bd_var = "bd_any_start", ages = ages_pre
     )
   }
 
-  # Run emmeans, check if anything finite came back; otherwise fallback
   out0 <- suppressWarnings(try(emmeans_try(0L), silent = TRUE))
   out1 <- suppressWarnings(try(emmeans_try(1L), silent = TRUE))
+  need_fallback <- inherits(out0, "try-error") || !any(is.finite(out0$pred)) ||
+                   inherits(out1, "try-error") || !any(is.finite(out1$pred))
+  res <- if (need_fallback) dplyr::bind_rows(fallback_try(0L), fallback_try(1L))
+         else               dplyr::bind_rows(out0, out1)
 
-  need_fallback <-
-    inherits(out0, "try-error") || !any(is.finite(out0$pred)) ||
-    inherits(out1, "try-error") || !any(is.finite(out1$pred))
-
-  res <- if (need_fallback) {
-    dplyr::bind_rows(fallback_try(0L), fallback_try(1L))
-  } else {
-    dplyr::bind_rows(out0, out1)
-  }
-
-  # Final clean
   res %>%
-    dplyr::mutate(
-      cluster  = fct_like(cluster, dat$cluster),
-      bd_state = as.integer(bd_state)
-    ) %>%
+    dplyr::mutate(cluster  = fct_like(cluster, dat$cluster),
+                  bd_state = as.integer(bd_state)) %>%
     dplyr::filter(is.finite(pred))
 }
 
@@ -534,24 +538,30 @@ pred_by_age_by_bd <- function(fit, dat, bd_var = "bd_any_start", ages = ages_pre
 bd_contrasts_by_age <- function(fit, dat, bd_var = "bd_any_start", ages = ages_pred_vec, wave_ref = params$wave_ref) {
   grand_mean <- mean(dat$age_mid, na.rm = TRUE)
   age_between_vals <- ages - grand_mean
+
+  scales <- get_age_scales(dat)
+  age_between_for_model <- if (!is.null(scales$between)) apply_age_scales(age_between_vals, scales$between) else age_between_vals
+  age_cwc_for_model     <- if (!is.null(scales$cwc))     apply_age_scales(0,                   scales$cwc)     else 0
+
   vc <- robust_vcov_for(fit, dat)
   pb_val <- as.integer(wave_ref != "ses-02A")
 
   at_list <- list(
-    age_mid_between = age_between_vals,
-    age_mid_cwc = 0,
-    post_baseline = pb_val,
-    sex = levels(dat$sex)[1],
-    site_factor = levels(dat$site_factor)[1],
-    cluster = levels(dat$cluster)[1]
+    age_mid_between = age_between_for_model,
+    age_mid_cwc     = age_cwc_for_model,
+    end_wave        = pb_val,
+    sex             = levels(dat$sex)[1],
+    site_factor     = levels(dat$site_factor)[1],
+    cluster         = levels(dat$cluster)[1]
   )
   at_list[[bd_var]] <- c(0L, 1L)
 
   em <- emmeans::emmeans(fit, as.formula(paste("~", bd_var, "| age_mid_between")), at = at_list, vcov. = vc)
-  ct <- contrast(em, list("1 vs 0" = c(-1, 1)))  # explicit 1 vs 0
+  ct <- contrast(em, list("1 vs 0" = c(-1, 1)))
   sm <- as.data.frame(summary(ct, infer = TRUE))
+
   tibble::tibble(
-    age_years = round(sm$age_mid_between + grand_mean, 2),
+    age_years = round(as.numeric(ages), 2),
     contrast  = "1 vs 0",
     OR        = exp(sm$estimate),
     CI_lo     = exp(sm$lower.CL),
@@ -562,24 +572,29 @@ bd_contrasts_by_age <- function(fit, dat, bd_var = "bd_any_start", ages = ages_p
 
 hazard_by_period_by_bd <- function(fit, dat, bd_var = "bd_any_start") {
   vc <- robust_vcov_for(fit, dat)
+  scales <- get_age_scales(dat)
+  age_between0 <- if (!is.null(scales$between)) apply_age_scales(0, scales$between) else 0
+  age_cwc0     <- if (!is.null(scales$cwc))     apply_age_scales(0, scales$cwc)     else 0
+
   outs <- list()
   for (bd_state in c(0L,1L)) {
     at_list <- list(
-      cluster = levels(dat$cluster)[1],
-      age_mid_between = 0, age_mid_cwc = 0,
-      post_baseline = c(0,1),
-      sex = levels(dat$sex)[1],
-      site_factor = levels(dat$site_factor)[1]
+      cluster         = levels(dat$cluster)[1],
+      age_mid_between = age_between0,
+      age_mid_cwc     = age_cwc0,
+      end_wave        = c(0,1),
+      sex             = levels(dat$sex)[1],
+      site_factor     = levels(dat$site_factor)[1]
     )
     at_list[[bd_var]] <- bd_state
-    em <- emmeans::emmeans(fit, ~ post_baseline, at = at_list, vcov. = vc, type = "response")
+    em <- emmeans::emmeans(fit, ~ end_wave, at = at_list, vcov. = vc, type = "response")
     sm <- as.data.frame(summary(em, infer = TRUE))
     resp <- emm_resp_col(sm); ci <- emm_ci_cols(sm)
     outs[[as.character(bd_state)]] <- tibble::tibble(
-      post_baseline = sm$post_baseline,
-      hazard = if (is.null(resp)) NA_real_ else sm[[resp]],
-      lo = if (is.null(ci$lo)) NA_real_ else sm[[ci$lo]],
-      hi = if (is.null(ci$hi)) NA_real_ else sm[[ci$hi]],
+      end_wave = sm$end_wave,
+      hazard   = if (is.null(resp)) NA_real_ else sm[[resp]],
+      lo       = if (is.null(ci$lo)) NA_real_ else sm[[ci$lo]],
+      hi       = if (is.null(ci$hi)) NA_real_ else sm[[ci$hi]],
       bd_state = bd_state
     )
   }
@@ -608,7 +623,7 @@ keep_terms <- function(df) {
       grepl("^age_mid_between$", term) |
       grepl("^age_mid_cwc$", term) |
       grepl("^sex", term) |
-      grepl("^post_baseline$", term) |
+      grepl("^end_wave$", term) |
       grepl("^bd_", term)
     )
 }
@@ -658,7 +673,7 @@ prune_formula_for_data <- function(form, data, drop_random = TRUE) {
     }
   }
 
-  drop_const_num("post_baseline")
+  drop_const_num("end_wave")
   drop_const_num("age_mid_between")
   drop_const_num("age_mid_cwc")
   drop_const_num("bd_any_start")
@@ -709,6 +724,18 @@ msg_model_health <- function(fit, tag) {
   }
 }
 
+# -- Scaling helpers for age vars (used when we z-score age for SA only) ----
+get_age_scales <- function(dat) {
+  list(
+    between = attr(dat, "age_between_scale"),
+    cwc     = attr(dat, "age_cwc_scale")
+  )
+}
+apply_age_scales <- function(x, sc) {
+  if (is.null(sc) || any(!is.finite(sc))) return(x)
+  (x - sc[1]) / sc[2]
+}
+
 ```
 
 ## 2) Fit DTH Models (primary + sensitivities) and Export
@@ -740,15 +767,37 @@ for (out in OUTCOMES) {
     droplevels() %>%
     ensure_group_factors()
 
+  # scale ages for SA only (z-score), and stash scales for prediction
+  if (identical(out, "sa")) {
+    sb <- c(mean(dat_o$age_mid_between, na.rm = TRUE),
+            stats::sd(dat_o$age_mid_between, na.rm = TRUE))
+    sc <- c(mean(dat_o$age_mid_cwc,     na.rm = TRUE),
+            stats::sd(dat_o$age_mid_cwc,     na.rm = TRUE))
+    dat_o <- dat_o %>%
+      mutate(
+        age_mid_between = (age_mid_between - sb[1]) / sb[2],
+        age_mid_cwc     = (age_mid_cwc     - sc[1]) / sc[2])
+
+    # store scales so the prediction helpers can invert back to raw ages
+    attr(dat_o, "age_between_scale") <- sb
+    attr(dat_o, "age_cwc_scale")     <- sc
+  }
+
   # skip empty/degenerate subsets
   if (!can_fit_binomial(dat_o)) {
     message("  Skipping ", out, " (no rows or no 0/1 variation in event).")
     next
   }
 
-  # build/prune AFTER cleaning factors
+  # Build/prune AFTER cleaning factors
   form_o <- build_formula(bd_var = "bd_any_start", link = params$link_primary)
   form_o <- prune_formula_for_data(form_o, dat_o)
+
+  # SA: avoid collinearity with post_baseline (two-wave design)
+  if (identical(out, "sa")) {
+    form_o <- update.formula(form_o, . ~ . - age_mid_cwc)
+  }
+
   dbg <- dat_o %>% summarise(
     n = dplyr::n(),
     n_ids = dplyr::n_distinct(participant_id),
@@ -785,16 +834,13 @@ for (out in OUTCOMES) {
   # Predictions & BD contrasts
   preds_primary_age[[out]] <- safe_or_null(
     pred_by_age_by_bd(fit_o, dat_o, bd_var = "bd_any_start", ages = ages_pred_vec, wave_ref = params$wave_ref) %>%
-      mutate(outcome = out, model = params$link_primary, wave_ref = params$wave_ref, .before = 1)
-  )
+      mutate(outcome = out, model = params$link_primary, wave_ref = params$wave_ref, .before = 1))
   hazards_wave_bd[[out]] <- safe_or_null(
   hazard_by_period_by_bd(fit_o, dat_o, bd_var = "bd_any_start") %>%
-    mutate(outcome = out, model = params$link_primary, .before = 1)
-)
+    mutate(outcome = out, model = params$link_primary, .before = 1))
   bd_contrasts[[out]] <- safe_or_null(
     bd_contrasts_by_age(fit_o, dat_o, bd_var = "bd_any_start", ages = ages_pred_vec, wave_ref = params$wave_ref) %>%
-      mutate(outcome = out, model = params$link_primary, .before = 1)
-  )
+      mutate(outcome = out, model = params$link_primary, .before = 1))
 
   # SENSITIVITY 1: cloglog + offset(log_dt)
   message("  Sensitivity (cloglog + offset log_dt): ", out)
@@ -820,6 +866,9 @@ for (out in OUTCOMES) {
   if (all(!is.na(dat_o$bd_any_end))) {
     form_s2 <- build_formula(bd_var = "bd_any_end", link = params$link_primary)
     form_s2 <- prune_formula_for_data(form_s2, dat_o)
+    if (identical(out, "sa")) {
+     form_s2 <- update.formula(form_s2, . ~ . - age_mid_cwc)
+    }
     dbg <- dat_o %>% summarise(
     n = dplyr::n(),
     n_ids = dplyr::n_distinct(participant_id),
@@ -845,6 +894,9 @@ if (any(!is.na(dat_o$bd_any_start_lag1))) {
   if (can_fit_binomial(dat_lag) && has_two_levels(dat_lag$bd_any_start_lag1)) {
     form_s3 <- build_formula(bd_var = "bd_any_start_lag1", link = params$link_primary)
     form_s3 <- prune_formula_for_data(form_s3, dat_lag)
+    if (identical(out, "sa")) {
+      form_s3 <- update.formula(form_s3, . ~ . - age_mid_cwc)
+    }
     fit_s3  <- fit_glmer_safe(form_s3, dat_lag, link = params$link_primary)
     fit_s3  <- simplify_random_effects(fit_s3, form_s3, dat_lag, link = params$link_primary)
     msg_model_health(fit_s3, glue("{out} | sens lag1(bd_any_start)"))
@@ -980,7 +1032,7 @@ if (!nrow(pred_df)) {
 empty_haz <- tibble::tibble(
   model = character(),
   outcome = character(),
-  post_baseline = integer(),
+  end_wave = integer(),
   hazard = double(),
   lo = double(),
   hi = double(),
@@ -997,7 +1049,7 @@ haz_df <- dplyr::filter(haz_df, model == params$link_primary)
 
 if (nrow(haz_df)) {
   g_haz <- ggplot(haz_df,
-                  aes(x = factor(post_baseline, levels = c(0,1), labels = c("Baseline","Post-baseline")),
+                  aes(x = factor(end_wave, levels = c(0,1), labels = c("Baseline","Post-baseline")),
                       y = hazard, fill = factor(bd_state))) +
     geom_col(position = position_dodge(width = 0.7), width = 0.6) +
     { if (all(c("lo","hi") %in% names(haz_df)) && any(is.finite(haz_df$lo) & is.finite(haz_df$hi))) {
@@ -1060,7 +1112,7 @@ pretty_term <- function(x) {
     stringr::str_replace("^age_mid_between$", "Age (between-person)") %>%
     stringr::str_replace("^age_mid_cwc$", "Age (within-person)") %>%
     stringr::str_replace("^sex", "Sex: ") %>%
-    stringr::str_replace("^post_baseline$", "Post-baseline (vs baseline)") %>%
+    stringr::str_replace("^end_wave$", "Wave") %>%
     stringr::str_replace("^bd_", "BD status: ")
 }
 

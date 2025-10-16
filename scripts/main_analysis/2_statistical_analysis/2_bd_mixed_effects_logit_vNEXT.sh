@@ -27,7 +27,12 @@ REPO="/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk"
 IMG="/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.5.sif"
 export APPTAINER_CACHEDIR="/home/exacloud/gscratch/NagelLab/staff/sam/.apptainer_cache"
 
-export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 BLIS_NUM_THREADS=1
+# faster (allow BLAS to use cores; still 1 task)
+export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+export MKL_NUM_THREADS=$SLURM_CPUS_PER_TASK
+export OPENBLAS_NUM_THREADS=$SLURM_CPUS_PER_TASK
+export BLIS_NUM_THREADS=$SLURM_CPUS_PER_TASK
+
 export LANG=C.UTF-8 LC_ALL=C.UTF-8
 
 LOGDIR="${REPO}/slurm_logs/$(date +%F)"
