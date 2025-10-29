@@ -29,6 +29,7 @@ params:
 ---
 
 ```{r setup, message=FALSE, warning=FALSE, echo=FALSE}
+
 knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, fig.align="center")
 N_CORES <- as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", Sys.getenv("OMP_NUM_THREADS", "4")))
 options(mc.cores = ifelse(is.na(N_CORES), 4L, max(1L, N_CORES)))
@@ -123,6 +124,7 @@ get_bd_cov <- function(df, pref = params$bd_timevarying) {
 # Utilities (binom-free CIs, diagnostics, helpers)
 
 ```{r utils}
+
 # Wilson or Exact (Clopper-Pearson) CI for binomial proportion using base R only
 binom_ci <- function(x, n, conf = 0.95, method = c("wilson","exact")) {
   method <- match.arg(method)
@@ -136,13 +138,13 @@ binom_ci <- function(x, n, conf = 0.95, method = c("wilson","exact")) {
     })
     low  <- vapply(ci_list, `[`, numeric(1), 1)
     high <- vapply(ci_list, `[`, numeric(1), 2)
-  } else { # Wilson
+  } else {
     z <- qnorm(1 - alpha / 2)
     denom  <- 1 + z^2 / n
     center <- p + z^2 / (2 * n)
-    adj    <- z * sqrt(p * (1 - p) / n + z^2 / (4 * n^2))
-    low    <- (center - adj) / denom
-    high   <- (center + adj) / denom
+    adj <- z * sqrt(p * (1 - p) / n + z^2 / (4 * n^2))
+    low <- (center - adj) / denom
+    high <- (center + adj) / denom
   }
   data.frame(p_low = low, p_high = high)
 }
@@ -150,7 +152,7 @@ binom_ci <- function(x, n, conf = 0.95, method = c("wilson","exact")) {
 # Dispersion (QC)
 dispersion_check <- function(mod) {
   r <- try(residuals(mod, type = "pearson"), silent = TRUE)
-  df <- try(df.residual(mod),           silent = TRUE)
+  df <- try(df.residual(mod), silent = TRUE)
   if (inherits(r,"try-error") || inherits(df,"try-error") || is.null(df) || df <= 0) return(NA_real_)
   sum(r^2, na.rm = TRUE) / df
 }
@@ -330,7 +332,7 @@ or_by_wave_emm <- function(fit, df, model, outcome) {
   )
 }
 
-# robust tidy_or (so we don’t crash if SE column names differ)
+# robust tidy_or (so we donï¿½t crash if SE column names differ)
 tidy_or <- function(x, term_keep = NULL) {
   tx <- tryCatch({
     if (inherits(x, "merMod")) {
