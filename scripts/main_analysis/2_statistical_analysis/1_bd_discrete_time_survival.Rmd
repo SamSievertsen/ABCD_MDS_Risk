@@ -5,8 +5,6 @@ output:
     toc: true
     toc_depth: 2
     number_sections: false
-lang: en
-encoding: UTF-8
 params:
   repo: !r Sys.getenv("REPO", unset = here::here())
   data_dir: "data/data_processed/analysis_datasets/"
@@ -1246,58 +1244,6 @@ write_if_any <- function(df, path) {
     message("Skipping write for ", basename(path), " (empty).")
   }
 }
-
-#1.32 Compare nested models for an interaction (with bootstrap + CV)
-#compare_models <- function(form_small, form_big, dat, link = params$link_primary, B = 500, kfold = 5) {
-  #fit_s <- fit_glmer_safe(form_small, dat, link = link)
-  #fit_b <- fit_glmer_safe(form_big,   dat, link = link)
-
-  #1.32.1 Likelihood: AIC/BIC (negative favors BIG)
-  #dAIC <- AIC(fit_b) - AIC(fit_s)
-  #dBIC <- BIC(fit_b) - BIC(fit_s)
-
-  #1.32.2 Bootstrap LRT under SMALL
-  #set.seed(params$seed)
-  #D_obs <- as.numeric(-2*(logLik(fit_s) - logLik(fit_b)))
-  #D_sim <- replicate(B, {
-    #ysim <- unlist(simulate(fit_s, nsim = 1))
-    #ds <- dat; ds$event <- ysim
-    #f1 <- safe_or_null(fit_glmer_safe(form_small, ds, link = link))
-    #f2 <- safe_or_null(fit_glmer_safe(form_big, ds, link = link))
-    #if (is.null(f1) || is.null(f2)) return(NA_real_)
-    #as.numeric(-2*(logLik(f1) - logLik(f2)))
-  #})
-  #p_boot <- mean(D_sim[is.finite(D_sim)] >= D_obs)
-
-  #1.32.3 Participant-level K-fold CV (log loss, Brier, per-wave×cluster RMSE)
-  #ids <- unique(dat$participant_id)
-  #set.seed(params$seed)
-  #folds <- split(sample(ids), cut(seq_along(ids), kfold, labels = FALSE))
-  #eval_cv <- function(form) {
-    #LL <- BR <- RM <- numeric()
-    #for (id_set in folds) {
-      #tr <- dat[!(dat$participant_id %in% id_set), ]
-      #te <- dat[ (dat$participant_id %in% id_set), ]
-      #fm <- safe_or_null(fit_glmer_safe(form, tr, link = link)); if (is.null(fm)) next
-      #pr <- as.numeric(predict(fm, newdata = te, type = "response", re.form = NA))
-      #LL <- c(LL, log_loss(te$event, pr))
-      #BR <- c(BR, brier_score(te$event, pr))
-      #emp <- te %>% dplyr::group_by(end_wave, cluster) %>%
-             #dplyr::summarise(emp = mean(event==1L), .groups="drop")
-      #pd <- te %>% dplyr::mutate(pred = pr) %>%
-             #dplyr::group_by(end_wave, cluster) %>%
-             #dplyr::summarise(pred = mean(pred), .groups="drop")
-      #j <- dplyr::left_join(emp, pd, by = c("end_wave","cluster"))
-      #RM <- c(RM, sqrt(mean((j$emp - j$pred)^2, na.rm = TRUE)))
-    #}
-    #list(logloss = mean(LL), brier = mean(BR), rmse_wave = mean(RM))
-  #}
-  #cv_s <- eval_cv(form_small); cv_b <- eval_cv(form_big)
-  #list(
-    #dAIC = dAIC, dBIC = dBIC, D_obs = D_obs, p_boot = p_boot,
-    #cv_small = cv_s, cv_big = cv_b,
-    #diag_small = diag_report(fit_s), diag_big = diag_report(fit_b))
-#}
 
 ```
 
