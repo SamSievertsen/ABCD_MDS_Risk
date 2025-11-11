@@ -13,17 +13,23 @@ params:
                                 # "seed": run single seed (requires seed_index)
                                 # "aggregate": run aggregation only
   seed_index: !r NULL        # used when mode == "seed" (1..n_seeds)
-  k_opt: 2
+  k_opt: 2                   # optimal k to specify from previous analyses
   scaling: "robust"          # documentation only; assumes pre-scaled data
   biter: 1000                # permutations per feature (MCR)
   n_seeds: 50
-  holm_alpha: 0.05
   stability_keep: 0.80       # >=80% seeds pass shadow-max
   redundancy_rho: 0.80       # corr threshold for numeric redundancy
   redundancy_v: 0.80         # Cramer's V threshold for categorical redundancy
   shadow_B: 500              # reps for shadow-null baseline (shadow-max +, optionally p-values)
+  shadow_mode: "q"           # "max" or "q"
+  shadow_q: 0.95             # only used when shadow_mode == "q"
+  holm_alpha: 0.05           # overall alpha; used for FDR threshold in aggregate
   pval_B: 200                # 0 = off; if >0, compute per-feature empirical p with B reps (500 = max robustness)
-  xgb_nrounds: 600           # surrogate capacity (early stopping inside)
+  shadow_feat_B: 500         # reps per feature for feature-specific shadow
+  shadow_feat_mode: "q"      # "max" or "q" (quantile) for shadow feature specific analysis
+  shadow_feat_q: 0.95        # used when shadow_feat_mode == "q"
+  save_feat_nulls: false     # set TRUE to write per-feature null vectors (RDS)
+  xgb_nrounds: 600           # surrogate capacity (early stopping nested)
   xgb_cv_folds: 5
 ---
 
@@ -74,6 +80,7 @@ library(xgboost);
 library(yardstick); 
 library(rsample); 
 library(shapviz);
+library(SHAPforxgboost);
 library(jsonlite); 
 library(inflection)
 })
@@ -95,11 +102,25 @@ invisible(lapply(paths, dir.create, showWarnings = FALSE, recursive = TRUE))
 #1.4 Configure parallel workers from SLURM env var or fallback to local cores
 n_workers <- suppressWarnings(as.integer(Sys.getenv("SLURM_CPUS_PER_TASK")))
 if (is.na(n_workers) || n_workers < 1) n_workers <- max(1, parallel::detectCores() - 1)
-future::plan("multicore", workers = n_workers)
+if (.Platform$OS.type == "windows") {
+  future::plan("multisession", workers = n_workers)
+} else {
+  future::plan("multicore", workers = n_workers)
+}
 
 #1.5 Initialize logging helper (no-op unless $DETAILED_LOG is set)
 log_file <- Sys.getenv("DETAILED_LOG", unset = NA)
-.log <- function(...) if (!is.na(log_file)) cat(glue(...), file = log_file, sep = "\n", append = TRUE)
+# evaluate glue in the caller's frame, and never crash the job on a log failure
+.log <- function(text, .envir = parent.frame()) {
+  if (is.na(log_file)) return(invisible())
+  out <- try(glue::glue(text, .envir = .envir), silent = TRUE)
+  if (inherits(out, "try-error")) {
+    cat(paste0(format(Sys.time(), "%F %T"), "|LOG_ERR|", as.character(out)),
+        file = log_file, sep = "\n", append = TRUE)
+  } else {
+    cat(out, file = log_file, sep = "\n", append = TRUE)
+  }
+}
 .log("{format(Sys.time(), '%Y-%m-%d %H:%M:%OS3')}|FI_START|mode={params$mode}")
 
 #1.6 Establish reproducible seed list shared across array tasks
@@ -133,14 +154,13 @@ cat("Set-up complete\n")
 
 ### 2. Data & Fitted Clustering Anchor
 
-**Goal:** Load the cleaned baseline risk dataframe and the final fitted k-prototypes object (scaling = robust, λ from `lambdaest`). Compute baseline cluster assignments from the anchor model and coerce `risk_dt` column types to match the fitted object to ensure consistent distance calculations in downstream predictions
+**Goal:** Load the cleaned baseline risk dataframe and the final fitted k-prototypes object (scaling = robust, lambda from `lambdaest`). Compute baseline cluster assignments from the anchor model and coerce `risk_dt` column types to match the fitted object to ensure consistent distance calculations in downstream predictions
 
-```{r load_data_and_utils, message = FALSE, warning = FALSE, echo = FALSE}
+```{r load_data_and_utils, warning = FALSE, echo = FALSE}
 
 #2. Load Data & Fitted Clustering Solution
 #2.1 Load baseline risk dataset used in anchor model
-risk_dt <- suppressMessages(readr::read_csv(paths$risk_csv, show_col_types = FALSE)) |> as.data.table()
-stopifnot(nrow(risk_dt) > 0)
+raw_dt <- suppressMessages(readr::read_csv(paths$risk_csv, show_col_types = FALSE)) |> as.data.table()
 
 #2.2 Load fitted k-prototypes anchor object (k, lambda)
 #2.2.1 Establish k-prototypes path
@@ -153,23 +173,90 @@ if (!file.exists(kp_path)) {
 }
 
 #2.2.3 Read k-prototypes and extract k, lambda
-kp0 <- readRDS(kp_path); stopifnot(inherits(kp0, "kproto"))
-k_opt <- kp0$k; lambda_used <- kp0$lambda
-message(glue("Loaded k-prototypes: k={k_opt}, lambda={round(lambda_used,3)}"))
+#2.2.3.1 Read k-prototypes object(s) and select the one for params$k_opt
+kp_any <- readRDS(kp_path)
 
-#2.3 Align categorical levels in newdata with the fitted model before predict()
-if (!is.null(kp0$modes)) {
-  cat_cols <- names(kp0$modes)
-  risk_dt[, (cat_cols) := lapply(.SD, function(x) if (is.factor(x)) x else factor(x)), .SDcols = cat_cols]
+#2.2.3.2 Create a function to dynamically select the kproto object of interest
+pick_kproto <- function(obj, k_target) {
+  
+  #2.2.3.2.1 Case 1: a single kproto object
+  if (inherits(obj, "kproto")) return(obj)
+  
+  #2.2.3.2.2 Case 2: a list of kproto objects (e.g., named "k2","k3",...)
+  stopifnot(is.list(obj))
+  nm <- names(obj)
+  
+  #2.2.3.2.3 Prefer exact name match
+  if (!is.null(nm)) {
+    nm_hit <- paste0("k", k_target)
+    if (nm_hit %in% nm && inherits(obj[[nm_hit]], "kproto")) return(obj[[nm_hit]])
+  }
+  
+  #2.2.3.2.4 Fallback: first element whose cluster-count matches k_target
+  for (el in obj) {
+    if (inherits(el, "kproto")) {
+      sz <- tryCatch(el$size, error = function(...) NULL)
+      if (!is.null(sz) && length(sz) == k_target) return(el)
+    }
+  }
+  stop(glue("Could not locate a k-prototypes object for k={k_target} in {kp_path}"))
 }
 
-#2.4 Derive column metadata (numeric vs categorical)
-num_cols <- names(Filter(is.numeric, risk_dt))
-if (!exists("cat_cols")) cat_cols <- setdiff(names(risk_dt), num_cols)
+#2.2.3.3 Select the desired kproto object and lambda used to generate clusters
+kp0 <- pick_kproto(kp_any, params$k_opt)
+k_opt <- params$k_opt
+lambda_used <- tryCatch(kp0$lambda, error = function(...) NULL)
+if (is.null(lambda_used) || is.na(lambda_used)) {
+  message("kp0$lambda not found; estimating lambda from data via clustMixType::lambdaest().")
+  lambda_used <- clustMixType::lambdaest(as.data.frame(risk_dt))
+}
 
-#2.5 Compute baseline assignments from the anchor model
-base_assign0 <- predict(kp0, newdata = risk_dt)
+#2.2.3.4 Print stats RE the kproto object and parameters used
+message(glue("Loaded k-prototypes (from list): k={k_opt}, lambda={round(lambda_used, 6)}"))
+
+#2.3 Create a helper function to always return the cluster labels as an integer vector
+predict_clusters <- function(kp, newdata) {
+  pr <- predict(kp, newdata = newdata)
+  if (is.list(pr)) pr$cluster else pr
+}
+
+#2.4 Canonicalize data to match the fitted k-prototypes object
+#2.4.1 Use the exact matrix used at fit time previously
+X_fit <- kp0$data
+stopifnot(!is.null(X_fit), nrow(X_fit) > 0)
+
+#2.4.2 Convert to data.table and add subject id from rownames -> ".id"
+X_dt <- as.data.table(X_fit)
+if (!is.null(rownames(X_fit))) {
+  X_dt[, .id := rownames(X_fit)]
+} else {
+  
+  #2.4.2.1 Fallback if the object has no rownames
+  X_dt[, .id := sprintf("row%06d", seq_len(.N))]
+}
+
+#2.4.3 put .id first
+data.table::setcolorder(X_dt, c(".id", setdiff(names(X_dt), ".id")))
+
+#2.4.4 Features actually used by the clustering (drop .id)
+features_used <- setdiff(names(X_dt), ".id")
+
+#2.4.5 Make this the dataset for all predict() / FI steps
+risk_dt <- X_dt
+
+#2.4.6 Column metadata based on the canonical feature frame
+num_cols <- names(Filter(is.numeric, risk_dt[, ..features_used]))
+cat_cols <- setdiff(features_used, num_cols)
+
+#2.4.7 Anchor assignments using the canonical feature frame
+base_assign0 <- predict_clusters(kp0, risk_dt[, ..features_used])
 stopifnot(length(base_assign0) == nrow(risk_dt))
+
+#2.5 Sanity check: predict on kp0$data should match kp0$cluster almost perfectly (if overlap < 100%, that’s a data-prep issue, e.g., filters applied after clustering)
+if (!is.null(kp0$cluster)) {
+  agree <- mean(base_assign0 == kp0$cluster)
+  cat(sprintf("Sanity: predict(kp0, kp0$data) agrees with kp0$cluster in %.1f%% of rows.", 100*agree))
+}
 
 ```
 
@@ -200,51 +287,73 @@ feature_mcr <- function(kp, data_dt, base_assign, feat, biter = 1000L, seed = NU
   for (b in seq_len(biter)) {
     tmp <- data_dt
     tmp[[feat]] <- permute_col(tmp[[feat]])
-    pred <- predict(kp, newdata = tmp)
+    pred <- predict_clusters(kp, tmp[, ..features_used])
     mcr[b] <- mean(pred != base_assign)
   }
   c(mean = mean(mcr), sd = stats::sd(mcr))
 }
 
-#3.3 shadow_max_mcr(): Boruta-style global shadow baseline (max of null draws)
-shadow_max_mcr <- function(kp, data_dt, base_assign, B = 500L, seed = NULL) {
+#3.3 Shadow baseline: return threshold (max or quantile) and raw null vector. NOTE: use predict_clusters() and the current seed's base_assign to avoid list/shape issues
+shadow_baseline <- function(kp, data_dt, base_assign,
+                            B = 500L,
+                            mode = c("max","q"), q = 0.95,
+                            seed = NULL) {
+  mode <- match.arg(mode)
   if (!is.null(seed)) set.seed(seed + 101)
-  feats <- names(data_dt)
+
+  #3.3.1 Only sample among the actual features used by k-prototypes
+  feats <- features_used
   sampled_feats <- replicate(B, sample(feats, 1L))
-  vals <- future_sapply(sampled_feats, function(fj) {
-    tmp <- data_dt
-    if (is.factor(tmp[[fj]])) {
-      probs <- prop.table(table(tmp[[fj]]))
-      tmp[[fj]] <- factor(
-        sample(names(probs), size = nrow(tmp), replace = TRUE, prob = as.numeric(probs)),
-        levels = names(probs)
-      )
-    } else if (is.character(tmp[[fj]])) {
-      u <- unique(tmp[[fj]]); tmp[[fj]] <- sample(u, size = nrow(tmp), replace = TRUE)
-    } else {
-      v <- tmp[[fj]]; tmp[[fj]] <- sample(v, size = length(v), replace = TRUE)
-    }
-    pred <- predict(kp, newdata = tmp)
-    mean(pred != base_assign)
-  })
-  max(vals)
+
+  #3.3.2 For each sampled feature, inject matched-type i.i.d. noise and re-predict
+  vals <- future_sapply(
+    sampled_feats,
+    function(fj) {
+      tmp <- data_dt
+      if (is.factor(tmp[[fj]])) {
+        probs <- prop.table(table(tmp[[fj]]))
+        tmp[[fj]] <- factor(
+          sample(names(probs), size = nrow(tmp), replace = TRUE, prob = as.numeric(probs)),
+          levels = names(probs)
+        )
+      } else if (is.character(tmp[[fj]])) {
+        u <- unique(tmp[[fj]]); tmp[[fj]] <- sample(u, size = nrow(tmp), replace = TRUE)
+      } else {
+        v <- tmp[[fj]];        tmp[[fj]] <- sample(v, size = length(v), replace = TRUE)
+      }
+
+      #3.3.2.1 CRITICAL: slice to features_used and normalize predict output
+      pred <- predict_clusters(kp, tmp[, ..features_used])
+      mean(pred != base_assign)
+    }#,
+
+    #3.3.2.2 Optional: stabilize RNG in parallel if desired
+    #future.seed = TRUE
+  )
+
+  #3.3.3 Return either the max or the q-quantile threshold + the raw null vector
+  thr <- if (identical(mode, "max")) max(vals) else as.numeric(stats::quantile(vals, q, na.rm = TRUE))
+  list(thresh = thr, vals = vals)
 }
 
-#3.4 feature_p_emp(): Build empirical p-value function for a feature's MCR
-feature_p_emp <- function(kp, data_dt, base_assign, feat, B = 200L, seed = NULL) {
-  if (!is.null(seed))
-    set.seed(seed + 202)
-  nulls <- numeric(B)
-  for (b in seq_len(B)) {
+#3.4 Feature-specific shadow baseline supplementary analysis. For a given feature 'feat', repeatedly replace it with matched-type i.i.d. noise, predict with fixed prototypes, and record the MCR. Returns a threshold and moments
+shadow_baseline_feat <- function(kp, data_dt, base_assign,
+                                 feat,
+                                 B = 200L,
+                                 mode = c("max", "q"), q = 0.95,
+                                 seed = NULL) {
+  mode <- match.arg(mode)
+  if (!is.null(seed)) set.seed(seed + 303)
+
+  #3.4.1 Build the feature-specific null
+  vals <- future_sapply(seq_len(B), function(b) {
     tmp <- data_dt
     if (is.factor(tmp[[feat]])) {
       probs <- prop.table(table(tmp[[feat]]))
-      tmp[[feat]] <- factor(sample(
-        names(probs),
-        size = nrow(tmp),
-        replace = TRUE,
-        prob = as.numeric(probs)),
-      levels = names(probs))
+      tmp[[feat]] <- factor(
+        sample(names(probs), size = nrow(tmp), replace = TRUE, prob = as.numeric(probs)),
+        levels = names(probs)
+      )
     } else if (is.character(tmp[[feat]])) {
       u <- unique(tmp[[feat]])
       tmp[[feat]] <- sample(u, size = nrow(tmp), replace = TRUE)
@@ -252,15 +361,51 @@ feature_p_emp <- function(kp, data_dt, base_assign, feat, B = 200L, seed = NULL)
       v <- tmp[[feat]]
       tmp[[feat]] <- sample(v, size = length(v), replace = TRUE)
     }
-    pred <- predict(kp, newdata = tmp)
+    pred <- predict_clusters(kp, tmp[, ..features_used])
+    mean(pred != base_assign)
+  }#, future.seed = TRUE   #3.4.2 uncomment for stricter RNG reproducibility across workers
+  )
+
+  #3.4.3 Establish list with threshold and feature specific stats
+  thr <- if (identical(mode, "max")) max(vals) else as.numeric(stats::quantile(vals, q, na.rm = TRUE))
+  list(thresh = thr,
+       mean = mean(vals, na.rm = TRUE),
+       sd = stats::sd(vals, na.rm = TRUE),
+       vals = vals)
+}
+
+#3.5 feature_p_emp(): Build empirical p-value function for a feature's MCR. NOTE: use predict_clusters() and the *current seed's* base_assign
+feature_p_emp <- function(kp, data_dt, base_assign,
+                          feat, B = 200L, seed = NULL, obs_mcr = NULL) {
+  if (B <= 0L) return(NA_real_)
+  if (!is.null(seed)) set.seed(seed + 202)
+
+  nulls <- numeric(B)
+  for (b in seq_len(B)) {
+    tmp <- data_dt
+    if (is.factor(tmp[[feat]])) {
+      probs <- prop.table(table(tmp[[feat]]))
+      tmp[[feat]] <- factor(
+        sample(names(probs), size = nrow(tmp), replace = TRUE, prob = as.numeric(probs)),
+        levels = names(probs)
+      )
+    } else if (is.character(tmp[[feat]])) {
+      u <- unique(tmp[[feat]]); tmp[[feat]] <- sample(u, size = nrow(tmp), replace = TRUE)
+    } else {
+      v <- tmp[[feat]];        tmp[[feat]] <- sample(v, size = length(v), replace = TRUE)
+    }
+
+    #3.5.1 CRITICAL: slice to features_used and normalize predict output
+    pred <- predict_clusters(kp, tmp[, ..features_used])
     nulls[b] <- mean(pred != base_assign)
   }
 
-#3.4.1 Return a function to compute p-value given observed MCR
-function(obs_mcr) mean(nulls >= obs_mcr)
+  #3.5.2 Return p(null = observed MCR); if obs not supplied, compare to null mean
+  if (is.null(obs_mcr)) return(mean(nulls >= mean(nulls, na.rm = TRUE)))
+  mean(nulls >= obs_mcr)
 }
 
-#3.5 Compute_redundancy(): Flag numeric/categorical redundancy among retained features
+#3.6 Compute_redundancy(): Flag numeric/categorical redundancy among retained features
 compute_redundancy <- function(dt, rho_cut = 0.80, v_cut = 0.80) {
   nn <- NULL
   cc <- NULL
@@ -287,47 +432,83 @@ compute_redundancy <- function(dt, rho_cut = 0.80, v_cut = 0.80) {
   bind_rows(nn, cc)
 }
 
-#3.6 centroid_profiles(): Descriptive numeric/categorical centroid summaries
-centroid_profiles <- function(kp, dt) {
+#3.7 centroid_profiles(): Descriptive numeric/categorical centroid summaries (scaled space)
+centroid_profiles <- function(kp, dt_scaled) {
   cl <- factor(base_assign0)
+
+  #3.7.1 Numeric summaries per cluster (on scaled data)
   num_s <- NULL
-  cat_s <- NULL
   if (length(num_cols) > 0) {
-    num_s <- dt[, ..num_cols] |>
+    num_s <- dt_scaled[, ..num_cols] |>
       mutate(.cluster = cl) |>
       tidyr::pivot_longer(-.cluster, names_to = "feature", values_to = "value") |>
-      group_by(.cluster, feature) |>
-      summarise(
-        mean = mean(value, na.rm = TRUE),
+      dplyr::group_by(.cluster, feature) |>
+      dplyr::summarise(mean = mean(value, na.rm = TRUE),
         sd = sd(value, na.rm = TRUE),
         .groups = "drop")
+
+    #3.7.2 Global reference mean/SD per feature (on the same scaled data used for clustering)
+    gref <- dt_scaled[, ..num_cols] |>
+      tidyr::pivot_longer(dplyr::everything(), names_to = "feature", values_to = "value") |>
+      dplyr::group_by(feature) |>
+      dplyr::summarise(mu_ref = mean(value, na.rm = TRUE),
+        sd_ref = sd(value, na.rm = TRUE),
+        .groups = "drop")
+
+    #3.7.3 Largest pairwise Cohen's d per feature (scale-invariant)
     d_tab <- lapply(num_cols, function(f) {
       lv <- levels(cl)
-      if (length(lv) < 2)
-        return(NULL)
+      if (length(lv) < 2) return(NULL)
       combs <- t(combn(lv, 2))
       ds <- apply(combs, 1, function(pair) {
-        effectsize::cohens_d(dt[[f]][cl == pair[1]],
-          dt[[f]][cl == pair[2]],
+        effectsize::cohens_d(dt_scaled[[f]][cl == pair[1]],
+          dt_scaled[[f]][cl == pair[2]],
           pooled_sd = TRUE,
           hedges.correction = TRUE)$Cohens_d
       })
-      tibble(feature = f,
-        max_cohens_d = max(abs(ds), na.rm = TRUE))
-    }) |> bind_rows()
-    num_s <- left_join(num_s, d_tab, by = "feature")
+      
+      tibble::tibble(feature = f, max_cohens_d = max(abs(ds), na.rm = TRUE))
+    }) |> dplyr::bind_rows()
+    num_s <- num_s |>
+      dplyr::left_join(gref, by = "feature") |>
+      dplyr::left_join(d_tab, by = "feature") |>
+      dplyr::mutate(z_ref = dplyr::if_else(sd_ref > 0, (mean - mu_ref) / sd_ref, 0))
   }
+
+  #3.7.4 Categorical summaries per cluster (robust)
+  cat_s <- NULL
   if (length(cat_cols) > 0) {
     cat_s <- lapply(cat_cols, function(f) {
-      tab <- table(dt[[f]], cl, useNA = "no")
-      apply(tab, 2, function(col) {
-        i <- which.max(col)
-        c(mode = rownames(tab)[i], prop = col[i] / sum(col))
-      }) |> t() |> as.data.frame() |>
-        tibble::rownames_to_column(".cluster") |>
-        mutate(feature = f)
-    }) |> bind_rows() |> mutate(prop = as.numeric(prop))
+      tab <- table(dt_scaled[[f]], cl, useNA = "no")
+
+      #3.7.4.1 Compute (mode, prop) per cluster column with explicit names
+      M <- sapply(seq_len(ncol(tab)), function(j) {
+        col <- tab[, j]
+        den <- sum(col)
+        if (den == 0) {
+          mode_val <- NA_character_
+          prop_val <- NA_real_
+        } else {
+          i <- which.max(col)
+          mode_val <- rownames(tab)[i]
+          prop_val <- as.numeric(col[i] / den)
+        }
+        c(mode = mode_val, prop = prop_val)
+      })
+
+      #3.7.4.2 Ensure matrix shape, set names, and build data frame
+      if (is.null(dim(M))) M <- matrix(M, nrow = 2,
+        dimnames = list(c("mode","prop"), colnames(tab)))
+      df <- as.data.frame(t(M), stringsAsFactors = FALSE)
+      names(df) <- c("mode","prop")
+      df$prop <- as.numeric(df$prop)
+      df$.cluster <- rownames(df)
+      df$feature <- f
+      rownames(df) <- NULL
+      df[, c(".cluster","feature","mode","prop")]
+    }) |> dplyr::bind_rows()
   }
+
   list(numeric = num_s, categorical = cat_s)
 }
 
@@ -346,37 +527,33 @@ readr::write_csv(cents$numeric, file.path(paths$sum_dir, "centroids_numeric.csv"
 readr::write_csv(cents$categorical, file.path(paths$sum_dir, "centroids_categorical.csv"))
 
 #4.2 Plot centroid profiles
-#4.2.1 Numeric centroid heatmap of top-25 features by |max d| across clusters
+#4.2.1 Numeric centroid heatmap of features by |max d|
 if (!is.null(cents$numeric) && nrow(cents$numeric) > 0) {
   num_tab <- cents$numeric
 
-  #4.2.1.1 Overall mean/sd per feature to z-score cluster means
-  gmu <- num_tab |>
-    group_by(feature) |>
-    summarise(mu = mean(mean, na.rm = TRUE), sig = sd(mean, na.rm = TRUE), .groups = "drop")
-  num_z <- num_tab |>
-    left_join(gmu, by = "feature") |>
-    mutate(z = ifelse(sig > 0, (mean - mu) / sig, 0))
-
-  #4.2.1.2 Top features by |max d| for heatmap
-  top_feats <- num_tab |>
-    distinct(feature, max_cohens_d) |>
-    arrange(desc(max_cohens_d)) |>
-    slice_head(n = min(25, n())) |>
-    pull(feature)
-
-  #4.2.1.3 Plot heatmap
-  p_num <- num_z |>
-    filter(feature %in% top_feats) |>
-    mutate(feature = reorder(feature, -max_cohens_d)) |>
-    ggplot(aes(x = feature, y = .cluster, fill = z)) +
-    geom_tile() +
-    scale_fill_gradient2(name = "z(mean)", limits = c(-3, 3)) +
-    coord_flip() +
-    labs(title = "Centroid profiles (numeric): top 25 by |max d|",
-        x = NULL, y = "Cluster") +
-    theme_minimal(base_size = 11)
-  ggsave(file.path(paths$fig_dir, "centroids_numeric_heatmap.png"), p_num, width = 8, height = 8, dpi = 300)
+  #4.2.1.1 Top features by |max d|
+  top_feats_tbl <- num_tab |>
+    dplyr::distinct(feature, max_cohens_d) |>
+    dplyr::slice_max(order_by = max_cohens_d, n = 34, with_ties = FALSE)
+  top_feats <- top_feats_tbl$feature
+  
+  #4.2.1.2 Filter to top features and reorder by effect size
+  p_num <- num_tab |>
+    dplyr::filter(feature %in% top_feats) |>
+    dplyr::mutate(feature = reorder(feature, -max_cohens_d)) |>
+  
+    #4.2.1.3 Create heatmap with z-scores and diverging color scale
+    ggplot2::ggplot(ggplot2::aes(x = feature, y = .cluster, fill = z_ref)) +
+    ggplot2::geom_tile() +
+    ggplot2::scale_fill_gradient2(name = "z (vs global SD)", limits = c(-3, 3)) +
+    ggplot2::coord_flip() +
+    ggplot2::labs(title = "Centroid profiles (scaled) by |max d|",
+      x = NULL, y = "Cluster") +
+    ggplot2::theme_minimal(base_size = 11)
+    
+  #4.2.1.4 Save heatmap to file
+  ggplot2::ggsave(file.path(paths$fig_dir, "centroids_numeric_heatmap.png"),
+    p_num, width = 8, height = 8, dpi = 300)
 }
 
 #4.2.2 Categorical centroid heatmap of modal value and its proportion per cluster
@@ -400,7 +577,7 @@ if (!is.null(cents$categorical) && nrow(cents$categorical) > 0) {
 
 ### 5. Seed-Level Importance (Array Task)
 
-**Goal:** For a given seed, re-fit k-prototypes (same k, λ, nstart), compute per-feature MCR with `biter` permutations, evaluate the shadow-max threshold, and emit a per-seed CSV. Optionally compute per-feature empirical p (Holm-adjusted per seed) for transparency
+**Goal:** For a given seed, re-fit k-prototypes (same k, lambda, nstart), compute per-feature MCR with `biter` permutations, evaluate the shadow-max threshold, and emit a per-seed CSV. Optionally compute per-feature empirical p (Holm-adjusted per seed) for transparency
 
 ```{r feature_importance, message = FALSE, echo = FALSE, warning = FALSE}
 
@@ -414,11 +591,11 @@ run_seed <- function(seed_idx) {
     set.seed(seed)
 
     #5.1.2 Refit k-prototypes for this seed and use its own assignments as the base
-    kp <- kproto(x = risk_dt, k = kp0$k, lambda = kp0$lambda, nstart = 25, verbose = FALSE)
-    base_assign <- predict(kp, newdata = risk_dt); stopifnot(length(base_assign) == nrow(risk_dt))
+    kp <- kproto(x = risk_dt[, ..features_used], k = params$k_opt, lambda = lambda_used, nstart = 8, verbose = FALSE)
+    base_assign <- predict_clusters(kp, risk_dt[, ..features_used])
 
     #5.1.3 Compute per-feature permutation MCRs (independent RNG per feature)
-    feat_list <- names(risk_dt)
+    feat_list <- features_used
     mcr_res <- future_lapply(seq_along(feat_list), function(j) {
     f <- feat_list[j]
     feature_mcr(kp, risk_dt, base_assign, f, biter = params$biter, seed = seed + j)
@@ -428,16 +605,57 @@ run_seed <- function(seed_idx) {
     mcr_mean = sapply(mcr_res, `[[`, "mean"),
     mcr_sd = sapply(mcr_res, `[[`, "sd"))
 
-    #5.1.4 Compute shadow-max baseline and pass/fail flags
-    sh_max <- shadow_max_mcr(kp, risk_dt, base_assign, B = params$shadow_B, seed = seed)
-    mcr_df <- mcr_df |> mutate(shadow_max = sh_max, pass_shadow = mcr_mean > shadow_max)
+    #5.1.4 Shadow baseline (uses seed baseline + exact feature slice)
+    sb <- shadow_baseline(
+    kp, risk_dt, base_assign,
+    B = params$shadow_B, mode = params$shadow_mode, q = params$shadow_q, seed = seed)
+    mcr_df <- mcr_df |>
+      mutate(shadow_thr = sb$thresh,
+             pass_shadow = mcr_mean > shadow_thr,
+             shadow_mode = params$shadow_mode,
+             shadow_q = params$shadow_q)
+    
+    #5.1.5 Feature-specific shadow thresholds + pass flags (more nuanced than global shadow signal)
+    #5.1.5.1 Establish feature specific list with relevant information
+    sb_feat_list <- future_lapply(feat_list, function(f) {
+      shadow_baseline_feat(
+        kp, risk_dt, base_assign,
+        feat = f,
+        B = params$shadow_feat_B,
+        mode = params$shadow_feat_mode,
+        q = params$shadow_feat_q,
+        seed = seed)
+    })
 
-    #5.1.5 Save seed-level outputs and session info
+    #5.1.5.2 Bind feature-specific shadow summaries
+    mcr_df$shadow_thr_feat <- vapply(sb_feat_list, `[[`, numeric(1), "thresh")
+    mcr_df$null_mean_feat <- vapply(sb_feat_list, `[[`, numeric(1), "mean")
+    mcr_df$null_sd_feat <- vapply(sb_feat_list, `[[`, numeric(1), "sd")
+    mcr_df$pass_shadow_feat <- mcr_df$mcr_mean > mcr_df$shadow_thr_feat
+
+    #5.1.5.3 Persist raw per-feature null vectors (heavy; off by default)
+    if (isTRUE(params$save_feat_nulls)) {
+      rds_path <- file.path(paths$seed_dir, glue::glue("feature_spec_mcr_nulls_seed{seed_idx}.rds"))
+      saveRDS(sb_feat_list, rds_path)
+    }
+    
+    #5.1.6 Empirical p-values
+    if (params$pval_B > 0L) {
+      p_emp <- vapply(seq_len(nrow(mcr_df)), function(i) {
+        f <- mcr_df$feature[i]
+        feature_p_emp(kp, risk_dt, base_assign, feat = f, B = params$pval_B, seed = seed, obs_mcr = mcr_df$mcr_mean[i])
+      }, numeric(1))
+      mcr_df$p_emp <- p_emp
+    } else {
+      mcr_df$p_emp <- NA_real_
+    }
+
+    #5.1.7 Save seed-level outputs and session info
     out <- mcr_df |> arrange(desc(mcr_mean)) |> mutate(seed_idx = seed_idx, seed = seed)
     outfile <- file.path(paths$seed_dir, glue("feature_importance_seed{seed_idx}.csv"))
     write_csv2(out, outfile)
 
-    #5.1.6 Log session run
+    #5.1.8 Log session run
     sess <- utils::sessionInfo()
     cat(capture.output(print(sess)), sep = "\n",
     file = file.path(paths$seed_dir, glue("session_seed{seed_idx}.txt")))
@@ -483,60 +701,201 @@ if (params$mode %in% c("auto", "seed")) {
 #7. Aggregation & decision ruling
 #7.1 Create a feature importance aggregate across seeds
 if (params$mode %in% c("auto", "aggregate")) {
- .log("{format(Sys.time(), '%Y-%m-%d %H:%M:%OS3')}|FI_AGG_START")
+  .log("{format(Sys.time(), '%Y-%m-%d %H:%M:%OS3')}|FI_AGG_START")
 
-    #7.1.1 Load all seed-level feature importance outputs
-    seed_files <- list.files(paths$seed_dir, pattern = "feature_importance_seed[0-9]+\\.csv$", full.names = TRUE)
-    stopifnot(length(seed_files) > 0)
-    all_df <- lapply(seed_files, readr::read_csv, show_col_types = FALSE) |> bind_rows()
+  #7.1.1 Load all seed-level feature importance outputs
+  seed_files <- list.files(paths$seed_dir,
+                           pattern = "feature_importance_seed[0-9]+\\.csv$",
+                           full.names = TRUE)
+  stopifnot(length(seed_files) > 0)
+  all_df <- lapply(seed_files, readr::read_csv, show_col_types = FALSE) |>
+    bind_rows()
 
-    #7.1.2 Aggregate across seeds: compute mean MCR, SD, win-rate, mean shadow baseline
-    stab <- all_df |>
+  #7.1.1.1 Detect which shadow column exists in seed outputs (compat: 'shadow_thr' or 'shadow_max')
+  shadow_col <- dplyr::case_when(
+    "shadow_thr" %in% names(all_df) ~ "shadow_thr",
+    "shadow_max" %in% names(all_df) ~ "shadow_max",
+    TRUE ~ NA_character_
+  )
+
+  #7.1.1.2 Helper: combine p-values across seeds with Fisher's method
+  combine_fisher <- function(p) {
+    p <- p[is.finite(p) & !is.na(p) & p > 0 & p <= 1]
+    k <- length(p)
+    if (!k) return(NA_real_)
+    stat <- -2 * sum(log(p))
+    stats::pchisq(stat, df = 2 * k, lower.tail = FALSE)
+  }
+  
+  #7.1.2 Aggregate feature-specific shadow stability (win-rate per feature)
+  stabA <- all_df |>
     group_by(feature) |>
     summarise(
-        mcr_mean = mean(mcr_mean, na.rm = TRUE),
-        mcr_sd = sd(mcr_mean, na.rm = TRUE),
-        win_rate = mean(pass_shadow, na.rm = TRUE),
-        shadow_max_mean = mean(shadow_max, na.rm = TRUE),
-        .groups = "drop") |>
+      mcr_mean = mean(mcr_mean, na.rm = TRUE),
+      mcr_sd = sd(mcr_mean,  na.rm = TRUE),
+      thr_feat_mean = mean(shadow_thr_feat, na.rm = TRUE),
+      thr_feat_sd = sd(shadow_thr_feat,   na.rm = TRUE),
+      win_rate_feat = mean(pass_shadow_feat, na.rm = TRUE),
+      delta_vs_thr = mean(mcr_mean - shadow_thr_feat, na.rm = TRUE),
+      .groups = "drop") |>
+    arrange(desc(mcr_mean))
+  
+  #7.1.2.1 Write feature-specific shadow stability csv
+  write_csv2(stabA, file.path(paths$sum_dir, "feature_importance_summary_feature_spec_mcr.csv"))
+
+  #7.1.3 Aggregate across seeds: mean MCR, SD, win-rate (stability)
+  stab <- all_df |>
+    group_by(feature) |>
+    summarise(
+      mcr_mean = mean(mcr_mean, na.rm = TRUE),
+      mcr_sd = sd(mcr_mean,  na.rm = TRUE),
+      win_rate = mean(pass_shadow, na.rm = TRUE),
+      .groups = "drop") |>
     arrange(desc(mcr_mean)) |>
     mutate(keep_stability = win_rate >= params$stability_keep)
 
-    #7.1.3 Set path for output MCR ranking figure
-    fig_path <- file.path(paths$fig_dir, "mcr_rank_across_seeds.png")
+  #7.1.3.1 Empirical p-values: combine across seeds and apply BH/FDR across features
+  if ("p_emp" %in% names(all_df)) {
+    p_by_feat <- all_df |>
+      group_by(feature) |>
+      summarise(p_emp_comb = combine_fisher(p_emp), .groups = "drop") |>
+      mutate(p_emp_fdr = ifelse(is.na(p_emp_comb), NA_real_,
+        p.adjust(p_emp_comb, method = "BH")))
+    stab <- stab |>
+      left_join(p_by_feat, by = "feature")
+  } else {
 
-    #7.1.4 Compute mean shadow-max baseline across seeds for plotting
-    shadow_hline <- mean(stab$shadow_max_mean, na.rm = TRUE)
+    #7.1.3.1.1 Columns present for downstream joins even if p-values were not computed
+    stab$p_emp_comb <- NA_real_
+    stab$p_emp_fdr <- NA_real_
+  }
 
-    #7.1.5 Plot ranked MCR with error bars and dashed mean shadow baseline
-    stab |>
+  #7.1.4 Set path for output MCR ranking figure
+  fig_path <- file.path(paths$fig_dir, "mcr_rank_across_seeds.png")
+
+  #7.1.5 Compute a shadow baseline line for plotting (prefers per-seed average)
+  #7.1.5.1 Identify the shadow threshold column available in seed outputs
+  shadow_col <- dplyr::case_when(
+    "shadow_thr" %in% names(all_df) ~ "shadow_thr",
+    "shadow_max" %in% names(all_df) ~ "shadow_max",
+    TRUE ~ NA_character_
+  )
+
+  #7.1.5.2 Average threshold across seeds (constant within seed), fallback to global mean if needed
+  shadow_hline <- NA_real_
+  if (!is.na(shadow_col)) {
+    if ("seed_idx" %in% names(all_df)) {
+      thr_by_seed <- all_df |>
+        dplyr::group_by(seed_idx) |>
+        dplyr::summarise(thr = dplyr::first(.data[[shadow_col]]), .groups = "drop")
+      shadow_hline <- mean(thr_by_seed$thr, na.rm = TRUE)
+    } else {
+      shadow_hline <- mean(all_df[[shadow_col]], na.rm = TRUE)
+    }
+  }
+
+  #7.1.6 Plot ranked MCR with error bars (+-SD) and dashed shadow reference (if available)
+  p_rank <- stab |>
+    dplyr::mutate(feature = reorder(feature, mcr_mean)) |>
+    ggplot2::ggplot(ggplot2::aes(x = feature, y = mcr_mean)) +
+    ggplot2::geom_point() +
+    ggplot2::geom_errorbar(
+      ggplot2::aes(ymin = pmax(0, mcr_mean - mcr_sd), ymax = mcr_mean + mcr_sd),
+      width = 0.2) +
+    ggplot2::coord_flip() +
+    ggplot2::labs(
+      x = NULL,
+      y = "Mean MCR (+-SD)",
+      title = "Permutation MCR by feature (across seeds)",
+      subtitle = if (is.finite(shadow_hline)) "Dashed line: mean shadow baseline across seeds" else NULL) +
+    ggplot2::theme_minimal(base_size = 12)
+
+  #7.1.6.1 If possible, add in hline
+  if (is.finite(shadow_hline)) {
+    p_rank <- p_rank + ggplot2::geom_hline(yintercept = shadow_hline, linetype = 2)
+  }
+
+  #7.1.6.2 Save plot
+  ggplot2::ggsave(fig_path, p_rank, width = 7, height = 8, dpi = 300)
+  
+  #7.1.7 MCR vs feature-specific thresholds (supplementary) plot
+  p_feature_spec_mcr <- stabA |>
     mutate(feature = reorder(feature, mcr_mean)) |>
-    ggplot(aes(x = feature, y = mcr_mean)) +
-    geom_point() +
-    geom_errorbar(aes(ymin = pmax(0, mcr_mean - mcr_sd), ymax = mcr_mean + mcr_sd), width = 0.2) +
-    geom_hline(yintercept = shadow_hline, linetype = 2) +  # <- dashed baseline back
-    coord_flip() +
-    labs(x = NULL, y = "Mean MCR (± SD)",
-        title = "Permutation MCR by feature (across seeds)",
-        subtitle = "Dashed line: mean shadow-max across seeds") +
-    theme_minimal(base_size = 12)
-    ggsave(fig_path, width = 7, height = 8, dpi = 300)
+    ggplot2::ggplot(ggplot2::aes(x = feature)) +
+    ggplot2::geom_point(ggplot2::aes(y = mcr_mean)) +
+    ggplot2::geom_errorbar(ggplot2::aes(ymin = pmax(0, mcr_mean - mcr_sd),
+                                        ymax = mcr_mean + mcr_sd), width = 0.2) +
+    ggplot2::geom_point(ggplot2::aes(y = thr_feat_mean), shape = 4) +
+    ggplot2::coord_flip() +
+    ggplot2::labs(x = NULL, y = "MCR / Feature-specific threshold",
+                  title = "Permutation MCR vs feature-specific shadow thresholds",
+                  subtitle = "Dots = MCR mean (+-SD); X = Track-A threshold mean") +
+    ggplot2::theme_minimal(base_size = 12)
 
-    #7.1.6 Select final keep set by stability threshold and persist
-    final_keep <- stab |>
-    filter(keep_stability) |>
+  #7.1.7.1 Save MCR vs feature-specific thresholds (supplementary) plot
+  ggplot2::ggsave(file.path(paths$fig_dir, "mcr_vs_feature_shadow_feature_spec_mcr.png"),
+                  p_feature_spec_mcr, width = 7, height = 8, dpi = 300)
+
+  #7.1.7 Select final keep set: stability AND (if available) FDR at alpha
+  final_keep <- stab |>
+    mutate(pass = keep_stability &
+      (is.na(p_emp_fdr) | p_emp_fdr <= params$holm_alpha)) |>
+    filter(pass) |>
     arrange(desc(mcr_mean))
 
-    #7.1.7 Write the final keep set to CSV
-    write_csv2(final_keep, file.path(paths$sum_dir, "final_keep_features.csv"))
-    .log("{format(Sys.time(), '%Y-%m-%d %H:%M:%OS3')}|FI_AGG_DONE|kept={nrow(final_keep)}")
+  #7.1.8 Write the enriched summary and final keep set to CSV
+  write_csv2(stab, file.path(paths$sum_dir, "feature_importance_summary.csv"))
+  write_csv2(final_keep, file.path(paths$sum_dir, "final_keep_features.csv"))
+  .log("{format(Sys.time(), '%Y-%m-%d %H:%M:%OS3')}|FI_AGG_DONE|kept={nrow(final_keep)}")
 }
+
+#7.2 Redundancy analysis on kept feature set
+#7.2.1 Run redundancy on the canonical feature frame used by k-proto
+red_all <- compute_redundancy(
+  dt = risk_dt[, ..features_used],
+  rho_cut = params$redundancy_rho,
+  v_cut = params$redundancy_v)
+
+#7.2.2 Keep-only pairs: restrict to features that passed the stability/FDR rule
+red_keep <- red_all |>
+  semi_join(stab |> filter(keep_stability) |> transmute(var1 = feature), by = "var1") |>
+  semi_join(stab |> filter(keep_stability) |> transmute(var2 = feature), by = "var2")
+
+#7.2.3 Write redundancy results
+write_csv2(red_all, file.path(paths$sum_dir, "redundancy_flags_all_features.csv"))
+write_csv2(red_keep, file.path(paths$sum_dir, "redundancy_flags_among_kept.csv"))
+
+#7.2.4 Derive a mechanically pruned keep set (greedy on higher mean MCR)
+prune_greedy <- function(keep_tab, stab_tab, red_pairs) {
+  keep  <- keep_tab$feature
+  score <- tibble(feature = stab_tab$feature, score = stab_tab$mcr_mean)
+
+  #7.2.4.1 Iterate over redundant pairs and drop the lower-scoring feature if both still present
+  if (nrow(red_pairs)) {
+    for (i in seq_len(nrow(red_pairs))) {
+      a <- red_pairs$var1[i]; b <- red_pairs$var2[i]
+      if (a %in% keep && b %in% keep) {
+        sa <- score$score[match(a, score$feature)]
+        sb <- score$score[match(b, score$feature)]
+        drop <- ifelse(is.na(sa) || is.na(sb), b, ifelse(sa >= sb, b, a))
+        keep <- setdiff(keep, drop)
+      }
+    }
+  }
+  tibble(feature = keep)
+}
+
+#7.2.5 Execute the pruned (greedy) set
+final_keep_pruned <- prune_greedy(final_keep, stab, red_keep)
+
+#7.2.6 Write the pruned (greedy) set results
+write_csv2(final_keep_pruned, file.path(paths$sum_dir, "final_keep_pruned_by_redundancy.csv"))
 
 ```
 
 ### 8. Surrogate Triangulation of Cluster-Relevant Features Using XGBoost + SHAP
 
-**Goal:** Train a regularized XGBoost surrogate to predict cluster labels with stratified v-fold OOF evaluation (balanced accuracy and macro-F1). Fit a final small model on all data to compute SHAP global importances for narrative corroboration. Do not alter the keep set based on SHAP
+**Goal:** Train a regularized XGBoost surrogate to predict cluster labels with stratified v-fold OOF evaluation (balanced accuracy and macro-F1). Fit a final small model on all data to compute SHAP global importances for narrative corroboration
 
 ```{r surrogate_and_shap, message = FALSE, warning = FALSE, echo = FALSE}
 
@@ -545,7 +904,7 @@ if (params$mode %in% c("auto", "aggregate")) {
 
   #8.1 Labels & features (classify original anchor assignments)
   y <- factor(base_assign0)
-  X_df <- as.data.frame(risk_dt)
+  X_df <- as.data.frame(risk_dt[, ..features_used])
 
   #8.1.1 Coerce true binary 0/1 factors to numeric 0/1 (no one-hot for binary)
   bin_fac <- names(Filter(function(x) is.factor(X_df[[x]]) && nlevels(X_df[[x]]) == 2, names(X_df)))
@@ -553,7 +912,7 @@ if (params$mode %in% c("auto", "aggregate")) {
     for (cc in bin_fac) {
       levs <- levels(X_df[[cc]])
       if (setequal(levs, c("0","1"))) {
-        X_df[[cc]] <- as.numeric(as.character(X_df[[cc]]))  # "0"/"1" -> 0/1
+        X_df[[cc]] <- as.numeric(as.character(X_df[[cc]]))
       } else {
 
         #8.1.1.1 Fallback: map first level to 0, second to 1 (document if this ever triggers)
@@ -607,7 +966,7 @@ if (params$mode %in% c("auto", "aggregate")) {
     tr <- rsample::analysis(sp)
     te <- rsample::assessment(sp)
     idx_tr <- tr$.row_id
-    idx_te <- te/.row_id 
+    idx_te <- te$.row_id 
 
     #8.5.1.1 Create DMatrix objects for train
     dtrain <- xgb.DMatrix(data = X_mat[idx_tr, , drop = FALSE],
@@ -615,7 +974,7 @@ if (params$mode %in% c("auto", "aggregate")) {
         weight = w_vec[idx_tr])
 
     #8.5.1.2 Create DMatrix objects for test
-    dtest  <- xgb.DMatrix(data = X_mat[idx_te, , drop = FALSE],
+    dtest <- xgb.DMatrix(data = X_mat[idx_te, , drop = FALSE],
         label = as.integer(y[idx_te]) - 1L,
         weight = w_vec[idx_te])
 
@@ -655,41 +1014,125 @@ if (params$mode %in% c("auto", "aggregate")) {
   final_rounds <- max(50L, final_rounds)
 
   #8.7.1 Final model on all data for SHAP
+  #X_df <- as.data.frame(risk_dt[, ..features_used])
+  #X_mat <- data.matrix(X_df)
+  if (is.null(colnames(X_mat))) colnames(X_mat) <- paste0("V", seq_len(ncol(X_mat)))
+
   dmat_all <- xgb.DMatrix(data = X_mat, label = as.integer(y) - 1L, weight = w_vec)
   bst <- xgb.train(params = params_xgb, data = dmat_all,
-    nrounds = final_rounds, verbose = 0)
+                   nrounds = final_rounds, verbose = 0)
 
   #8.7.2 Save final surrogate model
   xgb.save(bst, file.path(paths$shap_dir, "xgb_surrogate.model"))
 
-  #8.8 SHAP global importances (mean |SHAP|), then concordance with keep set
-  #8.8.1 Compute SHAP values and global importances
-  sv <- shapviz::shapviz(bst, X = X_mat)
-  g_imp <- tibble::tibble(
-    feature = colnames(X_mat),
-    mean_abs_shap = colMeans(abs(sv$S), na.rm = TRUE)) |>
-    dplyr::arrange(dplyr::desc(mean_abs_shap))
+  #8.8 SHAP global importances (mean |SHAP|), robust to binary/multiclass
+  #8.8.1 Build shapviz object from booster. For xgb.Booster, shapviz requires X_pred; X is optional (for labeling/viz).
+  sv <- shapviz::shapviz(bst, X_pred = X_mat, X = X_df)
 
-  #8.8.2 Write global importance table
-  write_csv2(g_imp, file.path(paths$sum_dir, "shap_global_importance.csv"))
+  #8.8.2 Compute global importances and write CSV(s)
+  #       - If 'sv' is "shapviz": single output -> one table
+  #       - If 'sv' is "mshapviz": per-class tables + macro-average table
+  if (inherits(sv, "shapviz")) {
+    S <- sv$S
+    stopifnot(ncol(S) == ncol(X_mat))
+    g_imp <- tibble::tibble(
+      feature = colnames(S),
+      mean_abs_shap = colMeans(abs(S), na.rm = TRUE)
+    ) |>
+      dplyr::arrange(dplyr::desc(mean_abs_shap))
+    write_csv2(g_imp, file.path(paths$sum_dir, "shap_global_importance.csv"))
 
-  #8.8.3 Concordance with final keep set
+  } else if (inherits(sv, "mshapviz")) {
+    
+    #8.8.2.1 Per-class importances
+    per_class <- lapply(seq_along(sv), function(i) {
+      Si <- sv[[i]]$S
+      tibble::tibble(
+        class = as.character(i),
+        feature = colnames(Si),
+        mean_abs_shap = colMeans(abs(Si), na.rm = TRUE)
+      )
+    }) |> dplyr::bind_rows()
+
+    #8.8.2.2 Try to attach class labels if present
+    cl_names <- attr(sv, "class_names")
+    if (!is.null(cl_names) && length(unique(per_class$class)) == length(cl_names)) {
+      per_class$class <- factor(per_class$class, levels = as.character(seq_along(cl_names)), labels = cl_names)
+    }
+
+    #8.8.2.3 Write per-class + macro-average tables
+    write_csv2(per_class |> dplyr::arrange(class, dplyr::desc(mean_abs_shap)),
+               file.path(paths$sum_dir, "shap_global_importance_per_class.csv"))
+
+    #8.8.2.4 Clean and write per-class + macro average tables
+    g_imp_macro <- per_class |>
+      dplyr::group_by(feature) |>
+      dplyr::summarise(mean_abs_shap_macro = mean(mean_abs_shap, na.rm = TRUE), .groups = "drop") |>
+      dplyr::arrange(dplyr::desc(mean_abs_shap_macro))
+    write_csv2(g_imp_macro, file.path(paths$sum_dir, "shap_global_importance_macro.csv"))
+  } else {
+    warning("Unexpected shapviz object class: ", paste(class(sv), collapse = "/"))
+  }
+
+  #8.8.3 Check concordance with keep set (if present) using the macro table if multiclass
   keep_path <- file.path(paths$sum_dir, "final_keep_features.csv")
-
-  #8.8.4 If keep set exists, join SHAP ranks and report concordance
   if (file.exists(keep_path)) {
     keep_tab <- readr::read_csv(keep_path, show_col_types = FALSE)
-    g_imp2 <- g_imp |> dplyr::mutate(shap_rank = rank(-mean_abs_shap, ties.method = "min"))
-    keep_plus <- keep_tab |> dplyr::left_join(g_imp2, by = "feature") |> dplyr::arrange(shap_rank)
+    if (file.exists(file.path(paths$sum_dir, "shap_global_importance_macro.csv"))) {
+      gref <- readr::read_csv(file.path(paths$sum_dir, "shap_global_importance_macro.csv"), show_col_types = FALSE) |>
+        dplyr::rename(mean_abs_shap = mean_abs_shap_macro)
+    } else {
+      gref <- readr::read_csv(file.path(paths$sum_dir, "shap_global_importance.csv"), show_col_types = FALSE)
+    }
+    keep_plus <- keep_tab |>
+      dplyr::left_join(gref |>
+        dplyr::mutate(shap_rank = rank(-mean_abs_shap, ties.method = "min")), by = "feature") |>
+      dplyr::arrange(shap_rank)
     write_csv2(keep_plus, file.path(paths$sum_dir, "final_keep_with_shap.csv"))
     conc <- sum(!is.na(keep_plus$shap_rank))
     writeLines(glue::glue("Concordance: {conc}/{nrow(keep_plus)} retained features appear in SHAP table"),
-        con = file.path(paths$sum_dir, "shap_concordance.txt"))
+               con = file.path(paths$sum_dir, "shap_concordance.txt"))
   }
+  
+  #8.8.4 Calculate SHAP interaction values to check for any multivariate relationships in predicting cluster labels
+  shp_i <- shapviz(
+    bst, X_pred = X_mat, X = X_df, interactions = TRUE)
 
-  #8.9 Plot SHAP global importance barplot
-  png(file.path(paths$fig_dir, "shap_global_importance.png"), width = 1200, height = 900, res = 150)
-  print(shapviz::plot_importance(sv, max_display = 30))
+  #8.9 Plot SHAP plots
+  #8.9.0 Use native aspect ratio to determine optimal dimensions for SHAP plots
+  #8.9.0.1 Set width and height in inches (unit / resolution)
+  width_inches <- 788 / 300 
+  height_inches <- 395 / 300 
+  
+  #8.9.0.2 Set dimension scale factor and multiply existing dimensions by scale factor
+  scale_factor <- 3  # Adjust this to make plots bigger
+  width_inches <- width_inches * scale_factor
+  height_inches <- height_inches * scale_factor
+  
+  #8.9.1 Mean SHAP global importance bar chart
+  png(file.path(paths$fig_dir, "shap_mean_global_importance.png"), 
+      width = width_inches, height = height_inches, units = "in", res = 300)
+  print(shapviz::sv_importance(sv, show_numbers = TRUE))
+  dev.off()
+  
+  #8.9.2 Individual SHAP global importance value distributions color coded by directionality
+  png(file.path(paths$fig_dir, "shap_global_importance_distributions.png"), 
+      width = width_inches * 1.2, height = height_inches * 1.5, units = "in", res = 300)
+  print(shapviz::sv_importance(sv, kind = "beeswarm"))
+  dev.off()
+  
+  #8.9.3 Example dependence plots for top 3 features
+  for (v in head(g_imp$feature, 3)) {
+    png(file.path(paths$fig_dir, paste0("shap_dependence_", v, ".png")), 
+        width = width_inches, height = height_inches, units = "in", res = 300)
+    print(shapviz::sv_dependence(sv, v = v))
+    dev.off()
+  }
+  
+  #8.9.4 Mean SHAP global importance bar chart with interactions included
+  png(file.path(paths$fig_dir, "shap_mean_importance_interactions_included.png"), 
+      width = width_inches, height = height_inches, units = "in", res = 300)
+  print(sv_interaction(shp_i, kind = "bar"))
   dev.off()
 }
 
@@ -697,7 +1140,7 @@ if (params$mode %in% c("auto", "aggregate")) {
 
 ### 9. Reproducibility Log
 
-**Goal:** Record parameters (n, p, k, λ, scaling, biter, n_seeds, shadow_B, pval_B, stability_keep) and container hash to `run_log.json` for traceability of this run
+**Goal:** Record parameters (n, p, k, lambda, scaling, biter, n_seeds, shadow_B, pval_B, stability_keep) and container hash to `run_log.json` for traceability of this run
 
 ```{r reproducibility_log, echo = FALSE}
 
@@ -706,7 +1149,7 @@ if (params$mode %in% c("auto", "aggregate")) {
 log <- list(
 timestamp = as.character(Sys.time()),
 n = nrow(risk_dt), p = ncol(risk_dt),
-k = kp0$k, lambda = kp0$lambda, scaling = params$scaling,
+k = params$k_opt, lambda = lambda_used, scaling = params$scaling,
 biter = params$biter, n_seeds = params$n_seeds,
 shadow_B = params$shadow_B, pval_B = params$pval_B, stability_keep = params$stability_keep,
 container = "abcd-mds-risk-r_0.1.6.sif")
