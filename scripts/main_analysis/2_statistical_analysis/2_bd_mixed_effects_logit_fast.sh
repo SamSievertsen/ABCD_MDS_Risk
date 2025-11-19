@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=bd_mixed_logit_vNEXT_fast
+#SBATCH --job-name=bd_mixed_logit_fast
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=sievertsen@ohsu.edu
 #SBATCH --account=basic
@@ -17,7 +17,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 REPO="/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk"
-IMG="/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.5.sif"
+IMG="/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.7.sif"
 
 export APPTAINER_CACHEDIR="/home/exacloud/gscratch/NagelLab/staff/sam/.apptainer_cache"
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
@@ -31,13 +31,13 @@ cd "${RMD_DIR}"
 
 apptainer exec -B "${REPO}:${REPO}" "${IMG}" Rscript - <<'EOF'
 rmarkdown::render(
-  input = "2_bd_mixed_effects_logit_vNEXT.Rmd",
+  input = "2_bd_mixed_effects_logit.Rmd",
   params = list(
     repo = "/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk",
     data_dir = "data/data_processed/analysis_datasets/",
     out_dir = "results/main_analysis/2_bd_mixed_logit",
-    bd_panel_rds = "bd_panel_k2_robust.rds",
-    bd_panel_csv = "bd_panel_k2_robust.csv",
+    bd_panel_rds = "bd_panel_k2_z_score.rds",
+    bd_panel_csv = "bd_panel_k2_z_score.csv",
     outcomes = c("bipolar_I","bipolar_II","bd_nos","any_bsd"),
     response_var = "status",
     link_primary = "logit",

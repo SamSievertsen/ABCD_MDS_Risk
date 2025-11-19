@@ -36,7 +36,7 @@ export R_PARALLEL_BACKEND_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 
 # Establish paths
 REPO="/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk"
-IMG="/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.4.sif"
+IMG="/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.7.sif"
 RMD="build_analysis_datasets.Rmd"
 
 # Ensure log dir exists
@@ -47,7 +47,7 @@ export APPTAINER_CACHEDIR="/home/exacloud/gscratch/NagelLab/staff/sam/.apptainer
 mkdir -p "${APPTAINER_CACHEDIR}"
 
 # Set parameter knobs (can also override at submit time: SCALING_METHOD=..., etc.)
-: "${SCALING_METHOD:=robust}"
+: "${SCALING_METHOD:=z_score}"
 : "${K_VALUE:=2}"
 : "${OVERWRITE:=false}"
 : "${BASELINE_WAVE:=ses-00A}"

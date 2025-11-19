@@ -18,7 +18,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 REPO="/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk"
-IMG="/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.5.sif"
+IMG="/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.7.sif"
 
 export APPTAINER_CACHEDIR="/home/exacloud/gscratch/NagelLab/staff/sam/.apptainer_cache"
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
@@ -37,8 +37,8 @@ rmarkdown::render(
     repo = "/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk",
     data_dir = "data/data_processed/analysis_datasets/",
     out_dir = "results/main_analysis/4_nested_suicidality_mixed_logit",
-    panel_rds = "nested_suic_panel_k2_robust.rds",
-    panel_csv = "nested_suic_panel_k2_robust.csv",
+    panel_rds = "nested_suic_panel_k2_z_score.rds",
+    panel_csv = "nested_suic_panel_k2_z_score.csv",
     outcomes = c("si_passive","si_active","sa","nssi"),
     response_var = "status",
     link_primary = "logit",
@@ -46,7 +46,7 @@ rmarkdown::render(
     age_linear = "age_wave_gmc",
     bd_timevarying = "any_bsd",
     baseline_fallback = "baseline_status_su",
-    fit_gamm = FALSE,
+    fit_gamm = TRUE,
     do_gee_interaction = TRUE
   ),
   encoding = "UTF-8",

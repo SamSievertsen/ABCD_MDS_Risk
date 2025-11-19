@@ -6,7 +6,7 @@ output:
   html_document:
     self_contained: true
 params:
-  scaling_method: "robust"
+  scaling_method: "z_score"
   k_value: 2
   overwrite: false
   baseline_wave: "ses-00A"

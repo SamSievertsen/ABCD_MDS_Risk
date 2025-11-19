@@ -25,10 +25,10 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # Paths and environment
-IMG="/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.4.sif"
+IMG="/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.7.sif"
 REPO="/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk"
 export APPTAINER_CACHEDIR="/home/exacloud/gscratch/NagelLab/staff/${USER}/.apptainer_cache"
-export PROTO_FILE="${REPO}/data/data_processed/kproto_results/kproto_robust.rds"
+export PROTO_FILE="${REPO}/data/data_processed/kproto_results/kproto_z_score.rds"
 export PARTIAL_DIR="${REPO}/data/data_processed/validation_results/partial_results_in_progress"
 
 # Ensure partial-results directory exists
@@ -53,7 +53,7 @@ exec > >(tee -a "${LOGDIR}/${SLURM_JOB_NAME}_${SLURM_JOB_ID}.out") \
      2> >(tee -a "${LOGDIR}/${SLURM_JOB_NAME}_${SLURM_JOB_ID}.err" >&2)
 
 # Where the output RDS will go
-PARTIAL_FILE="${PARTIAL_DIR}/val_robust_${IDX}_k${KVAL}.rds"
+PARTIAL_FILE="${PARTIAL_DIR}/val_z_score_${IDX}_k${KVAL}.rds"
 
 # GUARD 1: skip if this partial result already exists
 if [[ -f "${PARTIAL_FILE}" ]]; then
@@ -100,7 +100,7 @@ saveRDS(
   val,
   file.path(
     Sys.getenv("PARTIAL_DIR"),
-    sprintf("val_robust_%s_k%s.rds", Sys.getenv("IDX"), Sys.getenv("KVAL"))
+    sprintf("val_z_score_%s_k%s.rds", Sys.getenv("IDX"), Sys.getenv("KVAL"))
   )
 )
 

@@ -9,8 +9,8 @@ params:
   repo: !r Sys.getenv("REPO", unset = here::here())
   data_dir: "data/data_processed/analysis_datasets/"
   out_dir: "results/main_analysis/1_bd_survival"
-  bd_pp_rds: "bd_person_period_k2_robust.rds"
-  bd_pp_csv: "bd_person_period_k2_robust.csv"
+  bd_pp_rds: "bd_person_period_k2_z_score.rds"
+  bd_pp_csv: "bd_person_period_k2_z_score.csv"
   k_value: 2
   run_influence: false
   seed: 123
@@ -129,7 +129,7 @@ knitr::kable(sizes_tbl, caption = "Dataset size check")  %>%
 cluster_levels <- levels(bd_pp$cluster)
 bd_pp_model <- bd_pp_model %>%
   mutate(
-    cluster = forcats::fct_relevel(cluster, "C2"),
+    cluster = forcats::fct_relevel(cluster, "C1"),
     end_wave = forcats::fct_relevel(end_wave, "ses-02A", "ses-04A", "ses-06A"),
     sex = forcats::fct_relevel(sex, "Female"),
     site_factor = forcats::fct_relevel(site_factor, "site01"))
@@ -373,6 +373,7 @@ Multiple others for QC and plotting
 ## 1. Create helper functions for building, fitting, and summarizing models ##
 
 #1.1 Build DTH formula, where wave FE (end_wave) = flexible baseline hazard; and formula includes within- and between-person age components
+#1.1 Build DTH formula
 build_formula <- function(link = c("logit","cloglog")) {
   link <- match.arg(link)
   rhs <- paste(
@@ -381,9 +382,7 @@ build_formula <- function(link = c("logit","cloglog")) {
     "age_mid_cwc",
     "sex",
     "end_wave",
-    "(1 | site_factor)",
     "(1 | participant_id)",
-    "(1 | family_id)",
     sep = " + "
   )
   stats::as.formula(paste("event ~", rhs))
@@ -396,7 +395,7 @@ needs_simplify <- function(fit, data) {
   nevents <- sum(data$event == 1L, na.rm = TRUE)
   p_fixed <- try(length(lme4::fixef(fit)), silent = TRUE); if (inherits(p_fixed, "try-error")) p_fixed <- NA_real_
   flag_singular <- isTRUE(di$is_singular)
-  flag_vif <- !is.na(di$max_VIF) && di$max_VIF > 25
+  flag_vif <- !is.na(di$max_VIF) && di$max_VIF > 10
   flag_events <- is.finite(nevents) && is.finite(p_fixed) && nevents < (p_fixed + 3)
   flag_singular || flag_vif || flag_events
 }
@@ -409,7 +408,7 @@ fit_glmer_safe <- function(formula, data, link = c("logit","cloglog")) {
     optCtrl = list(maxfun = 2e5),
     check.conv.singular = "ignore")
   fit <- tryCatch(
-    glmer(formula, data = data, family = family_fn, control = ctrl),
+    glmer(formula, data = data, family = family_fn, control = ctrl, nAGQ = 0),
     error = function(e) {
       message("Retrying with nAGQ=0 (", link, ") due to: ", conditionMessage(e))
       glmer(formula, data = data, family = family_fn, control = ctrl, nAGQ = 0)
@@ -430,30 +429,41 @@ tidy_wald <- function(fit) {
 }
 
 #1.4 Create a function to also extract CR2 robust (clustered by family) in tidy format
-tidy_cr2 <- function(fit, cluster_var = NULL) {
-  test_method <- "Satterthwaite"   
-  if (is.null(cluster_var)) {
-    mf <- try(model.frame(fit), silent = TRUE)
-    if (!inherits(mf, "try-error") && "family_id" %in% names(mf)) cluster_var <- mf$family_id
-  }
-  ct <- try(clubSandwich::coef_test(fit, vcov = "CR2", cluster = cluster_var, test = test_method), silent = TRUE)
+tidy_cr2 <- function(fit, cluster_var) {
+  test_method <- "Satterthwaite"
+
+  ct <- try(
+    clubSandwich::coef_test(fit, vcov = "CR2", cluster = cluster_var, test = test_method),
+    silent = TRUE)
+
   if (inherits(ct, "try-error")) {
     out <- broom.mixed::tidy(fit, effects = "fixed", conf.int = TRUE, conf.method = "Wald") %>%
-      dplyr::mutate(term = as.character(term), OR = exp(estimate),
-        CI_lo = exp(conf.low), CI_hi = exp(conf.high),
-        SE = std.error, df = NA_real_, p.value = NA_real_, note = "CR2_failed") %>%
+      dplyr::mutate(
+        term = as.character(term),
+        OR = exp(estimate),
+        CI_lo = exp(conf.low),
+        CI_hi = exp(conf.high),
+        SE = std.error,
+        df = NA_real_,
+        p.value = NA_real_,
+        note = "CR2_failed") %>%
       dplyr::select(term, estimate, SE, df, OR, CI_lo, CI_hi, p.value, note)
     return(out)
   }
+
   ctt <- tibble::as_tibble(ct)
   pcol <- intersect(c("p_Satt","p_z","p_Nd","p_t"), names(ctt))[1]
   dfcol <- intersect(c("df_Satt","df"), names(ctt))[1]
   if (is.na(pcol)) ctt$p_any <- NA_real_ else ctt$p_any <- ctt[[pcol]]
   if (is.na(dfcol)) ctt$df <- NA_real_ else ctt$df <- ctt[[dfcol]]
+
   ctt %>%
-    dplyr::mutate(term = as.character(term),
-      OR = exp(beta), CI_lo = exp(CI_L), CI_hi = exp(CI_U)) %>%
-    dplyr::select(term, estimate = beta, SE = SE, df, OR, CI_lo, CI_hi, p.value = p_any)
+    dplyr::mutate(
+      term  = as.character(term),
+      OR = exp(beta),
+      CI_lo = exp(CI_L),
+      CI_hi = exp(CI_U)) %>%
+    dplyr::select(term, estimate = beta, SE, df, OR, CI_lo, CI_hi, p.value = p_any)
 }
 
 #1.5 Create a function to calculate marginal predicted hazard by cluster across ages, with an option to align ages to waves
@@ -543,7 +553,6 @@ cluster_contrasts_by_age <- function(fit, data, ages = ages_pred_vec, wave_ref =
   ref_list <- list(
     age_mid_between = age_between_vals,
     age_mid_cwc = 0,
-    age_mid_cwc_orth = 0,
     baseline_status = 0,
     end_wave = factor(wave_ref, levels = levels(data$end_wave)),
     wave_num = match(wave_ref, levels(data$end_wave)) - 1L,
@@ -556,8 +565,6 @@ cluster_contrasts_by_age <- function(fit, data, ages = ages_pred_vec, wave_ref =
 
   #1.9.1.3 Keep only variables the model actually uses; also drop the unused within-age variant.
   if (!inherits(mf_names, "try-error")) {
-    if ("age_mid_cwc_orth" %in% mf_names) ref_list$age_mid_cwc <- NULL
-    if (!"age_mid_cwc_orth" %in% mf_names) ref_list$age_mid_cwc_orth <- NULL
     if (!"end_wave" %in% mf_names) ref_list$end_wave <- NULL
     if (!"wave_num" %in% mf_names) ref_list$wave_num <- NULL
     ref_list <- ref_list[names(ref_list) %in% mf_names]
@@ -577,7 +584,7 @@ cluster_contrasts_by_age <- function(fit, data, ages = ages_pred_vec, wave_ref =
     dplyr::select(age_years, contrast, OR, CI_lo, CI_hi, p.value)
 }
 
-#1.9.2 Wave-specific cluster contrasts (OR) at wave-median ages, robust to wave_num/age_mid_cwc_orth
+#1.9.2 Wave-specific cluster contrasts (OR) at wave-median ages, robust to wave_num
 cluster_contrasts_by_wave_aligned <- function(fit, data) {
   waves <- levels(data$end_wave)
   
@@ -596,7 +603,6 @@ cluster_contrasts_by_wave_aligned <- function(fit, data) {
       cluster = levels(data$cluster),
       age_mid_between = a - grand_mean,
       age_mid_cwc = 0,
-      age_mid_cwc_orth = 0,
       baseline_status = 0,
       end_wave = factor(w, levels = waves),
       sex = levels(data$sex)[1],
@@ -604,7 +610,6 @@ cluster_contrasts_by_wave_aligned <- function(fit, data) {
     if (!inherits(mf_names, "try-error")) {
       # supply wave_num if needed; drop unused within-age variant, and unused wave coding
       if ("wave_num" %in% mf_names) at$wave_num <- i - 1L
-      if ("age_mid_cwc_orth" %in% mf_names) at$age_mid_cwc <- NULL else at$age_mid_cwc_orth <- NULL
       if (!"end_wave" %in% mf_names) at$end_wave <- NULL
       if (!"wave_num" %in% mf_names) at$wave_num <- NULL
       if ("log_dt" %in% mf_names) at$log_dt <- 0
@@ -825,7 +830,6 @@ pred_fixedwave_with_ci <- function(fit, data, ages = ages_pred_vec, wave_ref = p
     cluster = levels(data$cluster),
     age_mid_between = ages - grand_mean,
     age_mid_cwc = 0,
-    age_mid_cwc_orth = 0,
     baseline_status = 0,
     end_wave = factor(wave_ref, levels = levels(data$end_wave)),
     sex = levels(data$sex)[1],
@@ -868,7 +872,6 @@ pred_fixedwave_with_ci <- function(fit, data, ages = ages_pred_vec, wave_ref = p
     cluster = levels(data$cluster),
     age_mid_between = ages - grand_mean,
     age_mid_cwc = 0,
-    age_mid_cwc_orth = 0,
     baseline_status = 0,
     end_wave = factor(wave_ref, levels = levels(data$end_wave)),
     sex = levels(data$sex)[1],
@@ -896,7 +899,6 @@ pred_aligned_with_ci <- function(fit, data, ages = ages_pred_vec) {
       cluster = levels(data$cluster),
       age_mid_between = ages[i] - grand_mean,
       age_mid_cwc = 0,
-      age_mid_cwc_orth = 0,
       baseline_status = 0,
       end_wave = factor(waves[i], levels = levels(data$end_wave)),
       sex = levels(data$sex)[1],
@@ -927,7 +929,6 @@ pred_aligned_with_ci <- function(fit, data, ages = ages_pred_vec) {
         cluster = levels(data$cluster),
         age_mid_between = ages[i] - grand_mean,
         age_mid_cwc = 0,
-        age_mid_cwc_orth = 0,
         baseline_status = 0,
         end_wave = factor(waves[i], levels = levels(data$end_wave)),
         sex = levels(data$sex)[1],
@@ -947,7 +948,7 @@ pred_aligned_with_ci <- function(fit, data, ages = ages_pred_vec) {
 hazard_by_wave_ci <- function(fit, data) {
   at_list <- list(
     cluster = levels(data$cluster),
-    age_mid_between = 0, age_mid_cwc = 0, age_mid_cwc_orth = 0,
+    age_mid_between = 0, age_mid_cwc = 0,
     baseline_status = 0,
     end_wave = levels(data$end_wave),
     wave_num = seq_along(levels(data$end_wave)) - 1L,  # handy if needed
@@ -984,7 +985,7 @@ hazard_by_wave_ci <- function(fit, data) {
   nd <- expand.grid(
     end_wave = levels(data$end_wave),
     cluster = levels(data$cluster),
-    age_mid_between = 0, age_mid_cwc = 0, age_mid_cwc_orth = 0,
+    age_mid_between = 0, age_mid_cwc = 0,
     baseline_status = 0,
     sex = levels(data$sex)[1],
     site_factor = levels(data$site_factor)[1]) %>% 
@@ -1190,10 +1191,10 @@ re_boundary <- function(fit, out_name = "unknown") {
 }
 
 #1.30 Collinearity + fit quality checks (used to pick a BD-II candidate)
-max_adj_vif <- function(fit) {
+max_vif <- function(fit) {
   co <- try(performance::check_collinearity(fit, component = "conditional"), silent = TRUE)
   if (inherits(co, "try-error")) return(Inf)
-  suppressWarnings(max(co$`adj. VIF`, na.rm = TRUE))
+  suppressWarnings(max(co$VIF, na.rm = TRUE))
 }
 
 #1.30.1 Check convergence (robust across performance versions)
@@ -1287,63 +1288,78 @@ ADD_CLUSTER_WAVE <- character(0)
 
 #2.4 Loop per outcome
 for (out in OUTCOMES) {
-
   message("Fitting primary (", params$link_primary, "): ", out)
   dat_o <- bd_pp_model %>% filter(outcome == out) %>% droplevels()
   fit_o <- NULL
   if (nlevels(dat_o$cluster) < nlevels(bd_pp_model$cluster))
     message("Note: some clusters absent in outcome = ", out, "; predictions to absent clusters would be extrapolations.")
 
-  #2.4.0 BD-II targeted stabilization branch
+    #2.4.0 BD-II targeted stabilization branch
   if (identical(out, "bipolar_II")) {
-    message("BD-II: applying staged stabilization (participant-only RE; orthogonalize age within wave; fallbacks).")
+    message("BD-II: applying staged stabilization (participant-only RE; simple age/wave candidates; no orthogonalization).")
   
     #2.4.0.1 Empirical wave index (0,1,2) in case we need a 1-df baseline trend
-    dat_o <- dat_o %>% mutate(wave_num = as.integer(end_wave) - 1L)
+    dat_o <- dat_o %>% dplyr::mutate(wave_num = as.integer(end_wave) - 1L)
   
-    #2.4.0.2 Orthogonalize within-person age to wave FEs using the actual wave structure (this is equivalent to within-wave centering relative to wave means)
-    dat_o <- dat_o %>%
-      mutate(age_mid_cwc_orth = resid_on_factor(age_mid_cwc, end_wave))
+    #2.4.0.2 (Removed: age_mid_cwc orthogonalization; no longer needed with nAGQ = 0.)
+    # dat_o <- dat_o %>%
+    #   dplyr::mutate(age_mid_cwc_orth = resid_on_factor(age_mid_cwc, end_wave))
   
     #2.4.0.3 Candidate formulas (all keep the required (1|participant_id))
-    f_RE1 <- event ~ cluster + age_mid_between + age_mid_cwc + sex + end_wave + (1|participant_id)
-    f_ORTH <- event ~ cluster + age_mid_between + age_mid_cwc_orth  + sex + end_wave + (1|participant_id)
-    f_WAVENUM <- event ~ cluster + age_mid_between + age_mid_cwc + sex + wave_num + (1|participant_id)
-    f_DROPcwc <- event ~ cluster + age_mid_between + sex + end_wave + (1|participant_id)
+    f_RE1 <- event ~ cluster + age_mid_between + age_mid_cwc + sex + end_wave + (1 | participant_id)
+    f_WAVENUM <- event ~ cluster + age_mid_between + age_mid_cwc + sex + wave_num + (1 | participant_id)
+    f_DROPcwc <- event ~ cluster + age_mid_between + sex + end_wave + (1 | participant_id)
   
     #2.4.0.4 Try candidates in order; keep the first that converges AND has adj. VIF <= threshold
     VIF_THRESH <- 10
     try_one <- function(form, dat = dat_o) {
       fit <- safe_or_null(fit_glmer_safe(form, dat, link = params$link_primary))
       if (is.null(fit)) return(NULL)
-      list(fit = fit,
-        ok = ok_convergence(fit) && (max_adj_vif(fit) <= VIF_THRESH),
-        adj_vif = max_adj_vif(fit))
+      list(
+        fit = fit,
+        ok = ok_convergence(fit) && (max_vif(fit) <= VIF_THRESH),
+        adj_vif = max_vif(fit)
+      )
     }
     cand_order <- list(
-      RE1 = list(form = f_RE1, dat = dat_o, note = "Participant-only RE"),
-      ORTH = list(form = f_ORTH, dat = dat_o, note = "age_mid_cwc orthogonalized to end_wave"),
+      RE1 = list(form = f_RE1,     dat = dat_o, note = "Participant-only RE"),
       WAVENUM = list(form = f_WAVENUM, dat = dat_o, note = "end_wave -> wave_num linear (1 df)"),
-      DROPcwc = list(form = f_DROPcwc, dat = dat_o, note = "drop age_mid_cwc; keep between-age + end_wave"))
-    chosen <- NULL; tried <- list()
+      DROPcwc = list(form = f_DROPcwc, dat = dat_o, note = "drop age_mid_cwc; keep between-age + end_wave")
+    )
+    chosen <- NULL
+    tried  <- list()
     for (nm in names(cand_order)) {
       res <- try_one(cand_order[[nm]]$form, cand_order[[nm]]$dat)
       if (is.null(res)) next
       tried[[nm]] <- res$adj_vif
-      message("BD-II candidate ", nm, " adj.VIF=", sprintf("%.2f", res$adj_vif), " | converged=", ok_convergence(res$fit), " (", cand_order[[nm]]$note, ")")
-      if (isTRUE(res$ok)) { chosen <- res$fit; break }
-  }
+      message(
+        "BD-II candidate ", nm,
+        " adj.VIF=", sprintf("%.2f", res$adj_vif),
+        " | converged=", ok_convergence(res$fit),
+        " (", cand_order[[nm]]$note, ")"
+      )
+      if (isTRUE(res$ok)) {
+        chosen <- res$fit
+        break
+      }
+    }
   
-    #2.4.0.5 If none met both criteria, try weakly-informative priors on the most principled spec (ORTH)
+    #2.4.0.5 If none met both criteria, try weakly-informative priors on the most principled spec (RE1; no orthogonalization)
     if (is.null(chosen)) {
       if (requireNamespace("blme", quietly = TRUE)) {
-        message("BD-II: trying bglmer with weak priors on ORTH spec.")
+        message("BD-II: trying bglmer with weak priors on RE1 spec (no orthogonalization).")
         chosen <- safe_or_null(
-          blme::bglmer(f_ORTH, data = dat_o, family = binomial(),
+          blme::bglmer(
+            f_RE1, data = dat_o, family = binomial(),
             fixef.prior = blme::normal(scale = 2.5),
-            control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5))))
+            control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5))
+          )
+        )
         if (!is.null(chosen)) {
-          message("BD-II bglmer adj.VIF=", sprintf("%.2f", max_adj_vif(chosen)), " | converged=", ok_convergence(chosen))
+          message(
+            "BD-II bglmer adj.VIF=", sprintf("%.2f", max_vif(chosen)),
+            " | converged=", ok_convergence(chosen)
+          )
         }
       } else {
         message("BD-II: blme not installed; keeping the best of attempted fits so far.")
@@ -1356,9 +1372,9 @@ for (out in OUTCOMES) {
       message("BD-II: selecting best attempted candidate: ", best_nm)
       
       #2.4.0.6.1 Refit that candidate to retrieve the object
-      ff <- switch(best_nm,
+      ff <- switch(
+        best_nm,
         RE1 = f_RE1,
-        ORTH = f_ORTH,
         WAVENUM = f_WAVENUM,
         DROPcwc = f_DROPcwc)
       chosen <- fit_glmer_safe(ff, dat_o, link = params$link_primary)
@@ -1366,7 +1382,7 @@ for (out in OUTCOMES) {
   
     #2.4.0.7 Replace the per-outcome data and fit to flow through the rest of your pipeline
     if (!is.null(chosen)) {
-      fit_o <- chosen
+      fit_o  <- chosen
       form_o <- formula(chosen)
       
       #2.4.0.8 Print a one-line summary into the HTML to document the chosen spec
@@ -1477,7 +1493,9 @@ for (out in OUTCOMES) {
 
   #2.4.3 Summaries and predictions
   wald_primary[[out]] <- safe_or_null(tidy_wald(fit_o) %>% mutate(outcome = out, model = params$link_primary, .before = 1))
-  cr2_primary[[out]] <- safe_or_null(tidy_cr2(fit_o)  %>% mutate(outcome = out, model = params$link_primary, .before = 1))
+  cr2_primary[[out]] <- safe_or_null(
+  tidy_cr2(fit_o, cluster_var = dat_o$family_id) %>%
+    mutate(outcome = out, model = params$link_primary, .before = 1))
 
   #2.4.3.1 Two prediction frames: (A) wave-aligned, (B) fixed-wave (wave_ref)
   preds_primary_aligned[[out]] <- safe_or_null(
@@ -1536,7 +1554,9 @@ for (out in OUTCOMES) {
   fit_s <- fit_glmer_safe(form_sens, dat_o, link = "cloglog")
   fits_sens[[out]] <- fit_s
   wald_sens[[out]] <- safe_or_null(tidy_wald(fit_s) %>% mutate(outcome = out, model = "cloglog", .before = 1))
-  cr2_sens[[out]] <- safe_or_null(tidy_cr2(fit_s)  %>% mutate(outcome = out, model = "cloglog", .before = 1))
+  cr2_sens[[out]] <- safe_or_null(
+  tidy_cr2(fit_s, cluster_var = dat_o$family_id) %>%
+    mutate(outcome = out, model = "cloglog", .before = 1))
 }
 
 #2.4.6 Evidence-based check for cluster:end_wave (only where we considered it)
@@ -1701,16 +1721,24 @@ for (out in OUTCOMES) {
   if (is.null(fit_s)) next
   dat_o <- bd_pp_model %>% dplyr::filter(outcome == out)
 
-  #2.5.3.1 Reference profile that matches the other absolute-risk helpers
-  nd <- expand.grid(
+    #2.5.3.1 Reference profile that matches the other absolute-risk helpers
+    nd <- expand.grid(
     end_wave = levels(dat_o$end_wave),
     cluster = levels(dat_o$cluster),
     age_mid_between = 0,
     age_mid_cwc = 0,
     baseline_status = 0,
     sex = levels(dat_o$sex)[1],
-    site_factor = levels(dat_o$site_factor)[1]) %>% 
-    dplyr::arrange(cluster, end_wave)
+    site_factor = levels(dat_o$site_factor)[1]) %>%
+    dplyr::arrange(cluster, end_wave) %>%
+    dplyr::mutate(
+      
+      #2.5.3.1.1 Ensure end_wave is a factor with the same levels as in the model
+      end_wave = factor(end_wave, levels = levels(dat_o$end_wave)),
+      
+      #2.5.3.1.2 Provide wave_num for models that use it (e.g., BD-II)
+      wave_num = as.integer(end_wave) - 1L
+    )
 
   #2.5.3.2 Unit-interval offset for rate-per-year predictions
   nd$log_dt <- 0
@@ -1719,6 +1747,7 @@ for (out in OUTCOMES) {
   eta <- as.numeric(predict(fit_s, newdata = nd, type = "link", re.form = NA))
   rates_tbls[[out]] <- dplyr::as_tibble(nd) %>%
     dplyr::mutate(rate_per_year = exp(eta), outcome = out, .before = 1)
+
 }
 
 #2.5.3.3 Save rates by wave under cloglog framework

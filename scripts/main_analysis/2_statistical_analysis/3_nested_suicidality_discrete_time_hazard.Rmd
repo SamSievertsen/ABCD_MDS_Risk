@@ -11,8 +11,8 @@ params:
   repo: !r Sys.getenv("REPO", unset = here::here())
   data_dir: "data/data_processed/analysis_datasets"
   out_dir: "results/main_analysis/3_nested_suic_dth"
-  suic_pp_rds: "nested_suic_person_period_k2_robust.rds"
-  suic_pp_csv: "nested_suic_person_period_k2_robust.csv"
+  suic_pp_rds: "nested_suic_person_period_k2_z_score.rds"
+  suic_pp_csv: "nested_suic_person_period_k2_z_score.csv"
   link_primary: "logit"
   wave_ref: "ses-02A"
   ages_pred: !r c()
@@ -30,7 +30,9 @@ knitr::opts_chunk$set(echo = TRUE, cache = FALSE, message = TRUE, warning = TRUE
 
 ```{r environment, echo = FALSE, warning = FALSE}
 
-## Load packages, data, & set env ##
+## 1. Load packages, data, & set env ##
+
+#1.1 Load packages
 suppressPackageStartupMessages({
   library(dplyr); 
   library(tidyr); 
@@ -56,23 +58,30 @@ suppressPackageStartupMessages({
   library(see)
 })
 
+#1.2 Set seed and other numerical options
 set.seed(params$seed)
 options(scipen = 999, digits = 8)
+
+#1.3 Set encoding
 options(encoding = "UTF-8")
 knitr::opts_knit$set(encoding = "UTF-8")
 knitr::knit_hooks$set(output = function(x, options) enc2utf8(x))
 knitr::knit_hooks$set(inline = function(x) enc2utf8(paste(x, collapse = "")))
 emmeans::emm_options(infer = c(TRUE, TRUE))
 
+#1.4 Set relevant paths for I/O
 REPO <- params$repo
 DATA_DIR <- file.path(REPO, params$data_dir)
 OUT_DIR <- file.path(REPO, params$out_dir)
 dir.create(OUT_DIR, recursive = TRUE, showWarnings = FALSE)
 
+#1.5 Read in relevant data
+#1.5.1 Create a function to safely read in person-period data
 read_pp <- function(rds_path, csv_path) {
   if (file.exists(rds_path)) readRDS(rds_path) else readr::read_csv(csv_path, show_col_types = FALSE)
 }
 
+#1.5.2 Read in person-period data
 su_pp <- read_pp(file.path(DATA_DIR, params$suic_pp_rds),
                  file.path(DATA_DIR, params$suic_pp_csv)) %>%
   mutate(
@@ -83,64 +92,77 @@ su_pp <- read_pp(file.path(DATA_DIR, params$suic_pp_rds),
     start_wave = factor(start_wave),
     end_wave = factor(end_wave),
     outcome = factor(outcome),
-    sex = factor(sex)
-  )
+    sex = factor(sex))
 
+#1.6 Clean person-period data for modeling
+#1.6.1 Create a vector for relevant outcomes
 SUIC_OUTCOMES <- c("si_passive","si_active","sa","nssi")
+
+#1.6.2 Filter nested person-period data to only contain outcomes of interest
 su_pp <- su_pp %>% filter(outcome %in% SUIC_OUTCOMES)
 
+#1.6.3 Ensure all data for modeling is present/complete
 su_pp_model <- su_pp %>%
   filter(event %in% c(0L,1L)) %>%
   filter(!is.na(cluster), !is.na(sex), !is.na(site_factor), !is.na(family_id), !is.na(participant_id)) %>%
   filter(!is.na(age_mid), !is.na(age_start), !is.na(age_end)) %>%
   filter(!is.na(bd_any_start))
 
+#1.6.4 Create a column simplifying the timepoint/wave indicator in case of co-linearity
 su_pp_model <- su_pp_model %>%
   mutate(post_baseline = as.integer(end_wave != "ses-02A"))
 
-# DTH interval length from ages
+#1.6.5 Create a column for DTH interval length from ages
 su_pp_model <- su_pp_model %>%
   mutate(dt_years = pmax(age_end - age_start, 1/12),  # guard: >= 1 month
-         log_dt   = log(dt_years))
+         log_dt = log(dt_years))
 
+#1.6.6 Flag and drop any rows with non-sensical interval lengths (check output)
 bad_dt <- sum(!is.finite(su_pp_model$dt_years) | !is.finite(su_pp_model$log_dt))
 if (bad_dt > 0) {
   warning("Dropping ", bad_dt, " rows with undefined interval length.")
   su_pp_model <- su_pp_model %>% filter(is.finite(dt_years), is.finite(log_dt))
 }
 
-# References (consistent display)
+#1.6.7 Set factor column reference levels
 su_pp_model <- su_pp_model %>%
   mutate(
-    cluster = forcats::fct_relevel(cluster, "C2"),
+    cluster = factor(cluster, levels = c("C1","C2")), # C1 = low-risk (reference), C2 = high-risk
     end_wave = forcats::fct_relevel(end_wave, "ses-02A", "ses-04A", "ses-06A"),
     sex = forcats::fct_relevel(sex, "Female"),
-    site_factor = forcats::fct_relevel(site_factor, levels(site_factor)[1])
-  )
+    site_factor = forcats::fct_relevel(site_factor, levels(site_factor)[1]))
 
-# Size sanity check
+#1.6.8 Perform a dataset size sanity check
+#1.6.8.1 List size of data
 sizes_tbl <- tibble(
   Dataset = "Nested suicidality person-period (model-ready; ever-BD)",
   Rows = nrow(su_pp_model),
-  Unique_IDs  = dplyr::n_distinct(su_pp_model$participant_id)
-)
+  Unique_IDs  = dplyr::n_distinct(su_pp_model$participant_id))
+
+#1.6.8.2 Print dataset size sanity check results
 knitr::kable(sizes_tbl, caption = "Dataset size check") %>%
   kableExtra::kable_styling(bootstrap_options = c("striped","hover","condensed","responsive"))
 
-# First-onset risk set per suicidality outcome: exclude baseline-positive for that outcome
+#1.6.9 First-onset risk set per suicidality outcome: exclude baseline-positive for that outcome
+#1.6.9.1 Store IDs with no baseline-positive onset for each outcome
 su_baseline_ids <- su_pp_model %>%
   group_by(participant_id, outcome) %>%
   summarise(
     all_na = all(is.na(baseline_status)),
     baseline_outcome = if_else(all_na, NA_integer_, as.integer(any(baseline_status == 1L, na.rm = TRUE))),
-    .groups = "drop"
-  )
+    .groups = "drop")
 
+#1.6.9.2 Ensure only baseline-negative for each outcome in analysis data
 su_pp_model <- su_pp_model %>%
   left_join(su_baseline_ids, by = c("participant_id","outcome"))
 
+#1.6.9.3 List n before drop 
 n_before <- nrow(su_pp_model); ids_before <- n_distinct(su_pp_model$participant_id)
+
+#1.6.9.4 Only keep baseline negative subjects in data for modeling
 su_pp_model <- su_pp_model %>% filter(baseline_outcome == 0L)
+
+#1.6.9.5 List n subjects dropped due to requirements for baseline-negative participants
 message(
   "Risk-set: excluded participants baseline-positive (and baseline-unknown) for THIS suicidality outcome; ",
   "rows dropped = ", n_before - nrow(su_pp_model),
@@ -148,7 +170,7 @@ message(
   "No baseline term in models (all baseline-negative by design)."
 )
 
-# Censor at the first onset (per outcome x participant) ; keeps all rows up to and including first event==1L; drops rows strictly after it. 
+#1.6.10 Censor at the first onset (per outcome x participant) ; keeps all rows up to and including first event==1L; drops rows strictly after it. 
 su_pp_model <- su_pp_model %>%
   arrange(
     outcome, participant_id,
@@ -161,7 +183,7 @@ su_pp_model <- su_pp_model %>%
   ungroup() %>%
   dplyr::select(-first_onset_row, -row_id) 
 
-# Audit to ensure censoring was done correctly
+#1.6.10.1 Audit to ensure censoring was done correctly
 aud <- su_pp_model %>%
   arrange(outcome, participant_id,
     if ("interval_index" %in% names(.)) interval_index else as.integer(end_wave)) %>%
@@ -171,7 +193,7 @@ aud <- su_pp_model %>%
 aud %>% summarise(any_post = any(post_onset_rows > 0),
   n_ids_with_post = sum(post_onset_rows > 0))
 
-# Empirical wave-median ages (for plotting/prediction)
+#1.7 Empirical wave-median ages (for plotting/prediction)
 wave_age_medians <- su_pp_model %>%
   group_by(end_wave) %>%
   summarise(age_med = median(age_mid, na.rm = TRUE), .groups = "drop") %>%
@@ -179,6 +201,7 @@ wave_age_medians <- su_pp_model %>%
 ages_empirical <- wave_age_medians$age_med %>% as.numeric() %>% round(1)
 readr::write_csv(wave_age_medians, file.path(OUT_DIR, "wave_age_medians.csv"))
 
+#1.8 Ages to use for plotting/pred vector
 ages_pred_vec <- if (!is.null(params$ages_pred) && length(params$ages_pred) > 0) {
   params$ages_pred
 } else if (length(ages_empirical) > 0 && all(is.finite(ages_empirical))) {
@@ -187,7 +210,7 @@ ages_pred_vec <- if (!is.null(params$ages_pred) && length(params$ages_pred) > 0)
   c(11.0, 13.1, 15.2)
 }
 
-# Descriptives: events by outcome x wave x cluster
+#1.9 Descriptives: events by outcome x wave x cluster
 evt_counts <- su_pp_model %>%
   group_by(outcome, end_wave, cluster) %>%
   summarise(events = sum(event == 1L, na.rm = TRUE),
@@ -197,8 +220,11 @@ readr::write_csv(evt_counts, file.path(OUT_DIR, "su_dth_onset_counts.csv"))
 knitr::kable(evt_counts, caption = "Event counts by outcome x wave x cluster") %>%
   kableExtra::kable_styling(bootstrap_options = c("striped","hover","condensed","responsive"))
 
-# Post-filter missingness of model covariates
+#1.10 Post-filter missingness of model covariates
+#1.10.1 List covariates of interest
 covars <- c("cluster","age_mid_between","age_mid_cwc","sex","site_factor","end_wave","participant_id","family_id","bd_any_start","bd_any_end")
+
+#1.10.2 Create a table outlining missingness for each variable if interest
 miss_tbl <- su_pp_model %>%
   mutate(across(all_of(covars), ~ as.numeric(is.na(.)))) %>%
   group_by(outcome) %>%
@@ -206,21 +232,24 @@ miss_tbl <- su_pp_model %>%
             across(all_of(covars), ~ sum(.), .names = "n_miss_{col}"),
             across(starts_with("n_miss_"), ~ round(.x / n, 4), .names = "p_{.col}"),
             .groups = "drop")
+
+#1.10.3 Print variable missingness table
 knitr::kable(miss_tbl, caption = "Missingness (post-filter) by outcome") %>%
   kableExtra::kable_styling(bootstrap_options = c("striped","hover","condensed","responsive"))
+
 ```
 
 ## Analysis Overview (design choices)
 
 * First-onset discrete-time hazard per suicidality outcome (among ever-BD youths), excluding baseline-positive for that suicidality outcome.
-* **Primary exposure**: time-varying BD status at **interval start** (`bd_any_start`) -> protects temporality.
-* **Sensitivities**:
+* Primary exposure: time-varying BD status at **interval start** (`bd_any_start`) -> protects temporality.
+* Sensitivities:
 
   * `bd_any_end` (exposure turns on only once BD is present by interval end).
   * `lag1(bd_any_start)` (prior-interval BD status) to probe lead/lag.
 * Covariates mirror BD DTH: `cluster + age_mid_between + age_mid_cwc + sex + post_baseline`.
 * Random effects: `(1|participant_id) + (1|family_id) + (1|site_factor)` with automatic simplification if singular/non-convergent (never drop participant).
-* Primary link: **logit**; sensitivity: **cloglog + offset(log\_dt)**.
+* Primary link: logit; sensitivity: cloglog + offset(log_dt).
 
 ## 1) Helper Functions
 
@@ -270,7 +299,7 @@ tidy_wald <- function(fit) {
            CI_lo = exp(conf.low),
            CI_hi = exp(conf.high),
            SE = std.error) %>%
-    select(term, estimate, SE, OR, CI_lo, CI_hi, p.value)
+    dplyr::select(term, estimate, SE, OR, CI_lo, CI_hi, p.value)
 }
 
 tidy_cr2 <- function(fit, cluster_var = NULL) {
@@ -436,6 +465,7 @@ save_dharma_plots_and_tests <- function(fit, tag) {
 
 # Predictions: hazards by cluster across ages, for BD=0 vs BD=1 (emmeans; robust vcov if needed)
 pred_by_age_by_bd <- function(fit, dat, bd_var = "bd_any_start", ages = ages_pred_vec, wave_ref = params$wave_ref) {
+  
   # Clamp requested ages to the observed range for this subset
   a_min <- suppressWarnings(min(dat$age_mid, na.rm = TRUE))
   a_max <- suppressWarnings(max(dat$age_mid, na.rm = TRUE))
@@ -449,6 +479,7 @@ pred_by_age_by_bd <- function(fit, dat, bd_var = "bd_any_start", ages = ages_pre
   grand_mean <- mean(dat$age_mid, na.rm = TRUE)
   age_between_vals <- as.numeric(ages_safe - grand_mean)  # raw "between" units
   scales <- get_age_scales(dat)
+  
   # map raw -> model scale if needed
   age_between_for_model <- if (!is.null(scales$between)) apply_age_scales(age_between_vals, scales$between) else age_between_vals
   age_cwc_for_model     <- if (!is.null(scales$cwc))     apply_age_scales(0,                   scales$cwc)     else 0
@@ -724,7 +755,7 @@ msg_model_health <- function(fit, tag) {
   }
 }
 
-# -- Scaling helpers for age vars (used when we z-score age for SA only) ----
+# Scaling helpers for age vars (used when we z-score age for SA only)
 get_age_scales <- function(dat) {
   list(
     between = attr(dat, "age_between_scale"),

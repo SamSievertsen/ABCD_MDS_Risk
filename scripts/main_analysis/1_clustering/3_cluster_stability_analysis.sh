@@ -29,7 +29,7 @@ IFS=$'\n\t'
 ## Establish paths & environment ##
 
 # Container & repo
-IMG="/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.4.sif"
+IMG="/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.7.sif"
 REPO="/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk"
 export APPTAINER_CACHEDIR="/home/exacloud/gscratch/NagelLab/staff/${USER}/.apptainer_cache"
 
@@ -43,7 +43,7 @@ RMD_DIR="${REPO}/scripts/main_analysis/1_clustering"
 RMD_FILE="3_cluster_stability_analysis.Rmd"
 
 # Data & cached objects sanity check: fail early if kproto file is missing, proceed if present
-KPROTO_RDS="${REPO}/data/data_processed/kproto_results/kproto_robust.rds"
+KPROTO_RDS="${REPO}/data/data_processed/kproto_results/kproto_z_score.rds"
 if [[ ! -f "${KPROTO_RDS}" ]]; then
   echo "$(date +'%Y-%m-%d %H:%M:%OS3')|FATAL|missing_kproto|${KPROTO_RDS}" >> "${DETAILED_LOG}"
   echo "ERROR: Required kproto RDS not found: ${KPROTO_RDS}" 1>&2
@@ -52,10 +52,10 @@ fi
 
 ## Parameter overrides for future jobs / k solutions ##
 
-# Defaults match Rmd params and can be overridden at submit-time via: sbatch --export=ALL,K_VALUE=2,N_BOOT=1000,SCALING_METHOD=robust,SEED=123,OVERWRITE=false 3.1_run_cluster_stability.sh
+# Defaults match Rmd params and can be overridden at submit-time via: sbatch --export=ALL,K_VALUE=2,N_BOOT=1000,SCALING_METHOD=z_score,SEED=123,OVERWRITE=false 3.1_run_cluster_stability.sh
 K_VALUE="${K_VALUE:-2}"
 N_BOOT="${N_BOOT:-1000}"
-SCALING_METHOD="${SCALING_METHOD:-robust}"
+SCALING_METHOD="${SCALING_METHOD:-z_score}"
 SEED="${SEED:-123}"
 OVERWRITE="${OVERWRITE:-false}"
 

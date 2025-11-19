@@ -26,7 +26,7 @@ IFS=$'\n\t'
 
 # Paths & env
 REPO="/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk"
-IMG="/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.5.sif"
+IMG="/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.7.sif"
 export APPTAINER_CACHEDIR="/home/exacloud/gscratch/NagelLab/staff/${USER}/.apptainer_cache"
 
 # Thread caps for numeric stability/repro
@@ -50,8 +50,8 @@ AGES_PRESET="${AGES_PRESET:-}"
 SEED="${SEED:-123}"
 
 # Optional overrides for dataset filenames (usually no need to change)
-SUIC_PPRDS="${SUIC_PPRDS:-nested_suic_person_period_k2_robust.rds}"
-SUIC_PPCSV="${SUIC_PPCSV:-nested_suic_person_period_k2_robust.csv}"
+SUIC_PPRDS="${SUIC_PPRDS:-nested_suic_person_period_k2_z_score.rds}"
+SUIC_PPCSV="${SUIC_PPCSV:-nested_suic_person_period_k2_z_score.csv}"
 
 # Change directory to the relevant Rmd directory
 cd "${RMD_DIR}"

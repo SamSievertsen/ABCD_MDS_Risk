@@ -7,7 +7,7 @@ output:
     self_contained: true
 params:
   validation_index: "silhouette"
-  scaling_method: "robust"
+  scaling_method: "z_score"
 ---
 
 ```{r global, include = FALSE}
@@ -58,7 +58,7 @@ handlers("txtprogressbar")
 log_file <- Sys.getenv("DETAILED_LOG")
 summary_csv <- Sys.getenv("SUMMARY_CSV")
 
-# Denote which validation index this array‐task will run
+# Denote which validation index this array task will run
 idx <- as.character(params$validation_index)
 
 # Disable future multicore/furrr here as SLURM array currently provides parallelism
@@ -116,7 +116,7 @@ Prepare the risk variable data for clustering by:
   
   4. Defining a flexible scaling function that supports multiple normalization methods (i.e., z-score, min-max, percentile, max absolute, and robust scaling) dependent upon which performs optimally in previous testing steps
   
-  5. Applying the specified scaling method (i.e., robust median-IQR scaling) to standardize continuous variables while leaving categorical variables unchanged
+  5. Applying the specified scaling method (i.e., z scaling) to standardize continuous variables while leaving categorical variables unchanged
 
 ```{r data prep, warning = FALSE}
 
@@ -166,10 +166,10 @@ scaled_data <- apply_scaling(risk_variable_clustering_data, params$scaling_metho
 
 ## Overview of Determining Optimal Number of Clusters (*k* Value)
 
-Choosing the appropriate number of clusters (*k*) is critical for uncovering meaningful groupings in mixed‐type data. In this analysis, we combine descriptive elbow analysis with (ideally multiple) internal validation indices to arrive at a robust, transparent recommendation for *k* between 2 and 8:
+Choosing the appropriate number of clusters (*k*) is critical for uncovering meaningful groupings in mixed type data. In this analysis, we combine descriptive elbow analysis with (ideally multiple) internal validation indices to arrive at a robust, transparent recommendation for *k* between 2 and 8:
 
 1. **Elbow method**
-   We plot the within‐cluster sum of squares (WSS) across *k* = 2:8 and apply the Kneedle algorithm \[Satopaa *et al.*, 2011] via the `inflection` package (Emekes, 2017) to quantitatively identify the “elbow” point. This provides a visual and numeric guide, but is treated as descriptive rather than prescriptive for purposes of our analyses
+   We plot the within cluster sum of squares (WSS) across *k* = 2:8 and apply the Kneedle algorithm [Satopaa *et al.*, 2011] via the `inflection` package (Emekes, 2017) to quantitatively identify the elbow point. This provides a visual and numeric guide, but is treated as descriptive rather than prescriptive for purposes of our analyses
 
 2. **Internal validation indices**
    Using `validation_kproto()`, we generate the silhouette statistical validation index, and loop in any of the other relevant validation indices (i.e., C-Index, Dunn, Gamma, Point-biserial, and Tau) that were able to be completed in the maximum alloed 7 day run-time for each *k*
@@ -177,7 +177,7 @@ Choosing the appropriate number of clusters (*k*) is critical for uncovering mea
 3. **Consensus evaluation**
    We record the optimal *k* returned by each index and examine patterns of agreement or discrepancy. A convergence of multiple indices on the same *k* will strengthen our confidence in that choice; though a nuanced examination of index scores, the distribution of index scores, and the elbow method will be consulted to 
 
-## Implementation: parallel k-prototypes + single‐index validation
+## Implementation: parallel k-prototypes + single index validation
 
 In this step we:
 
@@ -187,7 +187,7 @@ In this step we:
   
   3. Run the silhouette index with one SLURM task per *k* value 
   
-  4. Log start/end times, WSS values, and per-index *k*opt for reproducibility
+  4. Log start/end times, WSS values, and per-index *k* opt for reproducibility
 
 ```{r validation, include = FALSE, warning = FALSE, message = FALSE, eval = (idx == "silhouette")}
 
@@ -198,7 +198,7 @@ k_vals <- 2:8
 proto_file <- file.path(kproto_dir, sprintf("kproto_%s.rds", scaling_method))
 validation_file <- file.path(validation_dir, sprintf("val_%s_silhouette.rds", scaling_method))
 
-#1.2 Load or compute k‐prototype list depending upon whether it already exists or not
+#1.2 Load or compute k-prototype list depending upon whether it already exists or not
 if (! file.exists(proto_file)) {
   
   #1.2.1 Start the kproto timer if it doesn't already exist
@@ -293,7 +293,7 @@ if (file.exists(validation_file)) {
   )
 }
 
-#1.5 Write out the per‐index summary to the CSV
+#1.5 Write out the per index summary to the CSV
 cat(
   sprintf("%s,validation_silhouette,%s,%s,%.1f\n",
           scaling_method,
@@ -309,21 +309,21 @@ quit(save = "no", status = 0)
 
 ## Checkpoint: aggregate diagnostics & prepare for consensus
 
-The silhouette index‐specific job has now finished and written:
+The silhouette index specific job has now finished and written:
 
 - A single cached k-prototype list (k = 2:8)  
 
 - WSS values for each *k*  
 
-- A validation index object (`val_robust_silhouette.rds`) with optimal *k* for the silhouette 
+- A validation index object (`val_z_score_silhouette.rds`) with optimal *k* for the silhouette 
 
 Next, we will:
 
   1. Read and combine all WSS into an elbow plot and run Kneedle  
 
-  2. Merge each available index’s full *k*-vs-score trajectories  
+  2. Merge each available indexs full *k*-vs-score trajectories  
 
-  3. Compute each available index’s preferred *k* and select a consensus *k*  
+  3. Compute each available indexs preferred *k* and select a consensus *k*  
 
   4. Visualize results via line plots and heatmaps for final inspection
 
@@ -333,7 +333,7 @@ Next, we will:
 
 #1. Generate clustering solutions & validation indices of interest
 #1.1 Establish relevant parameters & paths
-#1.1.1 Create a vector containing the k’s to test
+#1.1.1 Create a vector containing the k's to test
 k_vals <- 2:8
 
 #1.1.2 List where to stash / load the kproto list for this method
@@ -361,7 +361,7 @@ if (file.exists(proto_file)) {
     file = log_file, append = TRUE
   )
   
-  #1.2.3 Store a list containing each kp object (parallel over 7 k’s)
+  #1.2.3 Store a list containing each kp object (parallel over 7 k's)
   kp_list <- future_map(
     k_vals,
     ~ kproto(x = scaled_data,
@@ -386,7 +386,7 @@ if (file.exists(proto_file)) {
   )
 }
 
-#1.2.5 Extract total within‐cluster sum of squares (WSS) for elbow plot  
+#1.2.5 Extract total within cluster sum of squares (WSS) for elbow plot  
 wss_vec <- map_dbl(kp_list, "tot.withinss")
 names(wss_vec) <- k_vals
 
@@ -440,14 +440,14 @@ elbow_plot <- ggplot(elbow_df, aes(x = k, y = wss)) +
   geom_point(size = 3) +
   labs(
     x = "Number of clusters (k)",
-    y = "Total within‐cluster sum of squares",
+    y = "Total within cluster sum of squares",
     title = "Elbow plot: WSS vs k") +
   theme_minimal(base_size = 14)
 
 #2.2.2 Print the basic elbow plot
 print(elbow_plot)
 
-#2.3 Find the “knee” via the Kneedle (UIK) algorithm
+#2.3 Find the knee via the Kneedle (UIK) algorithm
 knee <- uik(elbow_df$k, elbow_df$wss)
 
 #2.3.1 Log the UIK elbow into the detailed log
@@ -485,7 +485,7 @@ elbow_plot_uik <- ggplot(elbow_df, aes(x = k, y = wss)) +
 print(elbow_plot_uik)
 
 #2.5 Cluster compactness / separation metrics per k
-#2.5.1 Compute mixed‐type total sum of squares (TSS) once via 1-cluster prototype
+#2.5.1 Compute mixed type total sum of squares (TSS) once via 1-cluster prototype
 #2.5.1.1 Calculate the kproto object
 t1 <- kproto(
   x = scaled_data,
@@ -496,7 +496,7 @@ t1 <- kproto(
 #2.5.1.2 Store the total within SS value for the whole mixed dataset
 TSS_mixed <- t1$tot.withinss
 
-#2.5.2 Loop over each k to compute RMSSD & R²
+#2.5.2 Loop over each k to compute RMSSD & R2
 cluster_metrics <- purrr::map_dfr(
   k_vals,
   function(k) {
@@ -511,7 +511,7 @@ cluster_metrics <- purrr::map_dfr(
     #2.5.2.2 RMSSD: sqrt(mean( SS_cl / cluster_size ))
     rmssd <- sqrt(mean(wss_cl / sz))
     
-    #2.5.2.3 R²: proportion of variance explained
+    #2.5.2.3 R2: proportion of variance explained
     r2 <- (TSS_mixed - tot_wss) / TSS_mixed
     
     #2.5.2.4 Log to detailed log
@@ -537,7 +537,7 @@ knitr::kable(
     bootstrap_options = c("striped", "hover", "condensed", "responsive"))
 
 #2.6 UMAP & blob diagnostics for selected k values
-#2.6.1 Create a function to one‐hot encode categorical variables + pipe in scaled numerics
+#2.6.1 Create a function to one hot encode categorical variables + pipe in scaled numerics
 prepare_mixed_data <- function(data) {
   cat_cols <- sapply(data, function(x) is.factor(x) || is.character(x))
   num_cols <- sapply(data, is.numeric)
@@ -555,7 +555,7 @@ prepare_mixed_data <- function(data) {
   do.call(cbind, comps)
 }
 
-#2.6.2 Choose the k’s to visualize - current most likely optimal candidates
+#2.6.2 Choose the k's to visualize - current most likely optimal candidates
 selected_k <- c(2, 3, 4)
 
 #2.6.3 Loop over each selected k and create UMAP + diagnostics
@@ -637,14 +637,14 @@ for (k in selected_k) {
   
   #2.6.3.9 Arrange & print up to 6 per row
   if (length(cluster_plots) <= 6) {
-    do.call(grid.arrange, c(cluster_plots, ncol = 2, top = glue::glue("k = {k} → Individual Cluster Patterns")))
+    do.call(grid.arrange, c(cluster_plots, ncol = 2, top = glue::glue("k = {k} Individual Cluster Patterns")))
   } else {
     print(cluster_plots)
   }
 }
 
 #3. Summarize & visualize validation indices & pick a consensus k 
-#3.1 Define which direction is “better” for each index
+#3.1 Define which direction better for each index
 dir_tbl <- tribble(
   ~index, ~direction, ~label,
   "silhouette", "higher", "Silhouette (higher = better)",
@@ -654,7 +654,7 @@ dir_tbl <- tribble(
   "tau", "higher", "Tau (higher = better)"
 )
 
-#3.2 Pull out full index‐vs‐k values from cached validation objects
+#3.2 Pull out full index vs k values from cached validation objects
 #3.2.1 Build a single data.frame with index, k, and value
 index_k_df <- purrr::map2_dfr(
   indices, val_list,
@@ -672,7 +672,7 @@ dir_tbl2 <- dir_tbl %>% filter(index %in% index_k_df$index)
 index_k_df <- index_k_df %>%
   left_join(dir_tbl2, by = "index")
 
-#3.3 Compute each index’s best k
+#3.3 Compute each index's best k
 summary_tbl <- index_k_df %>%
   group_by(index, direction, label) %>%
   summarise(
@@ -681,7 +681,7 @@ summary_tbl <- index_k_df %>%
     .groups = "drop"
   )
 
-#3.3.1 Determine “consensus” k (at least according to simple vote)
+#3.3.1 Determine consensus k (at least according to simple vote)
 consensus_k <- summary_tbl$k_opt %>% table() %>% which.max() %>% names() %>% as.integer()
 
 #3.3.2 Print and log the "consensus k"
@@ -740,7 +740,7 @@ summary_tbl %>%
 
 **Interpretation:**
 
-- The elbow plot suggests a bend at *k* = `r knee`, reinforced by Kneedle’s quantitative estimate
+- The elbow plot suggests a bend at *k* = `r knee`, reinforced by Kneedles quantitative estimate
 
 - Among the `r nrow(summary_tbl)` validation indices we were able to run, `r sum(summary_tbl$k_opt == consensus_k)` (`r paste(summary_tbl$label[summary_tbl$k_opt == consensus_k], collapse = ", ")`) vote for *k* = `r consensus_k`  
   `r if (any(summary_tbl$k_opt != consensus_k)) { paste0("The others (", paste0(summary_tbl$label[summary_tbl$k_opt != consensus_k], " (k=", summary_tbl$k_opt[summary_tbl$k_opt != consensus_k], ")", collapse = ", "), ") peak at neighboring values.") }`

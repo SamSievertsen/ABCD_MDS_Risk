@@ -24,7 +24,7 @@ IFS=$'\n\t'
 
 # Paths & env 
 REPO="/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk"
-export PROTO_FILE="${REPO}/data/data_processed/kproto_results/kproto_robust.rds"
+export PROTO_FILE="${REPO}/data/data_processed/kproto_results/kproto_z_score.rds"
 export PARTIAL_DIR="${REPO}/data/data_processed/validation_results/partial_results_in_progress"
 export VALID_DIR="${REPO}/data/data_processed/validation_results"
 
@@ -41,7 +41,7 @@ exec > >(tee -a "${LOGDIR}/${SLURM_JOB_NAME}_${SLURM_JOB_ID}.out") \
      2> >(tee -a "${LOGDIR}/${SLURM_JOB_NAME}_${SLURM_JOB_ID}.err" >&2)
 
 # GUARD 1: skip if this merge result already exists
-MERGED_FILE="${VALID_DIR}/val_robust_${IDX}.rds"
+MERGED_FILE="${VALID_DIR}/val_z_score_${IDX}.rds"
 if [[ -f "${MERGED_FILE}" ]]; then
   echo "$(date +'%Y-%m-%d %H:%M:%OS3')|MERGE_SKIP_EXISTS|idx=${IDX}" \
     >> "${DETAILED_LOG}"
@@ -62,7 +62,7 @@ echo "$(date +'%Y-%m-%d %H:%M:%OS3')|MERGE_START|idx=${IDX}" \
 # Run merge in R
 apptainer exec \
   -B "${REPO}:${REPO}" \
-  /home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.4.sif \
+  /home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.7.sif \
   Rscript - <<'EOF'
 
 # Load necessary packages
@@ -76,7 +76,7 @@ kp_list <- readRDS(Sys.getenv("PROTO_FILE"))
 k_vals=(2 3 4 5 6 7 8)
 idx="$IDX"
 partial <- lapply(k_vals, function(k) {
-  fn <- sprintf("val_robust_%s_k%s.rds", idx, k)
+  fn <- sprintf("val_z_score_%s_k%s.rds", idx, k)
   pth <- file.path(Sys.getenv("PARTIAL_DIR"), fn)
   if (!file.exists(pth)) return(NULL)
   readRDS(pth)
@@ -111,7 +111,7 @@ vr_all <- list(
 )
 
 # Save the merged object
-out_fn <- file.path(Sys.getenv("VALID_DIR"), sprintf("val_robust_%s.rds", idx))
+out_fn <- file.path(Sys.getenv("VALID_DIR"), sprintf("val_z_score_%s.rds", idx))
 saveRDS(vr_all, out_fn)
 
 # Exit script

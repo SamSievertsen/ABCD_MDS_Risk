@@ -212,20 +212,20 @@ stack_dir <- function(dir, pattern, mutate_f = NULL) {
   res
 }
 
-#1.6.15 Helper to read val_robust_silhouette_k*.rds into a tidy DF if possible
+#1.6.15 Helper to read val_z_score_silhouette_k*.rds into a tidy DF if possible
 read_val_sil_perk <- function(dir) {
   if (!dir.exists(dir)) return(NULL)
-  fs <- list.files(dir, pattern = "^val_robust_silhouette_k[0-9]+\\.rds$", full.names = TRUE)
+  fs <- list.files(dir, pattern = "^val_z_score_silhouette_k[0-9]+\\.rds$", full.names = TRUE)
   if (!length(fs)) return(NULL)
   purrr::map_dfr(fs, function(f) {
     obj <- safe_read(f)
     k <- suppressWarnings(as.integer(stringr::str_match(basename(f), "k(\\d+)")[,2]))
     if (is.data.frame(obj) && "silhouette" %in% names(obj)) {
-      tibble::tibble(k = k, scaling = "robust_iqr", silhouette = mean(obj$silhouette, na.rm = TRUE))
+      tibble::tibble(k = k, scaling = "z_score", silhouette = mean(obj$silhouette, na.rm = TRUE))
     } else if (is.numeric(obj)) {
-      tibble::tibble(k = k, scaling = "robust_iqr", silhouette = mean(obj, na.rm = TRUE))
+      tibble::tibble(k = k, scaling = "z_score", silhouette = mean(obj, na.rm = TRUE))
     } else if (is.list(obj)) {
-      tibble::tibble(k = k, scaling = "robust_iqr", silhouette = mean(unlist(obj), na.rm = TRUE))
+      tibble::tibble(k = k, scaling = "z_score", silhouette = mean(unlist(obj), na.rm = TRUE))
     } else {
       NULL
     }
@@ -289,44 +289,44 @@ outcome_vars <- read_or_tk(
 #2.1.3 Read in cluster labels
 cluster_labels <- read_or_tk(
   first_existing(
-    p_analysis("cluster_labels_k2_robust.csv"),
-    p_analysis("cluster_labels_k2_robust.rds")),
+    p_analysis("cluster_labels_k2_z_score.csv"),
+    p_analysis("cluster_labels_k2_z_score.rds")),
   tk_cols = c("participant_id","cluster")) %>% 
   ensure_participant_id()
 
 #2.1.4 Read in BD panel data
 bd_panel <- read_or_tk(first_existing(
-  p_analysis("bd_panel_k2_robust.csv"),
-  p_analysis("bd_panel_k2_robust.rds")), 
+  p_analysis("bd_panel_k2_z_score.csv"),
+  p_analysis("bd_panel_k2_z_score.rds")), 
   tk_cols = c("participant_id","wave","age","cluster","any_bsd","bipolar_I","bipolar_II","bd_nos")) %>% 
   ensure_participant_id()
 
 #2.1.5 Read in BD person-period data
 bd_pp <- read_or_tk(first_existing(
-  p_analysis("bd_person_period_k2_robust.csv"),
-  p_analysis("bd_person_period_k2_robust.rds")), 
+  p_analysis("bd_person_period_k2_z_score.csv"),
+  p_analysis("bd_person_period_k2_z_score.rds")), 
   tk_cols = c("participant_id","wave","age","interval_id","cluster","event_any_bsd","event_bipolar_I","event_bipolar_II","event_bd_nos")) %>% ensure_participant_id()
 
 #2.1.6 Read in nested suicidality panel data
 nested_panel <- read_or_tk(first_existing(
-  p_analysis("nested_suic_panel_k2_robust.csv"),
-  p_analysis("nested_suic_panel_k2_robust.rds")), 
+  p_analysis("nested_suic_panel_k2_z_score.csv"),
+  p_analysis("nested_suic_panel_k2_z_score.rds")), 
   tk_cols = c("participant_id","wave","age","cluster","ever_bd","si_passive","si_active","sa","nssi")) %>% 
   ensure_participant_id()
 
 #2.1.7 Read in nested suicidality person-period data
 nested_pp <- read_or_tk(first_existing(
-  p_analysis("nested_suic_person_period_k2_robust.csv"),
-  p_analysis("nested_suic_person_period_k2_robust.rds")), 
+  p_analysis("nested_suic_person_period_k2_z_score.csv"),
+  p_analysis("nested_suic_person_period_k2_z_score.rds")), 
   tk_cols = c("participant_id","wave","age","interval_id","cluster","ever_bd","event_si_passive","event_si_active","event_sa","event_nssi")) %>%
   ensure_participant_id()
 
-#2.2 Map C1/C2 cluster labels to manuscript labels (C1 = Higher; C2 = Lower)
+#2.2 Map C1/C2 cluster labels to manuscript labels (C1 = Lower; C2 = Higher)
 #2.2.1 Create a coercion function
 coerce_cluster <- function(x) {
   dplyr::recode(as.character(x),
-    "C1"="Higher-Risk","1"="Higher-Risk","high"="Higher-Risk","higher"="Higher-Risk",
-    "C2"="Lower-Risk","2"="Lower-Risk","low"="Lower-Risk","lower"="Lower-Risk",
+    "C1"="Lower-Risk","1"="Lower-Risk","low"="Lower-Risk","lower"="Lower-Risk",
+    "C2"="Higher-Risk","2"="Higher-Risk","high"="Higher-Risk","higher"="Higher-Risk",
     .default = x)
 }
 
@@ -339,7 +339,7 @@ if (!is.null(cluster_labels) && nrow(cluster_labels)) {
 #2.3 Read in validation results
 #2.3.1 All available clustMixType derived index results
 val_sil_all <- safe_read(first_existing(
-  p_valid("val_robust_silhouette.rds")
+  p_valid("val_z_score_silhouette.rds")
 ))
 
 #2.3.2 Robust reader for per-k clustMixType validation index files (skips non-DF RDS)
@@ -356,8 +356,8 @@ val_cindex_all <- safe_read(first_existing(p_valid("val_robust_cindex.rds"), p_v
 #2.3.4 Read in cluster stability results
 cluster_stability_raw <- read_or_tk(
   first_existing(
-    p_stab("stability_robust_k2_nb1000.csv"),
-    p_stab("stability_robust_k2_nb1000.rds")),
+    p_stab("stability_z_score_k2_nb1000.csv"),
+    p_stab("stability_z_score_k2_nb1000.rds")),
   tk_cols = c("metric","value","percentile","notes")
 )
 
@@ -663,6 +663,7 @@ nested_gam <- su_gamm_preds %||% read_or_tk("", tk_cols = c("age","cluster","fit
 #2.9.6 Standardize age-based predictions
 #2.9.6.1 BD DTH age-based predictions
 bd_dth_preds <- if (!is_tk(bd_preds_by_age)) bd_preds_by_age else read_or_tk("", tk_cols = c("age","cluster","outcome","fit","conf.low","conf.high"), tk_n = 60)
+
 #2.9.6.2 Nested suicidality DTH age-based predictions
 nested_dth_preds <- if (!is_tk(su_preds_by_age)) su_preds_by_age else read_or_tk("", tk_cols = c("age","cluster","outcome","fit","conf.low","conf.high"), tk_n = 60)
 
@@ -671,7 +672,7 @@ seed_if_needed <- function() {
 
   #2.10.1 k_sil: simple TK curve or from val_sil_perk (silhouette by k and scaling)
   if (is.null(val_sil_all) && (is.null(val_sil_perk) || !is.data.frame(val_sil_perk) || nrow(val_sil_perk) == 0)) {
-    k_sil_df <- tidyr::expand_grid(k = 2:8, scaling = c("robust_iqr","zscore","none")) %>%
+    k_sil_df <- tidyr::expand_grid(k = 2:8, scaling = c("robust_iqr","z_score","none")) %>%
       dplyr::mutate(silhouette = dplyr::case_when(
         scaling == "robust_iqr" ~ dplyr::case_when(k == 2 ~ 0.48, k == 3 ~ 0.43, k == 4 ~ 0.41, TRUE ~ 0.38),
         scaling == "zscore" ~ 0.35 - 0.01*(k-2),
@@ -1613,7 +1614,7 @@ if (requireNamespace("gtsummary", quietly = TRUE)) {
 ## Figure 3 - Internal Validation of Optimal k (silhouette, UMAP, elbow)
 
 - Purpose: Validate clustering via (A) silhouette vs k, (B) UMAP embeddings for k=2-4, and (C) elbow (WSS) with knee detection.
-- Inputs: `val_robust_silhouette*` RDS/CSV (or per-k partials), UMAP embeddings (`umap_embedding_k{2,3,4}.{csv,rds}`), and optional precomputed `k_wss`.
+- Inputs: `val_z_score_silhouette*` RDS/CSV (or per-k partials), UMAP embeddings (`umap_embedding_k{2,3,4}.{csv,rds}`), and optional precomputed `k_wss`.
 - Outputs: Saves `Figure_03_Internal_Validation.{pdf,png}`; returns a patchwork-composed figure.
 - Notes: Falls back to TK curves/points when inputs are absent; uses consistent axes-only theme; palette adapts to present cluster levels.
 
@@ -1655,10 +1656,10 @@ coerce_cluster_digits <- function(x) {
 #F3.3.1 Read silhouette data (precomputed or per-k)
 sil_df <- if (exists("k_sil")) k_sil else val_sil_perk
 sil_df <- sil_df %||% read_or_tk("", tk_cols = c("k","scaling","silhouette"))
-sil_df <- sil_df %>% dplyr::mutate(scaling = dplyr::coalesce(scaling, "robust_iqr"))
+sil_df <- sil_df %>% dplyr::mutate(scaling = dplyr::coalesce(scaling, "z_score"))
 
 #F3.3.2 Select main scaling methods (robust_iqr preferred; else any available)
-sil_main <- sil_df %>% dplyr::filter(tolower(scaling) %in% c("robust_iqr","iqr","median_iqr"))
+sil_main <- sil_df %>% dplyr::filter(tolower(scaling) %in% c("z_score","iqr","median_iqr"))
 if (!nrow(sil_main)) sil_main <- sil_df
 
 #F3.3.3 Extract the best k (highest silhouette)
@@ -1756,7 +1757,7 @@ knee_detect <- function(df) {
 
 #F3.5.2 Read WSS data (precomputed or from TK)
 wss_df <- if (exists("k_wss")) k_wss else read_or_tk("", tk_cols = c("k","scaling","wss"))
-wss_main <- wss_df %>% dplyr::filter(tolower(scaling) %in% c("robust_iqr","iqr","median_iqr"))
+wss_main <- wss_df %>% dplyr::filter(tolower(scaling) %in% c("z_score","iqr","median_iqr"))
 if (!nrow(wss_main)) wss_main <- wss_df
 knee_k <- if (nrow(wss_main)) knee_detect(wss_main) else NA_integer_
 
@@ -3447,13 +3448,13 @@ em_or_by_wave <- function(fit) {
   V <- try(vcov(fit), silent = TRUE)
   emm <- emmeans::emmeans(fit, ~ cluster | wave, type = "link", vcov. = if (!inherits(V, "try-error")) V else NULL)
   
-  #F6.2.2 Force contrast to be C1 - C2 (so OR = odds_C1 / odds_C2) regardless of reference
+  #F6.2.2 Force contrast to be C2 - C1 (so OR = odds_C2 / odds_C1) regardless of reference
   lev <- levels(emm@grid$cluster)
   if (!all(c("C1","C2") %in% lev)) stop("Cluster levels not found in fit: ", paste(lev, collapse=", "))
   
   #F6.2.3 Compute contrast and summary
-  w <- setNames(numeric(length(lev)), lev); w["C1"] <- 1; w["C2"] <- -1
-  cmp <- emmeans::contrast(emm, method = list("C1 - C2" = w))
+  w <- setNames(numeric(length(lev)), lev); w["C2"] <- 1; w["C1"] <- -1
+  cmp <- emmeans::contrast(emm, method = list("C2 - C1" = w))
   sm  <- summary(cmp, infer = TRUE)  # on link (logit) scale
   
   #F6.2.4 Return tidy tibble with OR, CI, p per wave

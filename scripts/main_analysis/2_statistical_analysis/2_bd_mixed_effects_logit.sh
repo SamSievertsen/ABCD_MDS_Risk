@@ -13,8 +13,8 @@
 #SBATCH --time=23:59:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=2
-#SBATCH --mem=64G
+#SBATCH --cpus-per-task=36
+#SBATCH --mem=256G
 
 #SBATCH --output=/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk/slurm_logs/%x_%j.out
 #SBATCH --error=/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk/slurm_logs/%x_%j.err
@@ -24,10 +24,15 @@ set -euo pipefail
 IFS=$'\n\t'
 
 REPO="/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk"
-IMG="/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.5.sif"
-export APPTAINER_CACHEDIR="/home/exacloud/gscratch/NagelLab/staff/${USER}/.apptainer_cache"
+IMG="/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.7.sif"
+export APPTAINER_CACHEDIR="/home/exacloud/gscratch/NagelLab/staff/sam/.apptainer_cache"
 
-export OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 BLIS_NUM_THREADS=2
+# faster (allow BLAS to use cores; still 1 task)
+export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+export MKL_NUM_THREADS=$SLURM_CPUS_PER_TASK
+export OPENBLAS_NUM_THREADS=$SLURM_CPUS_PER_TASK
+export BLIS_NUM_THREADS=$SLURM_CPUS_PER_TASK
+
 export LANG=C.UTF-8 LC_ALL=C.UTF-8
 
 LOGDIR="${REPO}/slurm_logs/$(date +%F)"
@@ -41,7 +46,7 @@ RMD_FILE="2_bd_mixed_effects_logit.Rmd"
 OUTCOMES="bipolar_I,bipolar_II,bd_nos,any_bsd"
 RESPVAR="status"
 LINK_PRIMARY="logit"
-WAVE_REF="ses-04A"
+WAVE_REF="ses-02A"
 AGES_PRESET=""
 
 cd "${RMD_DIR}"

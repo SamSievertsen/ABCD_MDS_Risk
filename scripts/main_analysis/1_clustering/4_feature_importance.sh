@@ -15,7 +15,7 @@ IFS=$'\n\t'
 
 # Paths and container
 PROJECT_DIR="${PROJECT_DIR:-/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk}"
-CONTAINER="${CONTAINER:-/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.6.sif}"
+CONTAINER="${CONTAINER:-/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.7.sif}"
 APPTAINER_CACHEDIR="${APPTAINER_CACHEDIR:-/home/exacloud/gscratch/NagelLab/staff/sam/.apptainer_cache}"
 
 RMD_DIR="$PROJECT_DIR/scripts/main_analysis/1_clustering"
@@ -75,7 +75,7 @@ if [[ ! -f "$SEEDFILE" ]]; then
   apptainer exec -B "$PROJECT_DIR:$PROJECT_DIR" "$CONTAINER" Rscript - <<EOF
 dir.create("$SEED_SUM_DIR", recursive=TRUE, showWarnings=FALSE)
 set.seed(123L)
-seeds <- sample.int(.Machine$integer.max, size = as.integer("$N_SEEDS"))
+seeds <- sample.int(.Machine\$integer.max, size = as.integer($N_SEEDS))
 df <- data.frame(idx = seq_along(seeds), seed = seeds)
 readr::write_csv(df, "$SEEDFILE")
 EOF
@@ -89,7 +89,7 @@ if [[ "$SEED_COUNT" -ne "$N_SEEDS" ]]; then
   apptainer exec -B "$PROJECT_DIR:$PROJECT_DIR" "$CONTAINER" Rscript - <<EOF
 dir.create("$SEED_SUM_DIR", recursive=TRUE, showWarnings=FALSE)
 set.seed(123L)
-seeds <- sample.int(.Machine$integer.max, size = as.integer("$N_SEEDS"))
+seeds <- sample.int(.Machine\$integer.max, size = as.integer($N_SEEDS))
 df <- data.frame(idx = seq_along(seeds), seed = seeds)
 readr::write_csv(df, "$SEEDFILE")
 EOF
@@ -106,11 +106,20 @@ SBATCH_COMMON=(
 
 # Array wrapper (per-seed) 
 ARRAY_WRAP=$(cat <<'EOS'
-set -euo pipefail
-export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
-export MKL_NUM_THREADS=${SLURM_CPUS_PER_TASK}
-export OPENBLAS_NUM_THREADS=${SLURM_CPUS_PER_TASK}
-export BLIS_NUM_THREADS=${SLURM_CPUS_PER_TASK}
+set -eu
+
+# Enable pipefail only in bash shells
+if [ -n "${BASH_VERSION-}" ]; then set -o pipefail; fi
+
+# Guard SLURM vars for set -u contexts (fallbacks are safe)
+: "${SLURM_CPUS_PER_TASK:=1}"
+: "${SLURM_ARRAY_JOB_ID:=0}"
+: "${SLURM_ARRAY_TASK_ID:=1}"
+
+export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
+export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
+export OPENBLAS_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
+export BLIS_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
 export LANG=C.UTF-8 LC_ALL=C.UTF-8
 export APPTAINER_CACHEDIR="%APPTAINER_CACHEDIR%"
 export DETAILED_LOG="%LOGDIR%/fi_detail_${SLURM_ARRAY_JOB_ID}_${SLURM_ARRAY_TASK_ID}.log"
@@ -123,7 +132,7 @@ RMD_FILE="%RMD_FILE%"
 cd "$RMD_DIR"
 
 # Sanity check kproto anchor
-KPROTO_RDS="%PROJECT_DIR%/data/data_processed/kproto_results/kproto_robust.rds"
+KPROTO_RDS="%PROJECT_DIR%/data/data_processed/kproto_results/kproto_z_score.rds"
 if [[ ! -f "$KPROTO_RDS" ]]; then
   echo "$(date +'%F %T')|FATAL|missing_kproto|$KPROTO_RDS" >> "$DETAILED_LOG"
   exit 4
@@ -161,7 +170,11 @@ echo "Submitted array job: $ARRAY_JOBID"
 
 # Aggregate wrapper (depends on array ok)
 AGG_WRAP=$(cat <<'EOS'
-set -euo pipefail
+set -eu
+if [ -n "${BASH_VERSION-}" ]; then set -o pipefail; fi
+
+: "${SLURM_JOB_ID:=0}"
+
 export OMP_NUM_THREADS=8
 export MKL_NUM_THREADS=8
 export OPENBLAS_NUM_THREADS=8

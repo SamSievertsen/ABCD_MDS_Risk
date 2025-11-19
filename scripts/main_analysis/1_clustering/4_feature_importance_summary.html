@@ -1659,13 +1659,13 @@ pre code {
 </div>
 <div id="data-fitted-clustering-anchor" class="section level3">
 <h3>2. Data &amp; Fitted Clustering Anchor</h3>
-<p><strong>Goal:</strong> Load the cleaned baseline risk dataframe and the final fitted k-prototypes object (scaling = robust, lambda from <code>lambdaest</code>). Compute baseline cluster assignments from the anchor model and coerce <code>risk_dt</code> column types to match the fitted object to ensure consistent distance calculations in downstream predictions</p>
-<pre><code>Loaded k-prototypes (from list): k=2, lambda=4.801808</code></pre>
+<p><strong>Goal:</strong> Load the cleaned baseline risk dataframe and the final fitted k-prototypes object (scaling = z_score, lambda from <code>lambdaest</code>). Compute baseline cluster assignments from the anchor model and coerce <code>risk_dt</code> column types to match the fitted object to ensure consistent distance calculations in downstream predictions</p>
+<pre><code>Loaded k-prototypes (from list): k=2, lambda=3.31568</code></pre>
 <pre><code>Sanity: predict(kp0, kp0$data) agrees with kp0$cluster in 100.0% of rows.</code></pre>
 </div>
 <div id="helper-functions" class="section level3">
 <h3>3. Helper Functions</h3>
-<p><strong>Goal:</strong> Implement reusable helpers aimed at the following: - <code>permute_col()</code> - type-preserving permutation of a given variable used for cluster reassignment - <code>feature_mcr()</code> - permutation MCR vs a base assignment for a single feature - <code>shadow_max_mcr()</code> - global shadow baseline per seed - <code>feature_p_emp()</code> - empirical p-values for observed MCRs (Holm-adjusted later) - <code>compute_redundancy()</code> - |ρ| and Cramér’s V flags for redundancy among retained features - <code>centroid_profiles()</code> - descriptive numeric/categorical summaries for the centroid of each cluster</p>
+<p><strong>Goal:</strong> Implement reusable helpers aimed at the following: - <code>permute_col()</code> - type-preserving permutation of a given variable used for cluster reassignment - <code>feature_mcr()</code> - permutation MCR vs a base assignment for a single feature - <code>shadow_baseline()</code> - global shadow baseline per seed - <code>shadow_baseline_feat()</code> - shadow baseline for each feature - <code>compute_redundancy()</code> - |ρ| and Cramér’s V flags for redundancy among retained features - <code>centroid_profiles()</code> - descriptive numeric/categorical summaries for the centroid of each cluster</p>
 </div>
 <div id="descriptive-centroid-profiles" class="section level3">
 <h3>4. Descriptive Centroid Profiles</h3>
@@ -1691,7 +1691,7 @@ pre code {
 </div>
 <div id="reproducibility-log" class="section level3">
 <h3>9. Reproducibility Log</h3>
-<p><strong>Goal:</strong> Record parameters (n, p, k, lambda, scaling, biter, n_seeds, shadow_B, pval_B, stability_keep) and container hash to <code>run_log.json</code> for traceability of this run</p>
+<p><strong>Goal:</strong> Record parameters (n, p, k, lambda, scaling, biter, n_seeds, shadow_B, stability_keep) and container hash to <code>run_log.json</code> for traceability of this run</p>
 </div>
 </div>
 

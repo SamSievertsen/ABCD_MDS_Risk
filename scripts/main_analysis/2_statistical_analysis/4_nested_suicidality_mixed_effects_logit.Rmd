@@ -12,15 +12,13 @@ params:
   repo: !r getwd()
   data_dir: "data/data_processed/analysis_datasets/"
   out_dir: "results/main_analysis/4_nested_suicidality_mixed_logit"
-  panel_rds: "nested_suic_panel_k2_robust.rds"
-  panel_csv: "nested_suic_panel_k2_robust.csv"
+  panel_rds: "nested_suic_panel_k2_z_score.rds"
+  panel_csv: "nested_suic_panel_k2_z_score.csv"
   outcomes: !r c("si_passive","si_active","sa","nssi")
   response_var: "status"
   link_primary: "logit"
   wave_ref: "ses-02A"
-  # age handling
   age_linear: "age_wave_gmc"   # will fallback to age_wave if missing
-  # BD & baseline covariates
   bd_timevarying: "any_bsd"    # time-varying BD
   baseline_fallback: "baseline_status_su"
   # GAMM toggle (kept but OFF by default for 2-wave data)
@@ -86,7 +84,7 @@ if (file.exists(rds_path)) {
 panel <- panel %>%
   mutate(
     wave = factor(wave, levels = c("ses-02A","ses-04A"), ordered = TRUE),
-    cluster = factor(cluster, levels = c("C2","C1")),
+    cluster = factor(cluster, levels = c("C1","C2")),
     sex = factor(sex, levels = c("Female","Male")),
     participant_id = as.factor(participant_id),
     site_factor = as.factor(site_factor),
@@ -176,21 +174,21 @@ auc_qc <- function(fit, df) {
   if (inherits(ro, "try-error")) NA_real_ else as.numeric(pROC::auc(ro))
 }
 
-# Extract main cluster effect OR + CI + p
+# Extract main cluster effect OR + CI + p (C2 vs C1; C1 = low-risk reference)
 extract_cluster <- function(fit) {
-  out <- tibble(term = "clusterC1", OR = NA_real_, CI_low = NA_real_, CI_high = NA_real_, p = NA_real_)
+  out <- tibble(term = "clusterC2", OR = NA_real_, CI_low = NA_real_, CI_high = NA_real_, p = NA_real_)
   if (inherits(fit, "merMod")) {
-    sm <- coef(summary(fit)); if (!"clusterC1" %in% rownames(sm)) return(out)
-    b <- sm["clusterC1","Estimate"]; se <- sm["clusterC1","Std. Error"]; z <- b/se; p <- 2*pnorm(abs(z), lower.tail = FALSE)
-    tibble(term="clusterC1", OR = exp(b), CI_low = exp(b-1.96*se), CI_high = exp(b+1.96*se), p = p)
+    sm <- coef(summary(fit)); if (!"clusterC2" %in% rownames(sm)) return(out)
+    b <- sm["clusterC2","Estimate"]; se <- sm["clusterC2","Std. Error"]; z <- b/se; p <- 2*pnorm(abs(z), lower.tail = FALSE)
+    tibble(term="clusterC2", OR = exp(b), CI_low = exp(b-1.96*se), CI_high = exp(b+1.96*se), p = p)
   } else if (inherits(fit, "glmmTMB")) {
-    sm <- summary(fit)$coefficients$cond; if (is.null(sm) || !"clusterC1" %in% rownames(sm)) return(out)
-    b <- sm["clusterC1","Estimate"]; se <- sm["clusterC1","Std. Error"]; z <- b/se; p <- 2*pnorm(abs(z), lower.tail = FALSE)
-    tibble(term="clusterC1", OR = exp(b), CI_low = exp(b-1.96*se), CI_high = exp(b+1.96*se), p = p)
+    sm <- summary(fit)$coefficients$cond; if (is.null(sm) || !"clusterC2" %in% rownames(sm)) return(out)
+    b <- sm["clusterC2","Estimate"]; se <- sm["clusterC2","Std. Error"]; z <- b/se; p <- 2*pnorm(abs(z), lower.tail = FALSE)
+    tibble(term="clusterC2", OR = exp(b), CI_low = exp(b-1.96*se), CI_high = exp(b+1.96*se), p = p)
   } else if ("geeglm" %in% class(fit)) {
-    sm <- summary(fit)$coefficients; rn <- rownames(sm); if (!"clusterC1" %in% rn) return(out)
-    b <- sm["clusterC1","Estimate"]; se <- sm["clusterC1","Robust S.E."]; z <- b/se; p <- 2*pnorm(abs(z), lower.tail = FALSE)
-    tibble(term="clusterC1", OR = exp(b), CI_low = exp(b-1.96*se), CI_high = exp(b+1.96*se), p = p)
+    sm <- summary(fit)$coefficients; rn <- rownames(sm); if (!"clusterC2" %in% rn) return(out)
+    b <- sm["clusterC2","Estimate"]; se <- sm["clusterC2","Robust S.E."]; z <- b/se; p <- 2*pnorm(abs(z), lower.tail = FALSE)
+    tibble(term="clusterC2", OR = exp(b), CI_low = exp(b-1.96*se), CI_high = exp(b+1.96*se), p = p)
   } else out
 }
 
@@ -227,23 +225,25 @@ safe_first_num <- function(x, col) {
 
 ensure_cluster_row <- function(tb) {
   if (inherits(tb, "try-error") || is.null(tb) || !is.data.frame(tb) || !nrow(tb)) {
-    return(tibble(term = "clusterC1", OR = NA_real_, CI_low = NA_real_, CI_high = NA_real_, p = NA_real_))
+    return(tibble(term = "clusterC2", OR = NA_real_, CI_low = NA_real_, CI_high = NA_real_, p = NA_real_))
   }
-  if (!"term" %in% names(tb)) tb$term <- "clusterC1"
+  if (!"term" %in% names(tb)) tb$term <- "clusterC2"
   if (!"OR" %in% names(tb)) {
     if (all(c("estimate","std.error") %in% names(tb))) {
       tb <- tb %>%
-        mutate(OR = exp(estimate),
-               CI_low = exp(estimate - 1.96*std.error),
-               CI_high = exp(estimate + 1.96*std.error),
-               p = ifelse(is.finite(std.error) & std.error > 0,
-                          2*pnorm(abs(estimate/std.error), lower.tail = FALSE), NA_real_))
+        mutate(
+          OR      = exp(estimate),
+          CI_low  = exp(estimate - 1.96*std.error),
+          CI_high = exp(estimate + 1.96*std.error),
+          p       = ifelse(is.finite(std.error) & std.error > 0,
+                           2*pnorm(abs(estimate/std.error), lower.tail = FALSE), NA_real_)
+        )
     } else {
       tb$OR <- tb$CI_low <- tb$CI_high <- tb$p <- NA_real_
     }
   }
-  if ("term" %in% names(tb) && any(tb$term == "clusterC1")) {
-    tb <- tb %>% dplyr::filter(term == "clusterC1")
+  if ("term" %in% names(tb) && any(tb$term == "clusterC2")) {
+    tb <- tb %>% dplyr::filter(term == "clusterC2")
   }
   tb %>% dplyr::slice(1) %>% dplyr::select(term, OR, CI_low, CI_high, p)
 }
@@ -260,35 +260,28 @@ safe_first_num <- function(x, col) {
 ensure_cluster_row <- function(tb) {
   # guarantee a 1-row tibble with columns term, OR, CI_low, CI_high, p (NA if not present)
   if (inherits(tb, "try-error") || is.null(tb) || !is.data.frame(tb) || !nrow(tb)) {
-    return(tibble(term = "clusterC1", OR = NA_real_, CI_low = NA_real_, CI_high = NA_real_, p = NA_real_))
+    return(tibble(term = "clusterC2", OR = NA_real_, CI_low = NA_real_, CI_high = NA_real_, p = NA_real_))
   }
-  if (!"term" %in% names(tb)) tb$term <- "clusterC1"
+  if (!"term" %in% names(tb)) tb$term <- "clusterC2"
   if (!all(c("OR","CI_low","CI_high","p") %in% names(tb))) {
     if (all(c("estimate","std.error") %in% names(tb))) {
       tb <- tb %>%
         dplyr::mutate(
-          OR     = exp(estimate),
-          CI_low = exp(estimate - 1.96*std.error),
-          CI_high= exp(estimate + 1.96*std.error),
-          p      = ifelse(is.finite(std.error) & std.error > 0,
-                          2*pnorm(abs(estimate/std.error), lower.tail = FALSE), NA_real_)
+          OR      = exp(estimate),
+          CI_low  = exp(estimate - 1.96*std.error),
+          CI_high = exp(estimate + 1.96*std.error),
+          p       = ifelse(is.finite(std.error) & std.error > 0,
+                           2*pnorm(abs(estimate/std.error), lower.tail = FALSE), NA_real_)
         )
     } else {
       tb$OR <- tb$CI_low <- tb$CI_high <- tb$p <- NA_real_
     }
   }
   tb %>%
-    dplyr::filter(term == "clusterC1" | !("term" %in% names(tb))) %>%
+    dplyr::filter(term == "clusterC2" | !("term" %in% names(tb))) %>%
     dplyr::slice(1L) %>%
-    dplyr::mutate(term = "clusterC1") %>%
+    dplyr::mutate(term = "clusterC2") %>%
     dplyr::select(term, OR, CI_low, CI_high, p)
-}
-
-add_listcol_if_missing <- function(df, nm) {
-  if (!nm %in% names(df)) {
-    df[[nm]] <- replicate(nrow(df), tibble(), simplify = FALSE)
-  }
-  df
 }
 
 # robust CI extractor from emmeans output
@@ -460,8 +453,8 @@ for (oc in OUTS) {
         geom_hline(yintercept = 1, linetype = 2) +
         geom_pointrange() +
         coord_flip() +
-        labs(title = glue("{oc}: GEE (EXC) C1 vs C2 OR by wave"),
-             x = NULL, y = "Odds ratio (C1 vs C2)") +
+        labs(title = glue("{oc}: GEE (EXC) C2 vs C1 OR by wave"),
+             x = NULL, y = "Odds ratio (C2 vs C1)") +
         theme(panel.grid.minor = element_blank())
       ggsave(file.path(DIR_FIG, glue("{oc}_GEE_EXC_cluster_OR_by_wave.png")), g_forest, width = 7.5, height = 4.5, dpi = 150)
       plots_forest[[oc]] <- g_forest
@@ -493,8 +486,8 @@ for (oc in OUTS) {
           ggplot(aes(x = lab, y = OR, ymin = CI_low, ymax = CI_high)) +
           geom_hline(yintercept = 1, linetype = 2) +
           geom_pointrange(position = position_dodge(width = 0.2)) +
-          labs(title = glue("{oc}: Cluster C1 vs C2 OR by wave (GEE EXC, cluster x wave)"),
-             y = "Odds ratio", x = "Wave (n_C1; median age)") +
+          labs(title = glue("{oc}: Cluster C2 vs C1 OR by wave (GEE EXC, cluster x wave)"),
+               y = "Odds ratio", x = "Wave (n_C1; median age)") +
           theme(panel.grid.minor = element_blank())
         ggsave(file.path(DIR_FIG, glue("{oc}_GEE_EXC_INT_cluster_OR_by_wave.png")),
              g_int, width = 7.2, height = 4.6, dpi = 300)
@@ -519,11 +512,11 @@ for (oc in OUTS) {
           left_join(labs %>% mutate(wave = as.character(wave)), by = "wave") %>%
           mutate(lab = factor(lab, levels = unique(lab))) %>%
           ggplot(aes(x = lab, y = OR, ymin = CI_low, ymax = CI_high)) +
-          geom_hline(yintercept = 1, linetype = 2) +
-          geom_pointrange(position = position_dodge(width = 0.2)) +
-          labs(title = glue("{oc}: Cluster C1 vs C2 OR by wave (GEE AR1, cluster x wave)"),
-             y = "Odds ratio", x = "Wave (n_C1; median age)") +
-          theme(panel.grid.minor = element_blank())
+            geom_hline(yintercept = 1, linetype = 2) +
+            geom_pointrange(position = position_dodge(width = 0.2)) +
+                        labs(title = glue("{oc}: Cluster C2 vs C1 OR by wave (GEE AR1, cluster x wave)"),
+               y = "Odds ratio", x = "Wave (n_C1; median age)") +
+            theme(panel.grid.minor = element_blank())
         ggsave(file.path(DIR_FIG, glue("{oc}_GEE_AR1_INT_cluster_OR_by_wave.png")),
              g_ar1_int, width = 7.2, height = 4.6, dpi = 300)
       }
@@ -562,9 +555,9 @@ for (oc in OUTS) {
   ar1_auc   <- if (ar1_ok)  auc_qc(gee_ar1,  df_o) else NA_real_
 
   # Cluster OR rows
-  glmm_row   <- if (glmm_ok) extract_cluster(glmm_fit) else tibble(term="clusterC1", OR=NA_real_, CI_low=NA_real_, CI_high=NA_real_, p=NA_real_)
-  tmb_row    <- if (tmb_ok)  extract_cluster(tmb_fit)  else tibble(term="clusterC1", OR=NA_real_, CI_low=NA_real_, CI_high=NA_real_, p=NA_real_)
-  gee_row    <- if (gee_ok)  extract_cluster(gee_exc)  else tibble(term="clusterC1", OR=NA_real_, CI_low=NA_real_, CI_high=NA_real_, p=NA_real_)
+  glmm_row   <- if (glmm_ok) extract_cluster(glmm_fit) else tibble(term="clusterC2", OR=NA_real_, CI_low=NA_real_, CI_high=NA_real_, p=NA_real_)
+  tmb_row    <- if (tmb_ok)  extract_cluster(tmb_fit)  else tibble(term="clusterC2", OR=NA_real_, CI_low=NA_real_, CI_high=NA_real_, p=NA_real_)
+  gee_row    <- if (gee_ok)  extract_cluster(gee_exc)  else tibble(term="clusterC2", OR=NA_real_, CI_low=NA_real_, CI_high=NA_real_, p=NA_real_)
 
   # Age OR per +1y from GEE EXC
   gee_age <- if (gee_ok) {
@@ -653,7 +646,7 @@ summary_tbl <- summary_tbl %>%
 # Save a clean CSV and print a readable table
 readr::write_csv(summary_tbl, file.path(OUT_DIR, "csv", "summary_table.csv"))
 
-cat("## Summary table (QC AUCs; cluster C1 main effects with 95% CI and p)\n\n")
+cat("## Summary table (QC AUCs; cluster C2 (high-risk vs C1) main effects with 95% CI and p)\n\n")
 summary_tbl %>%
   dplyr::select(
     outcome, n_rows, n_ids,

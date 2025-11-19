@@ -26,7 +26,7 @@ IFS=$'\n\t'
 
 # Paths & env
 REPO="/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk"
-IMG="/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.5.sif"
+IMG="/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.7.sif"
 export APPTAINER_CACHEDIR="/home/exacloud/gscratch/NagelLab/staff/${USER}/.apptainer_cache"
 
 # Thread caps for numeric stability/repro
@@ -67,8 +67,8 @@ rmarkdown::render(
     repo = "${REPO}",
     data_dir = "data/data_processed/analysis_datasets/",
     out_dir = "results/main_analysis/1_bd_survival",
-    bd_pp_rds = "bd_person_period_k2_robust.rds",
-    bd_pp_csv = "bd_person_period_k2_robust.csv",
+    bd_pp_rds = "bd_person_period_k2_z_score.rds",
+    bd_pp_csv = "bd_person_period_k2_z_score.csv",
     k_value = as.integer("${K_VALUE}"),
     link_primary= "${LINK_PRIMARY}",
     ages_pred = ${AGES_R},
