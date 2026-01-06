@@ -1,0 +1,951 @@
+---
+title: "5. Parsimonious Feature Selection (MVFS; k-prototypes)"
+author: "Sam A. Sievertsen"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: false
+    df_print: paged
+params:
+  mode: "auto"                 # "auto" | "step" | "aggregate"
+                               # "auto": run step-level if SLURM_ARRAY_TASK_ID set, else aggregate
+  search: "forward"            # "forward" | "backward" | "domain"
+  step_index: !r NULL          # integer step to run (meaning depends on search)
+  k_opt: 2                     # fixed k to match anchor solution
+  nstart: 8                    # multi-start control (kproto retains best objective)
+  lambda_mode: "estimate"      # "estimate" | "anchor_fixed"
+  lambda_sensitivity: true     # if TRUE, compare aggregate summaries across lambda modes (if both traces exist)
+  boot_B: 1000                 # bootstrap reps per candidate set
+  boot_seed: 123               # base seed for bootstrap RNG
+  ari_target: 0.90
+  jaccard_target: 0.85
+  silhouette_method: "validation_kproto"
+  silhouette_type: "huang"               
+  risk_signature_feats:        # used to define "higher-risk" anchor cluster + directionality checks
+    - mh_p_cbcl__dsm__dep_tscore
+    - mh_p_cbcl__synd__aggr_tscore
+    - mh_p_cbcl__synd__attn_tscore
+    - mh_p_cbcl__dsm__anx_tscore
+    - mh_p_gbi_sum
+    - sds_total
+---
+
+```{r global, include = FALSE}
+
+# Set global env variables
+knitr::opts_chunk$set(cache = FALSE, message = TRUE, warning = TRUE, results = "markup", verbose = TRUE, comment = "")
+
+```
+
+## Overview & Plan
+
+This script implements step 5 of the clustering pipeline: identifying a Minimally Viable Feature Set (MVFS) that preserves the anchor (i.e., 17-feature) k-prototypes partition while remaining stable
+
+Core outputs:
+
+* MVFS feature priority table (MCR primary + centroid/SHAP two-vote local overrides)
+
+* Step-level trace files: ARI vs anchor + clusterwise bootstrap Jaccard vs |S|
+
+* Selected MVFS (smallest S meeting ARI + min-Jaccard thresholds)
+
+* Sensitivity traces: backward elimination + domain-coverage MVFS + lambda handling sensitivity
+
+### 1. Setup & Environment
+
+**Goal:** Load packages, create output paths, configure parallel workers from SLURM, initialize logging, and generate a reproducible seed list shared across array tasks. Also define IO helper(s)
+
+```{r setup, echo = FALSE, message = FALSE, warning = FALSE}
+
+## 1. Set-Up and Environment ## 
+cat("Set-up beginning\n")
+
+#1.1 Load packages
+suppressPackageStartupMessages({
+library(here)
+library(knitr)
+library(tibble)
+library(data.table)
+library(magrittr)
+library(kableExtra)
+library(dplyr)
+library(tidyr)
+library(readr)
+library(purrr)
+library(stringr)
+library(glue)
+library(clustMixType)
+library(FeatureImpCluster)
+library(mclust)
+library(clue)
+library(cluster)
+library(jsonlite)
+library(ggplot2)
+})
+
+#1.2 Define canonical project I/O paths
+paths <- list(
+  
+#1.2.1 Anchor clustering object
+kproto_rds = here("data", "data_processed", "kproto_results", "kproto_z_score.rds"),
+
+#1.2.2 Feature importance outputs computed in feature importance analysis script
+fi_sum_dir = here("results", "main_analysis", "1_clustering", "4_feature_importance", "summary"),
+
+#1.2.3 Outputs for this script
+out_dir = here("results", "main_analysis", "1_clustering", "5_parsimonious_feature_selection"),
+step_dir = here("results", "main_analysis", "1_clustering", "5_parsimonious_feature_selection", "step_level"),
+sum_dir = here("results", "main_analysis", "1_clustering", "5_parsimonious_feature_selection", "summary"),
+fig_dir = here("results", "main_analysis", "1_clustering", "5_parsimonious_feature_selection", "figures")
+)
+
+dir.create(paths$out_dir, showWarnings = FALSE, recursive = TRUE)
+dir.create(paths$step_dir, showWarnings = FALSE, recursive = TRUE)
+dir.create(paths$sum_dir, showWarnings = FALSE, recursive = TRUE)
+dir.create(paths$fig_dir, showWarnings = FALSE, recursive = TRUE)
+
+#1.3 Safe CSV writer
+write_csv2 <- function(x, path) {
+  dir.create(dirname(path), TRUE, TRUE)
+  readr::write_csv(x, path)
+}
+
+cat("Set-up complete\n")
+
+```
+
+### 2. Load Anchor Clustering Solution
+
+```{r load data, echo = FALSE, warning = FALSE}
+
+#2.1 Load anchor k-prototypes object (k and lambda already chosen upstream)
+kp_path <- paths$kproto_rds
+if (!file.exists(kp_path))
+  stop(glue("Anchor kproto RDS not found: {kp_path}"))
+kp_any <- readRDS(kp_path)
+
+#2.2 Helper: locate the desired kproto object
+pick_kproto <- function(obj, k_target) {
+  
+  #2.2.1 Case 1: single kproto object
+  if (inherits(obj, "kproto"))
+    return(obj)
+  
+  #2.2.2 Case 2: list of kproto objects
+  stopifnot(is.list(obj))
+  nm <- names(obj)
+  
+  #2.2.2.1 Prefer exact name match ("k2", "k3", ...)
+  if (!is.null(nm)) {
+    nm_hit <- paste0("k", k_target)
+    if (nm_hit %in% nm &&
+        inherits(obj[[nm_hit]], "kproto"))
+      return(obj[[nm_hit]])
+  }
+  
+  #2.2.2.2 Fallback: first element whose size length matches k_target
+  for (el in obj) {
+    if (inherits(el, "kproto")) {
+      sz <- tryCatch(
+        el$size,
+        error = function(...)
+          NULL
+      )
+      if (!is.null(sz) && length(sz) == k_target)
+        return(el)
+    }
+  }
+  stop(glue("Could not locate a k-prototypes object for k={k_target} in {kp_path}" ))
+}
+
+#2.3 Select anchor object + canonical feature frame used at fit time
+kp0 <- pick_kproto(kp_any, params$k_opt)
+X_fit <- kp0$data
+stopifnot(!is.null(X_fit), nrow(X_fit) > 0)
+
+risk_dt <- as.data.table(X_fit)
+features_all <- names(risk_dt)
+
+#2.4 Anchor assignments on the canonical frame
+anchor_assign <- if (!is.null(kp0$cluster)) kp0$cluster else {
+pr <- predict(kp0, newdata = as.data.frame(risk_dt))
+if (is.list(pr)) pr$cluster else pr
+}
+stopifnot(length(anchor_assign) == nrow(risk_dt))
+
+#2.5 Anchor lambda (for lambda sensitivity)
+lambda_anchor <- tryCatch(
+  kp0$lambda,
+  error = function(...)
+    NA_real_)
+if (!is.finite(lambda_anchor)) {
+  message("kp0$lambda not found; estimating anchor lambda via lambdaest(kp0$data).")
+  lambda_anchor <- clustMixType::lambdaest(as.data.frame(risk_dt))
+}
+
+#2.6 Define the anchor "higher-risk" cluster once using signature indicators (pre-specified)
+sig_feats <- params$risk_signature_feats
+sig_feats <- sig_feats[sig_feats %in% features_all]
+if (!length(sig_feats)) stop("No risk_signature_feats found in anchor feature set.")
+
+sig_tbl_anchor <- risk_dt[, ..sig_feats] |>
+  as_tibble() |>
+  mutate(.cluster = factor(anchor_assign)) |>
+  pivot_longer(-.cluster, names_to = "feature", values_to = "value") |>
+  group_by(.cluster, feature) |>
+  summarise(mu = mean(value, na.rm = TRUE), .groups = "drop") |>
+  group_by(.cluster) |>
+  summarise(sig_mean = mean(mu, na.rm = TRUE), .groups = "drop")
+
+anchor_high_risk_cluster <- sig_tbl_anchor |>
+  arrange(desc(sig_mean)) |>
+  slice(1) |>
+  pull(.cluster) |>
+  as.character()
+
+message(glue("Anchor higher-risk cluster (by signature mean): {anchor_high_risk_cluster}"))
+
+```
+
+### 3. Build MVFS Candidate Ordering
+
+```{r mvfs order, echo = FALSE, warning = FALSE}
+
+#3.1 Load MCR summary
+mcr_path_a <- file.path(paths$fi_sum_dir, "feature_importance_summary.csv")
+mcr_path_b <- file.path(paths$fi_sum_dir, "feature_importance_summary_feature_spec_mcr.csv")
+
+if (file.exists(mcr_path_a)) {
+  mcr_raw <- readr::read_csv(mcr_path_a, show_col_types = FALSE)
+} else if (file.exists(mcr_path_b)) {
+  mcr_raw <- readr::read_csv(mcr_path_b, show_col_types = FALSE)
+} else {
+  stop(glue("Missing MCR summary file(s) in {paths$fi_sum_dir}"))
+}
+
+mcr_tab <- mcr_raw |>
+  rename_with( ~ "feature", .cols = any_of(c(
+    "feature", "var", "variable", "feature_name"))) |>
+  rename_with( ~ "mcr_mean", .cols = any_of(c("mcr_mean", "mean_mcr", "mcr"))) |>
+  mutate(mcr_mean = as.numeric(mcr_mean)) |>
+  dplyr::select(feature, mcr_mean, everything())
+
+stopifnot("feature" %in% names(mcr_tab), "mcr_mean" %in% names(mcr_tab))
+
+#3.2 Load centroid separation summary
+cent_path <- file.path(paths$fi_sum_dir, "centroid_separation_summary.csv")
+if (!file.exists(cent_path)) stop(glue("Missing centroid_separation_summary.csv in {paths$fi_sum_dir}"))
+cent_raw <- readr::read_csv(cent_path, show_col_types = FALSE)
+
+cent_tab <- cent_raw |>
+  rename_with(~"feature", .cols = any_of(c("feature", "var", "variable", "feature_name"))) |>
+  mutate(
+    delta_z = as.numeric(delta_z),
+    max_cohens_d = as.numeric(max_cohens_d)) |>
+  transmute(
+    feature,
+    delta_z = delta_z,
+    max_cohens_d = max_cohens_d,
+    sep_abs = abs(delta_z))
+
+#3.3 Load SHAP global importance
+shap_path <- file.path(paths$fi_sum_dir, "shap_global_importance.csv")
+if (!file.exists(shap_path)) stop(glue("Missing shap_global_importance.csv in {paths$fi_sum_dir}"))
+shap_raw <- readr::read_csv(shap_path, show_col_types = FALSE)
+
+shap_tab <- shap_raw |>
+  rename_with( ~ "feature", .cols = any_of(c(
+    "feature", "var", "variable", "feature_name"))) |>
+  rename_with( ~ "mean_abs_shap", .cols = any_of(c(
+    "mean_abs_shap", "mean_shap", "shap_mean_abs"))) |>
+  mutate(mean_abs_shap = as.numeric(mean_abs_shap)) |>
+  select(feature, mean_abs_shap)
+
+#3.4 Merge and compute ranks (smaller rank = higher importance)
+rank_tab <- mcr_tab |>
+  dplyr::select(feature, mcr_mean) |>
+  left_join(cent_tab, by = "feature") |>
+  left_join(shap_tab, by = "feature") |>
+  filter(feature %in% features_all) |>
+  mutate(
+    rank_MCR = rank(-mcr_mean, ties.method = "min"),
+    rank_centroid = rank(-sep_abs, ties.method = "min"),
+    rank_SHAP = rank(-mean_abs_shap, ties.method = "min")) |>
+  arrange(rank_MCR)
+
+#3.5 Two-vote local-swap pass (consensus promotion)
+consensus_promote <- function(tab) {
+
+ord <- tab$feature[order(tab$rank_MCR)]
+rC <- setNames(tab$rank_centroid, tab$feature)
+rS <- setNames(tab$rank_SHAP, tab$feature)
+
+swapped <- TRUE
+while (swapped) {
+  
+  swapped <- FALSE
+  
+  for (i in seq_len(length(ord) - 1L)) {
+    A <- ord[i]
+    B <- ord[i + 1L]
+    if (is.finite(rC[A]) &&
+        is.finite(rC[B]) && is.finite(rS[A]) && is.finite(rS[B])) {
+      
+      # Swap A and B iff centroid and SHAP both prefer B
+      if (rC[B] < rC[A] && rS[B] < rS[A]) {
+        ord[i] <- B
+        ord[i + 1L] <- A
+        swapped <- TRUE
+      }
+    }
+  }
+}
+
+ord
+}
+
+final_order <- consensus_promote(rank_tab)
+
+rank_tab <- rank_tab |>
+  mutate(rank_final_priority = match(feature, final_order)) |>
+  arrange(rank_final_priority)
+
+#3.6 Write priority list table
+write_csv2(rank_tab, file.path(paths$sum_dir, "mvfs_feature_priority_table.csv"))
+
+#3.7 Convenience vector for downstream
+priority_features <- rank_tab$feature
+
+rank_tab |>
+  arrange(rank_final_priority) |>
+  knitr::kable(digits = 3, caption = "MVFS Priority List (MCR primary + 2-vote local override)") |>
+  kableExtra::kable_styling(full_width = FALSE)
+
+```
+
+### 4. Helper Functions
+
+```{r heper functions, echo = FALSE, warning = FALSE}
+
+#4.1 Align newdata to model (basic type/level harmonization)
+align_newdata_to_model <- function(model, newdata) {
+  X <- as.data.frame(model$data)
+  Y <- as.data.frame(newdata)
+  common <- intersect(names(X), names(Y))
+  for (nm in common) {
+    if (is.factor(X[[nm]])) {
+      Y[[nm]] <- factor(as.character(Y[[nm]]), levels = levels(X[[nm]]))
+    } else if (is.numeric(X[[nm]]) && !is.numeric(Y[[nm]])) {
+      Y[[nm]] <- suppressWarnings(as.numeric(Y[[nm]]))
+    }
+  }
+  Y
+}
+
+#4.2 Predict cluster labels as integer vector
+pred_kproto <- function(kp, newdata) {
+  nd <- align_newdata_to_model(kp, newdata)
+  pr <- predict(kp, newdata = nd)
+  if (is.list(pr))
+    pr$cluster
+  else
+    pr
+}
+
+#4.3 Extract objective value (best-effort; used only for debugging / tie checks)
+kproto_objective <- function(kp) {
+  for (nm in c("tot.withinss",
+               "tot.withindist",
+               "tot.within.dist",
+               "tot.within")) {
+    if (!is.null(kp[[nm]]) &&
+        is.finite(kp[[nm]]))
+      return(as.numeric(kp[[nm]]))
+  }
+  NA_real_
+}
+
+#4.4 Fit k-prototypes with multi-start and retain best (kproto handles nstart internally)
+fit_kproto_best <- function(X_df,
+                            k,
+                            lambda,
+                            nstart = 8L,
+                            seed = NULL) {
+  if (!is.null(seed))
+    set.seed(seed)
+  kp <- clustMixType::kproto(
+    x = X_df,
+    k = k,
+    lambda = lambda,
+    nstart = as.integer(nstart),
+    verbose = FALSE)
+  list(model = kp, obj = kproto_objective(kp))
+}
+
+#4.5 Hungarian mapping between two partitions: map labels in 'from' -> 'to' (max overlap)
+hungarian_map <- function(from, to) {
+  from <- as.integer(from)
+  to <- as.integer(to)
+  K1 <- length(unique(from))
+  K2 <- length(unique(to))
+  K <- max(K1, K2)
+  
+  tab <- table(from, to)
+  tab_full <- matrix(0, nrow = K, ncol = K)
+  tab_full[seq_len(nrow(tab)), seq_len(ncol(tab))] <- tab
+  
+  # Maximize overlap => minimize cost = max(tab) - tab
+  maxv <- max(tab_full)
+  cost <- maxv - tab_full
+  assign <- clue::solve_LSAP(cost)
+  as.integer(assign)
+}
+
+#4.6 Apply mapping vector to labels (labels assumed 1..K)
+apply_map <- function(lbl, mapping) {
+  lbl <- as.integer(lbl)
+  out <- lbl
+  ok <- lbl >= 1 & lbl <= length(mapping)
+  out[ok] <- mapping[lbl[ok]]
+  out
+}
+
+#4.7 Clusterwise Jaccard between two labelings (after mapping)
+clusterwise_jaccard <- function(lbl_a, lbl_b, K = NULL) {
+  lbl_a <- as.integer(lbl_a)
+  lbl_b <- as.integer(lbl_b)
+  if (is.null(K))
+    K <- max(length(unique(lbl_a)), length(unique(lbl_b)))
+  out <- rep(NA_real_, K)
+  for (k in seq_len(K)) {
+    A <- which(lbl_a == k)
+    B <- which(lbl_b == k)
+    den <- length(union(A, B))
+    out[k] <- if (den == 0)
+      NA_real_
+    else
+      length(intersect(A, B)) / den
+  }
+  out
+}
+
+#4.8 Directionality check vs anchor on signature indicators (post mapping)
+signature_direction_check <- function(dt,
+                                      lbl_mapped,
+                                      anchor_lbl,
+                                      sig_feats,
+                                      anchor_hi_label_chr) {
+  cand <- dt[, ..sig_feats] |>
+    as_tibble() |>
+    mutate(.cluster = factor(lbl_mapped)) |>
+    pivot_longer(-.cluster, names_to = "feature", values_to = "value") |>
+    group_by(.cluster, feature) |>
+    summarise(mu = mean(value, na.rm = TRUE), .groups = "drop")
+  
+  anch <- dt[, ..sig_feats] |>
+    as_tibble() |>
+    mutate(.cluster = factor(anchor_lbl)) |>
+    pivot_longer(-.cluster, names_to = "feature", values_to = "value") |>
+    group_by(.cluster, feature) |>
+    summarise(mu = mean(value, na.rm = TRUE), .groups = "drop")
+  
+  cl_levels <- sort(unique(as.character(anchor_lbl)))
+  if (length(cl_levels) < 2)
+    return(list(prop_match = NA_real_, detail = NULL))
+  
+  hi <- anchor_hi_label_chr
+  lo <- setdiff(cl_levels, hi)[1]
+  
+  delta_anchor <- anch |>
+    filter(.cluster %in% c(hi, lo)) |>
+    pivot_wider(names_from = .cluster, values_from = mu) |>
+    mutate(delta = .data[[hi]] - .data[[lo]]) |>
+    dplyr::select(feature, delta)
+  
+  delta_cand <- cand |>
+    filter(.cluster %in% c(hi, lo)) |>
+    pivot_wider(names_from = .cluster, values_from = mu) |>
+    mutate(delta = .data[[hi]] - .data[[lo]]) |>
+    dplyr::select(feature, delta)
+  
+  chk <- delta_anchor |>
+    rename(delta_anchor = delta) |>
+    left_join(delta_cand |> rename(delta_cand = delta), by = "feature") |>
+    mutate(
+      sign_match = sign(delta_anchor) == sign(delta_cand),
+      sign_match = ifelse(is.na(delta_anchor) | is.na(delta_cand), NA, sign_match))
+  
+  list(prop_match = mean(chk$sign_match, na.rm = TRUE),
+       detail = chk)
+}
+
+#4.9 Extract a validation_kproto index robustly
+extract_validation_index <- function(x) {
+  if (is.numeric(x) && length(x) == 1L) return(as.numeric(x))
+  if (is.list(x) && "index" %in% names(x)) return(as.numeric(x$index))
+  if (is.list(x) && "index_opt" %in% names(x)) return(as.numeric(x$index_opt))
+  NA_real_
+}
+
+#4.10 Silhouette via clustMixType::validation_kproto() on a fitted kproto object
+silhouette_validation_kproto <- function(kp, type = "huang") {
+  out <- tryCatch(
+    clustMixType::validation_kproto(method = "silhouette", object = kp, type = type),
+    error = function(e) NA)
+  extract_validation_index(out)
+}
+
+#4.11 Bootstrap stability (clusterwise Jaccard) for a candidate set
+bootstrap_stability <- function(dt_full,
+                                cand_lbl,
+                                k,
+                                lambda,
+                                nstart,
+                                B = 200L,
+                                seed = 123L) {
+  n <- nrow(dt_full)
+  K <- length(unique(cand_lbl))
+  set.seed(seed)
+  
+  J <- matrix(NA_real_, nrow = as.integer(B), ncol = as.integer(K))
+  
+  for (b in seq_len(as.integer(B))) {
+    
+    # Bootstrap sample
+    idx <- sample(seq_len(n), n, replace = TRUE)
+    dt_boot <- dt_full[idx, , drop = FALSE]
+    
+    # Fit on bootstrap sample
+    kp_b <- fit_kproto_best(
+      as.data.frame(dt_boot),
+      k = k,
+      lambda = lambda,
+      nstart = nstart,
+      seed = seed + b)$model
+    
+    # Predict labels on full data (stable universe)
+    boot_lbl <- pred_kproto(kp_b, as.data.frame(dt_full))
+    
+    # Map bootstrap labels -> candidate labels by overlap
+    mapping <- hungarian_map(from = boot_lbl, to = cand_lbl)
+    boot_lbl_mapped <- apply_map(boot_lbl, mapping)
+    
+    # Clusterwise Jaccard
+    J[b, ] <- clusterwise_jaccard(cand_lbl, boot_lbl_mapped, K = K)
+    
+  }
+  
+  list(
+    jaccard_by_cluster = colMeans(J, na.rm = TRUE),
+    jaccard_mean = mean(J, na.rm = TRUE),
+    jaccard_min = min(colMeans(J, na.rm = TRUE), na.rm = TRUE))
+}
+
+#4.12 Secondary full-set concordance (descriptive): among features in S, quantify how often the candidate hi-vs-lo direction matches the anchor
+fullset_concordance_check <- function(dt,
+                                      cand_lbl_mapped,
+                                      anchor_lbl,
+                                      feats_S,
+                                      anchor_hi_label_chr) {
+  feats_S <- feats_S[feats_S %in% names(dt)]
+  if (!length(feats_S))
+    return(list(
+      prop_match = NA_real_,
+      n_eval = 0L,
+      detail = NULL))
+  
+  cl_levels <- sort(unique(as.character(anchor_lbl)))
+  if (length(cl_levels) < 2)
+    return(list(
+      prop_match = NA_real_,
+      n_eval = 0L,
+      detail = NULL))
+  
+  hi <- anchor_hi_label_chr
+  lo <- setdiff(cl_levels, hi)[1]
+  
+  detail <- lapply(feats_S, function(f) {
+    x <- dt[[f]]
+    a_hi <- x[as.character(anchor_lbl) == hi]
+    a_lo <- x[as.character(anchor_lbl) == lo]
+    c_hi <- x[as.character(cand_lbl_mapped) == hi]
+    c_lo <- x[as.character(cand_lbl_mapped) == lo]
+    
+    # Numeric: sign of mean difference
+    if (is.numeric(x)) {
+      da <- mean(a_hi, na.rm = TRUE) - mean(a_lo, na.rm = TRUE)
+      dc <- mean(c_hi, na.rm = TRUE) - mean(c_lo, na.rm = TRUE)
+      ok <- ifelse(is.na(da) | is.na(dc), NA, sign(da) == sign(dc))
+      return(tibble::tibble(
+        feature = f,
+        type = "numeric",
+        match = ok))
+    }
+    
+    # Categorical: require informative anchor separation (different modes)
+    if (is.factor(x) || is.character(x)) {
+      mode_fun <- function(v) {
+        v <- v[!is.na(v)]
+        if (!length(v))
+          return(NA_character_)
+        names(sort(table(v), decreasing = TRUE))[1]
+      }
+      a_m_hi <- mode_fun(a_hi)
+      a_m_lo <- mode_fun(a_lo)
+      c_m_hi <- mode_fun(c_hi)
+      c_m_lo <- mode_fun(c_lo)
+      
+      # If anchor mode doesn't differ across clusters, direction is uninformative
+      if (is.na(a_m_hi) ||
+          is.na(a_m_lo) || identical(a_m_hi, a_m_lo)) {
+        return(tibble::tibble(
+          feature = f,
+          type = "categorical",
+          match = NA))
+      }
+      
+      ok <- identical(c_m_hi, a_m_hi) && identical(c_m_lo, a_m_lo)
+      return(tibble::tibble(
+        feature = f,
+        type = "categorical",
+        match = ok))
+    }
+    
+    tibble::tibble(feature = f,
+                   type = "other",
+                   match = NA)}) |>
+    dplyr::bind_rows()
+  
+  prop <- mean(detail$match, na.rm = TRUE)
+  n_eval <- sum(!is.na(detail$match))
+  
+  list(prop_match = prop,
+       n_eval = as.integer(n_eval),
+       detail = detail)
+}
+
+```
+
+### 5. Candidate Set Builder 
+
+```{r candidate feature set, echo = FALSE, warning = FALSE}
+
+#5.1 Domain map (Sensitivity 3): pre-specified domains
+domain_map <- tibble::tribble(
+~feature, ~domain,
+
+# Clinical/prodromal
+"mh_p_cbcl__synd__aggr_tscore", "clinical_prodromal",
+"mh_p_cbcl__dsm__anx_tscore", "clinical_prodromal",
+"mh_p_cbcl__synd__attn_tscore", "clinical_prodromal",
+"mh_p_cbcl__dsm__dep_tscore", "clinical_prodromal",
+"mh_p_gbi_sum", "clinical_prodromal",
+"mh_y_upps__nurg_sum", "clinical_prodromal",
+"mh_y_upps__purg_sum", "clinical_prodromal",
+"sds_total", "clinical_prodromal",
+
+# Environmental
+"ACE_index_sum_score", "environmental",
+"bullying", "environmental",
+"le_l_coi__addr1__coi__total__national_zscore", "environmental",
+"fc_p_nsc__ns_mean", "environmental",
+
+# Familial
+"family_history_depression", "familial",
+"family_history_mania", "familial",
+
+# Neurocognitive
+"nc_y_nihtb__flnkr__uncor_score", "neurocognitive",
+"nc_y_nihtb__lswmt__uncor_score", "neurocognitive",
+"nc_y_nihtb__pttcp__uncor_score", "neurocognitive")
+
+#5.2 Helper: build the feature set S for a given step
+build_feature_set <- function(search,
+                              step_idx,
+                              priority_features,
+                              domain_map) {
+  p <- length(priority_features)
+  stopifnot(step_idx >= 1L)
+  
+  if (identical(search, "forward")) {
+    
+    # Forward: step_idx = |S|
+    s <- min(step_idx, p)
+    return(priority_features[seq_len(s)])
+  }
+  
+  if (identical(search, "backward")) {
+
+    # Backward: step_idx = 1..p corresponds to keeping p..1 features
+    s <- p - step_idx + 1L
+    s <- max(1L, min(s, p))
+    return(priority_features[seq_len(s)])
+  
+  }
+  
+  if (identical(search, "domain")) {
+    dm <- domain_map |>
+      filter(feature %in% priority_features)
+    
+    # Identify the top-ranked feature per domain
+    top_per_domain <- dm |>
+      mutate(rank = match(feature, priority_features)) |>
+      group_by(domain) |>
+      slice_min(rank, n = 1, with_ties = FALSE) |>
+      ungroup() |>
+      arrange(rank) |>
+      pull(feature)
+    
+    base <- unique(top_per_domain)
+    
+    # Continue adding in priority order until size = step_idx
+    if (length(base) >= step_idx)
+      return(base[seq_len(step_idx)])
+    
+    rest <- setdiff(priority_features, base)
+    need <- step_idx - length(base)
+    add  <- head(rest, need)
+    return(c(base, add))
+    
+  }
+  
+  stop(glue("Unknown search mode: {search}"))
+}
+
+```
+
+### 6. Run a Single Test Step
+
+```{r test step, echo = FALSE, warning = FALSE}
+
+#6.1 Run one candidate set and write a step-level CSV artifact
+run_step <- function(step_idx,
+                     search = params$search,
+                     lambda_mode = params$lambda_mode) {
+  
+  #6.1.1 Build candidate feature set
+  S <- build_feature_set(search, step_idx, priority_features, domain_map)
+  S <- S[S %in% features_all]
+  stopifnot(length(S) >= 1)
+  
+  dt_S <- risk_dt[, ..S]
+  X_S <- as.data.frame(dt_S)
+  
+  #6.1.2 Lambda handling
+  lambda_S <- if (identical(lambda_mode, "anchor_fixed")) {
+    lambda_anchor
+  } else {
+    clustMixType::lambdaest(X_S)
+  }
+  
+  #6.1.3 Fit k-prototypes (multi-start; retains best objective)
+  fit <- fit_kproto_best(
+    X_S,
+    k = params$k_opt,
+    lambda = lambda_S,
+    nstart = params$nstart,
+    seed = 1000 + step_idx)
+  kpS <- fit$model
+  obj <- fit$obj
+  
+  #6.1.4 Candidate labels on full data
+  cand_lbl <- pred_kproto(kpS, X_S)
+  
+  #6.1.5 Similarity-to-anchor (ARI; label-invariant)
+  ari <- mclust::adjustedRandIndex(cand_lbl, anchor_assign)
+  
+  #6.1.6 Mapping candidate clusters -> anchor clusters (for interpretation ONLY)
+  map_c2a <- hungarian_map(from = cand_lbl, to = anchor_assign)
+  cand_lbl_mapped <- apply_map(cand_lbl, map_c2a)
+  
+  #6.1.7 Risk label inheritance + directionality check
+  sig_check <- signature_direction_check(
+    dt = risk_dt,
+    lbl_mapped = cand_lbl_mapped,
+    anchor_lbl = anchor_assign,
+    sig_feats = sig_feats,
+    anchor_hi_label_chr = as.character(anchor_high_risk_cluster))
+  
+  #6.1.7.1 Secondary full-set concordance (descriptive) on features in S
+  full_chk <- fullset_concordance_check(
+    dt = risk_dt,
+    cand_lbl_mapped = cand_lbl_mapped,
+    anchor_lbl = anchor_assign,
+    feats_S = S,
+    anchor_hi_label_chr = as.character(anchor_high_risk_cluster))
+  
+  #6.1.8 Bootstrap stability (clusterwise Jaccard against candidate partition)
+  stab <- bootstrap_stability(
+    dt_full = dt_S,
+    cand_lbl = cand_lbl,
+    k = params$k_opt,
+    lambda = lambda_S,
+    nstart = params$nstart,
+    B = params$boot_B,
+    seed = params$boot_seed + 10L * step_idx)
+  
+  #6.1.9 Silhouette once per candidate set; validation_kproto on fitted object
+  sil <- silhouette_validation_kproto(
+    kpS,
+    type = params$silhouette_type)
+  
+  #6.1.10 Output row
+  out <- tibble::tibble(
+    search = search,
+    lambda_mode = lambda_mode,
+    step_idx = step_idx,
+    n_features = length(S),
+    features = paste(S, collapse = ";"),
+    lambda = lambda_S,
+    objective = obj,
+    ari = ari,
+    jaccard_mean = stab$jaccard_mean,
+    jaccard_min = stab$jaccard_min,
+    silhouette_mean = sil,
+    sig_direction_match = sig_check$prop_match,
+    full_direction_match = full_chk$prop_match,
+    full_direction_n_eval = full_chk$n_eval)
+  
+  #6.1.11 Write step-level csv (one file per step x lambda_mode)
+  stub <- glue("mvfs_step_{search}_{lambda_mode}_n{length(S)}.csv")
+  write_csv2(out, file.path(paths$step_dir, stub))
+  
+  invisible(out)
+}
+
+```
+
+### 7. Dispatch Step vs Aggregate Job
+
+```{r dispatch, echo = FALSE, warning = FALSE}
+
+#7.1 Determine whether we are running a single step (SLURM array) or aggregating
+if (params$mode %in% c("auto", "step")) {
+  arr <- Sys.getenv("SLURM_ARRAY_TASK_ID")
+  idx <- if (!is.null(params$step_index))
+    params$step_index
+  else if (nzchar(arr))
+    as.integer(arr)
+  else
+    NA_integer_
+  
+  if (is.finite(idx)) {
+    
+    #7.1.1 Step mode: run one step and exit
+    run_step(
+      step_idx = idx,
+      search = params$search,
+      lambda_mode = params$lambda_mode)
+    knitr::knit_exit()
+    
+  }
+}
+
+#7.2 Auto local fallback: if not on SLURM and no step files exist, run full trace now
+if (params$mode == "auto") {
+  step_files_now <- list.files(paths$step_dir, pattern = "^mvfs_step_.*\\.csv$", full.names = TRUE)
+  arr_now <- Sys.getenv("SLURM_ARRAY_TASK_ID")
+
+  if (!nzchar(arr_now) && !length(step_files_now)) {
+    message("No SLURM array detected and no step files found; running full trace locally (1..P).")
+    P <- length(priority_features)
+    for (i in seq_len(P)) {
+      run_step(step_idx = i, search = params$search, lambda_mode = params$lambda_mode)
+    }
+  }
+}
+
+#7.3 Aggregate mode: continue below (reads step-level files)
+if (params$mode %in% c("auto", "aggregate")) {
+  
+  #7.3.1 Load all step-level csvs
+  step_files <- list.files(paths$step_dir, pattern = "^mvfs_step_.*\.csv$", full.names = TRUE)
+  if (!length(step_files))
+    stop(glue("No step-level MVFS files found in: {paths$step_dir}"))
+  
+  mvfs_df <- lapply(step_files, readr::read_csv, show_col_types = FALSE) |>
+    bind_rows() |>
+    arrange(search, lambda_mode, n_features)
+  
+  write_csv2(mvfs_df, file.path(paths$sum_dir, "mvfs_trace_all.csv"))
+  
+  #7.3.2 Identify MVFS for each trace (first n_features meeting ARI + Jaccard targets)
+  mvfs_pick <- mvfs_df |>
+    group_by(search, lambda_mode) |>
+    arrange(n_features) |>
+    mutate(pass = (ari >= params$ari_target) &
+             (jaccard_min >= params$jaccard_target)) |>
+    summarise(
+      mvfs_n = ifelse(
+        any(pass, na.rm = TRUE),
+        min(n_features[pass], na.rm = TRUE),
+        NA_real_),
+      mvfs_row = ifelse(any(pass, na.rm = TRUE), which(pass)[1], NA_integer_),
+      .groups = "drop")
+  
+  write_csv2(mvfs_pick, file.path(paths$sum_dir, "mvfs_selected_summary.csv"))
+  
+  #7.3.3 Plot traces (ARI and stability over |S|)
+  p_ari <- ggplot(mvfs_df, aes(x = n_features, y = ari)) +
+    geom_line() + geom_point() +
+    facet_grid(search ~ lambda_mode, scales = "free_x") +
+    geom_hline(yintercept = params$ari_target, linetype = 2) +
+    labs(x = "|S| (number of features)", y = "Adjusted Rand Index (vs anchor)", title = "MVFS trace: similarity-to-anchor (ARI)") +
+    theme_minimal(base_size = 12)
+  
+  ggsave(
+    file.path(paths$fig_dir, "mvfs_trace_ari.png"),
+    p_ari,
+    width = 9,
+    height = 5,
+    dpi = 300)
+  
+  p_j <- ggplot(mvfs_df, aes(x = n_features, y = jaccard_min)) +
+    geom_line() + geom_point() +
+    facet_grid(search ~ lambda_mode, scales = "free_x") +
+    geom_hline(yintercept = params$jaccard_target, linetype = 2) +
+    labs(x = "|S| (number of features)", y = "Min clusterwise Jaccard (bootstrap)", title = "MVFS trace: bootstrap stability (min clusterwise Jaccard)") +
+    theme_minimal(base_size = 12)
+  
+  ggsave(
+    file.path(paths$fig_dir, "mvfs_trace_jaccard_min.png"),
+    p_j,
+    width = 9,
+    height = 5,
+    dpi = 300)
+  
+  #7.3.4 Print MVFS summary to HTML
+  mvfs_pick |>
+    knitr::kable(caption = "Selected MVFS size per trace (first set meeting ARI + stability thresholds)") |>
+    kableExtra::kable_styling(full_width = FALSE)
+  
+}
+
+```
+
+### 8. Reproducibility Log
+
+```{r reproducibility, echo = FALSE, warning = FALSE}
+
+log <- list(
+  timestamp = as.character(Sys.time()),
+  mode = params$mode,
+  search = params$search,
+  k = params$k_opt,
+  n = nrow(risk_dt),
+  p_anchor = length(features_all),
+  lambda_anchor = lambda_anchor,
+  lambda_mode = params$lambda_mode,
+  nstart = params$nstart,
+  boot_B = params$boot_B,
+  boot_seed = params$boot_seed,
+  ari_target = params$ari_target,
+  jaccard_target = params$jaccard_target,
+  silhouette_sample_n = params$silhouette_sample_n,
+  container = "abcd-mds-risk-r_0.1.7.sif")
+
+writeLines(jsonlite::toJSON(log, pretty = TRUE), con = file.path(paths$sum_dir, "run_log.json"))
+
+```
+
