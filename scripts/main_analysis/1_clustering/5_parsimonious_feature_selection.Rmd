@@ -18,8 +18,8 @@ params:
   lambda_sensitivity: true     # if TRUE, compare aggregate summaries across lambda modes (if both traces exist)
   boot_B: 1000                 # bootstrap reps per candidate set
   boot_seed: 123               # base seed for bootstrap RNG
-  ari_target: 0.90
-  jaccard_target: 0.85
+  ari_target: 0.80
+  jaccard_target: 0.80
   silhouette_method: "validation_kproto"
   silhouette_type: "huang"               
   risk_signature_feats:        # used to define "higher-risk" anchor cluster + directionality checks
@@ -262,17 +262,25 @@ shap_tab <- shap_raw |>
   mutate(mean_abs_shap = as.numeric(mean_abs_shap)) |>
   select(feature, mean_abs_shap)
 
-#3.4 Merge and compute ranks (smaller rank = higher importance)
-rank_tab <- mcr_tab |>
-  dplyr::select(feature, mcr_mean) |>
+#3.4 Merge on FULL anchor feature set (prevents accidental feature drop)
+base_feat <- tibble::tibble(feature = features_all)
+rank_tab <- base_feat |>
+  left_join(mcr_tab |> dplyr::select(feature, mcr_mean), by = "feature") |>
   left_join(cent_tab, by = "feature") |>
   left_join(shap_tab, by = "feature") |>
-  filter(feature %in% features_all) |>
   mutate(
+    
+    #3.4.1 Missing => rank-last (keeps feature but deprioritizes)
+    mcr_mean = ifelse(is.na(mcr_mean), -Inf, mcr_mean),
+    sep_abs = ifelse(is.na(sep_abs), -Inf, sep_abs),
+    mean_abs_shap = ifelse(is.na(mean_abs_shap), -Inf, mean_abs_shap),
     rank_MCR = rank(-mcr_mean, ties.method = "min"),
     rank_centroid = rank(-sep_abs, ties.method = "min"),
     rank_SHAP = rank(-mean_abs_shap, ties.method = "min")) |>
   arrange(rank_MCR)
+
+#3.4.2 Hard stop if somehow we still don’t have all anchor features
+stopifnot(length(rank_tab$feature) == length(features_all))
 
 #3.5 Two-vote local-swap pass (consensus promotion)
 consensus_promote <- function(tab) {
@@ -312,7 +320,10 @@ rank_tab <- rank_tab |>
   arrange(rank_final_priority)
 
 #3.6 Write priority list table
-write_csv2(rank_tab, file.path(paths$sum_dir, "mvfs_feature_priority_table.csv"))
+prio_path <- file.path(paths$sum_dir, "mvfs_feature_priority_table.csv")
+if (params$mode %in% c("aggregate", "auto")) {
+  if (!file.exists(prio_path)) write_csv2(rank_tab, prio_path)
+}
 
 #3.7 Convenience vector for downstream
 priority_features <- rank_tab$feature
@@ -326,7 +337,7 @@ rank_tab |>
 
 ### 4. Helper Functions
 
-```{r heper functions, echo = FALSE, warning = FALSE}
+```{r helper functions, echo = FALSE, warning = FALSE}
 
 #4.1 Align newdata to model (basic type/level harmonization)
 align_newdata_to_model <- function(model, newdata) {
@@ -395,7 +406,7 @@ hungarian_map <- function(from, to) {
   tab_full <- matrix(0, nrow = K, ncol = K)
   tab_full[seq_len(nrow(tab)), seq_len(ncol(tab))] <- tab
   
-  # Maximize overlap => minimize cost = max(tab) - tab
+  #4.5.1 Maximize overlap => minimize cost = max(tab) - tab
   maxv <- max(tab_full)
   cost <- maxv - tab_full
   assign <- clue::solve_LSAP(cost)
@@ -512,11 +523,11 @@ bootstrap_stability <- function(dt_full,
   
   for (b in seq_len(as.integer(B))) {
     
-    # Bootstrap sample
+    #4.11.1 Bootstrap sample
     idx <- sample(seq_len(n), n, replace = TRUE)
     dt_boot <- dt_full[idx, , drop = FALSE]
     
-    # Fit on bootstrap sample
+    #4.11.2 Fit on bootstrap sample
     kp_b <- fit_kproto_best(
       as.data.frame(dt_boot),
       k = k,
@@ -524,14 +535,14 @@ bootstrap_stability <- function(dt_full,
       nstart = nstart,
       seed = seed + b)$model
     
-    # Predict labels on full data (stable universe)
+    #4.11.3 Predict labels on full data (stable universe)
     boot_lbl <- pred_kproto(kp_b, as.data.frame(dt_full))
     
-    # Map bootstrap labels -> candidate labels by overlap
+    #4.11.4 Map bootstrap labels -> candidate labels by overlap
     mapping <- hungarian_map(from = boot_lbl, to = cand_lbl)
     boot_lbl_mapped <- apply_map(boot_lbl, mapping)
     
-    # Clusterwise Jaccard
+    #4.11.5 Clusterwise Jaccard
     J[b, ] <- clusterwise_jaccard(cand_lbl, boot_lbl_mapped, K = K)
     
   }
@@ -572,7 +583,7 @@ fullset_concordance_check <- function(dt,
     c_hi <- x[as.character(cand_lbl_mapped) == hi]
     c_lo <- x[as.character(cand_lbl_mapped) == lo]
     
-    # Numeric: sign of mean difference
+    #4.12.1 Numeric: sign of mean difference
     if (is.numeric(x)) {
       da <- mean(a_hi, na.rm = TRUE) - mean(a_lo, na.rm = TRUE)
       dc <- mean(c_hi, na.rm = TRUE) - mean(c_lo, na.rm = TRUE)
@@ -583,7 +594,7 @@ fullset_concordance_check <- function(dt,
         match = ok))
     }
     
-    # Categorical: require informative anchor separation (different modes)
+    #4.12.2 Categorical: require informative anchor separation (different modes)
     if (is.factor(x) || is.character(x)) {
       mode_fun <- function(v) {
         v <- v[!is.na(v)]
@@ -596,7 +607,7 @@ fullset_concordance_check <- function(dt,
       c_m_hi <- mode_fun(c_hi)
       c_m_lo <- mode_fun(c_lo)
       
-      # If anchor mode doesn't differ across clusters, direction is uninformative
+      #4.12.3 If anchor mode doesn't differ across clusters, direction is uninformative
       if (is.na(a_m_hi) ||
           is.na(a_m_lo) || identical(a_m_hi, a_m_lo)) {
         return(tibble::tibble(
@@ -625,6 +636,63 @@ fullset_concordance_check <- function(dt,
        detail = detail)
 }
 
+#4.13 Count variable types (based on current column classes)
+count_types <- function(df) {
+  df <- as.data.frame(df)
+  is_num <- vapply(df, is.numeric, logical(1))
+  is_fac <- vapply(df, is.factor,  logical(1))
+  list(
+    n_num = sum(is_num),
+    n_fac = sum(is_fac),
+    is_num = is_num,
+    is_fac = is_fac
+  )
+}
+
+#4.14 Ensure kproto input has at least one numeric AND one factor column.
+#     (Adds constant "dummy" columns when a candidate set is single-type.)
+#     This does NOT change distances because the dummy column contributes 0 to all pairwise distances.
+prep_for_kproto <- function(df) {
+  df <- as.data.frame(df)
+  ct <- count_types(df)
+
+  add_num <- (ct$n_num == 0L)
+  add_fac <- (ct$n_fac == 0L)
+
+  if (add_num) df$.mvfs_dummy_num <- 0
+  if (add_fac) df$.mvfs_dummy_fac <- factor("A")
+
+  list(
+    x = df,
+    add_num = add_num,
+    add_fac = add_fac
+  )
+}
+
+#4.15 Safe lambda rule:
+# - anchor_fixed: use anchor lambda (for sensitivity)
+# - otherwise:
+#   * if |S|<2 OR single-type: lambda not identifiable/relevant => use 1
+#   * else: use lambdaest on the ORIGINAL X (not dummy-augmented)
+lambda_safe <- function(X_orig, lambda_mode, lambda_anchor) {
+  if (identical(lambda_mode, "anchor_fixed")) {
+    return(list(lambda = lambda_anchor, reason = "anchor_fixed"))
+  }
+
+  ct <- count_types(X_orig)
+
+  if (ncol(X_orig) < 2L) {
+    return(list(lambda = 1, reason = "p<2: lambdaest undefined; lambda irrelevant"))
+  }
+
+  if (ct$n_num == 0L || ct$n_fac == 0L) {
+    return(list(lambda = 1, reason = "single-type set: lambda irrelevant"))
+  }
+
+  lam <- clustMixType::lambdaest(X_orig, verbose = FALSE)
+  list(lambda = lam, reason = "lambdaest (mixed-type set)")
+}
+
 ```
 
 ### 5. Candidate Set Builder 
@@ -635,7 +703,7 @@ fullset_concordance_check <- function(dt,
 domain_map <- tibble::tribble(
 ~feature, ~domain,
 
-# Clinical/prodromal
+#5.1.1 Clinical/prodromal
 "mh_p_cbcl__synd__aggr_tscore", "clinical_prodromal",
 "mh_p_cbcl__dsm__anx_tscore", "clinical_prodromal",
 "mh_p_cbcl__synd__attn_tscore", "clinical_prodromal",
@@ -645,17 +713,17 @@ domain_map <- tibble::tribble(
 "mh_y_upps__purg_sum", "clinical_prodromal",
 "sds_total", "clinical_prodromal",
 
-# Environmental
+#5.1.2 Environmental
 "ACE_index_sum_score", "environmental",
 "bullying", "environmental",
 "le_l_coi__addr1__coi__total__national_zscore", "environmental",
 "fc_p_nsc__ns_mean", "environmental",
 
-# Familial
+#5.1.3 Familial
 "family_history_depression", "familial",
 "family_history_mania", "familial",
 
-# Neurocognitive
+#5.1.4 Neurocognitive
 "nc_y_nihtb__flnkr__uncor_score", "neurocognitive",
 "nc_y_nihtb__lswmt__uncor_score", "neurocognitive",
 "nc_y_nihtb__pttcp__uncor_score", "neurocognitive")
@@ -670,14 +738,14 @@ build_feature_set <- function(search,
   
   if (identical(search, "forward")) {
     
-    # Forward: step_idx = |S|
+    #5.2.1 Forward: step_idx = |S|
     s <- min(step_idx, p)
     return(priority_features[seq_len(s)])
   }
   
   if (identical(search, "backward")) {
 
-    # Backward: step_idx = 1..p corresponds to keeping p..1 features
+    #5.2.2 Backward: step_idx = 1..p corresponds to keeping p..1 features
     s <- p - step_idx + 1L
     s <- max(1L, min(s, p))
     return(priority_features[seq_len(s)])
@@ -688,7 +756,7 @@ build_feature_set <- function(search,
     dm <- domain_map |>
       filter(feature %in% priority_features)
     
-    # Identify the top-ranked feature per domain
+    #5.2.3 Identify the top-ranked feature per domain
     top_per_domain <- dm |>
       mutate(rank = match(feature, priority_features)) |>
       group_by(domain) |>
@@ -699,7 +767,7 @@ build_feature_set <- function(search,
     
     base <- unique(top_per_domain)
     
-    # Continue adding in priority order until size = step_idx
+    #5.2.4 Continue adding in priority order until size = step_idx
     if (length(base) >= step_idx)
       return(base[seq_len(step_idx)])
     
@@ -732,26 +800,65 @@ run_step <- function(step_idx,
   dt_S <- risk_dt[, ..S]
   X_S <- as.data.frame(dt_S)
   
-  #6.1.2 Lambda handling
-  lambda_S <- if (identical(lambda_mode, "anchor_fixed")) {
-    lambda_anchor
-  } else {
-    clustMixType::lambdaest(X_S)
-  }
+  #6.1.2 Lambda handling (safe)
+  lam_info <- lambda_safe(X_S, lambda_mode = lambda_mode, lambda_anchor = lambda_anchor)
+  lambda_S <- lam_info$lambda
+  lambda_reason <- lam_info$reason
+  
+  #6.1.2.1 Ensure kproto can run even for single-type sets (implementation detail)
+  prep <- prep_for_kproto(X_S)
+  X_S_fit <- prep$x
+  added_dummy <- (prep$add_num || prep$add_fac)
+
   
   #6.1.3 Fit k-prototypes (multi-start; retains best objective)
-  fit <- fit_kproto_best(
-    X_S,
-    k = params$k_opt,
-    lambda = lambda_S,
-    nstart = params$nstart,
-    seed = 1000 + step_idx)
+  fit <- fit_kproto_best(X_S_fit,
+                       k = params$k_opt,
+                       lambda = lambda_S,
+                       nstart = params$nstart,
+                       seed = 1000 + step_idx)
   kpS <- fit$model
   obj <- fit$obj
   
   #6.1.4 Candidate labels on full data
-  cand_lbl <- pred_kproto(kpS, X_S)
+  cand_lbl <- pred_kproto(kpS, X_S_fit)
+  k_observed <- length(unique(cand_lbl))
+  min_cluster_n <- min(tabulate(cand_lbl))
+
+  #6.1.4.1 Optionally treat non-2-cluster solutions as automatic failure
+  if (k_observed < params$k_opt) {
+    ari <- NA_real_
+    sil <- NA_real_
+    stab <- list(jaccard_mean = NA_real_, jaccard_min = NA_real_)
+  }
   
+  #6.1.4.2 If k-prototypes collapses to <k clusters, treat as failure and skip expensive metrics
+  if (k_observed < params$k_opt || min_cluster_n < 2) {
+    out <- tibble::tibble(
+      search = search,
+      lambda_mode = lambda_mode,
+      step_idx = step_idx,
+      n_features = length(S),
+      features = paste(S, collapse = ";"),
+      lambda = lambda_S,
+      objective = obj,
+      ari = NA_real_,
+      jaccard_mean = NA_real_,
+      jaccard_min = NA_real_,
+      silhouette_mean = NA_real_,
+      sig_direction_match = NA_real_,
+      full_direction_match = NA_real_,
+      full_direction_n_eval = NA_integer_,
+      lambda_reason = lambda_reason,
+      added_dummy = added_dummy,
+      k_observed = k_observed,
+      min_cluster_n = min_cluster_n,
+      fail_reason = "collapsed_solution")
+    stub <- glue("mvfs_step_{search}_{lambda_mode}_n{length(S)}.csv")
+    write_csv2(out, file.path(paths$step_dir, stub))
+    return(invisible(out))
+  }
+
   #6.1.5 Similarity-to-anchor (ARI; label-invariant)
   ari <- mclust::adjustedRandIndex(cand_lbl, anchor_assign)
   
@@ -777,7 +884,7 @@ run_step <- function(step_idx,
   
   #6.1.8 Bootstrap stability (clusterwise Jaccard against candidate partition)
   stab <- bootstrap_stability(
-    dt_full = dt_S,
+    dt_full = as.data.table(X_S_fit),
     cand_lbl = cand_lbl,
     k = params$k_opt,
     lambda = lambda_S,
@@ -805,7 +912,11 @@ run_step <- function(step_idx,
     silhouette_mean = sil,
     sig_direction_match = sig_check$prop_match,
     full_direction_match = full_chk$prop_match,
-    full_direction_n_eval = full_chk$n_eval)
+    full_direction_n_eval = full_chk$n_eval,
+    lambda_reason = lambda_reason,
+    added_dummy = added_dummy,
+    k_observed = k_observed,
+    min_cluster_n = min_cluster_n)
   
   #6.1.11 Write step-level csv (one file per step x lambda_mode)
   stub <- glue("mvfs_step_{search}_{lambda_mode}_n{length(S)}.csv")
@@ -860,7 +971,7 @@ if (params$mode == "auto") {
 if (params$mode %in% c("auto", "aggregate")) {
   
   #7.3.1 Load all step-level csvs
-  step_files <- list.files(paths$step_dir, pattern = "^mvfs_step_.*\.csv$", full.names = TRUE)
+  step_files <- list.files(paths$step_dir, pattern = "^mvfs_step_.*\\.csv$", full.names = TRUE)
   if (!length(step_files))
     stop(glue("No step-level MVFS files found in: {paths$step_dir}"))
   
@@ -886,39 +997,127 @@ if (params$mode %in% c("auto", "aggregate")) {
   
   write_csv2(mvfs_pick, file.path(paths$sum_dir, "mvfs_selected_summary.csv"))
   
+    # 7.3.2.1 Refit + save the selected MVFS solution(s)
+    mvfs_pick_ok <- mvfs_pick |> dplyr::filter(!is.na(mvfs_n))
+  
+    if (nrow(mvfs_pick_ok) > 0) {
+  
+      mvfs_solutions <- purrr::pmap(
+        mvfs_pick_ok |> dplyr::select(search, lambda_mode, mvfs_n),
+        function(search, lambda_mode, mvfs_n) {
+  
+          # Build selected feature set
+          S <- build_feature_set(search, mvfs_n, priority_features, domain_map)
+          S <- S[S %in% features_all]
+  
+          X_S <- as.data.frame(risk_dt[, ..S])
+  
+          # Lambda handling + kproto input prep
+          lam_info <- lambda_safe(X_S, lambda_mode = lambda_mode, lambda_anchor = lambda_anchor)
+          prep <- prep_for_kproto(X_S)
+  
+          # Refit once (no bootstrap here)
+          kp <- fit_kproto_best(
+            X_df   = prep$x,
+            k      = params$k_opt,
+            lambda = lam_info$lambda,
+            nstart = params$nstart,
+            seed   = 9000 + mvfs_n
+          )$model
+  
+          # Labels + mapping to anchor labels (for interpretability)
+          lbl <- pred_kproto(kp, prep$x)
+          map_c2a <- hungarian_map(from = lbl, to = anchor_assign)
+          lbl_mapped <- apply_map(lbl, map_c2a)
+  
+          # Trim stored data to reduce file size
+          kp$data <- NULL
+  
+          list(
+            search = search,
+            lambda_mode = lambda_mode,
+            mvfs_n = mvfs_n,
+            features = S,
+            lambda = lam_info$lambda,
+            lambda_reason = lam_info$reason,
+            model = kp,
+            labels_raw = lbl,
+            labels_mapped_to_anchor = lbl_mapped,
+            anchor_assign = anchor_assign,
+            map_c2a = map_c2a,
+            anchor_high_risk_cluster = anchor_high_risk_cluster
+          )
+        }
+      )
+  
+      saveRDS(
+        mvfs_solutions,
+        file.path(paths$sum_dir, "mvfs_selected_solutions.rds")
+      )
+  
+      # Also write a flat CSV of assignments (first solution if only one trace)
+      sol1 <- mvfs_solutions[[1]]
+  
+      assign_tbl <- tibble::tibble(
+        row_id = seq_len(nrow(risk_dt)),
+        anchor_cluster = as.integer(sol1$anchor_assign),
+        mvfs_cluster_mapped = as.integer(sol1$labels_mapped_to_anchor)
+      )
+  
+      if (!is.null(rownames(risk_dt))) {
+        assign_tbl <- dplyr::mutate(assign_tbl, rowname = rownames(risk_dt))
+      }
+  
+      write_csv2(
+        assign_tbl,
+        file.path(paths$sum_dir, "mvfs_selected_assignments.csv")
+      )
+    }
+  
   #7.3.3 Plot traces (ARI and stability over |S|)
+  mvfs_pick_ok <- mvfs_pick |> dplyr::filter(!is.na(mvfs_n))
+
+  mvfs_point <- mvfs_df |>
+    dplyr::inner_join(mvfs_pick_ok, by = c("search", "lambda_mode")) |>
+    dplyr::filter(n_features == mvfs_n) |>
+    dplyr::mutate(label = paste0("MVFS = ", mvfs_n))
+
   p_ari <- ggplot(mvfs_df, aes(x = n_features, y = ari)) +
-    geom_line() + geom_point() +
+    geom_line(linewidth = 0.6) +
+    geom_point(size = 1.6) +
     facet_grid(search ~ lambda_mode, scales = "free_x") +
     geom_hline(yintercept = params$ari_target, linetype = 2) +
-    labs(x = "|S| (number of features)", y = "Adjusted Rand Index (vs anchor)", title = "MVFS trace: similarity-to-anchor (ARI)") +
-    theme_minimal(base_size = 12)
-  
+    geom_vline(data = mvfs_pick_ok, aes(xintercept = mvfs_n), linetype = 2) +
+    geom_point(data = mvfs_point, size = 2.6) +
+    geom_text(
+      data = mvfs_point,
+      aes(label = label),
+      vjust = -0.8,
+      size = 3
+    ) +
+    scale_y_continuous(limits = c(0, 1)) +
+    labs(
+      title = "Agreement with anchor partition across candidate set size",
+      subtitle = glue("Search = {paste(unique(mvfs_df$search), collapse=', ')};
+        lambda = {paste(unique(mvfs_df$lambda_mode), collapse=', ')};
+        Selection rule: ARI ≥ {params$ari_target}, min Jaccard ≥ {params$jaccard_target}"),
+      x = "Candidate set size, |S| (number of features)",
+      y = "Adjusted Rand index vs anchor") +
+    theme_classic(base_size = 12) +
+    theme(
+      strip.background = element_rect(fill = "white", colour = "black"),
+      axis.line = element_line(),
+      plot.title.position = "plot")
+
   ggsave(
     file.path(paths$fig_dir, "mvfs_trace_ari.png"),
     p_ari,
     width = 9,
     height = 5,
-    dpi = 300)
-  
-  p_j <- ggplot(mvfs_df, aes(x = n_features, y = jaccard_min)) +
-    geom_line() + geom_point() +
-    facet_grid(search ~ lambda_mode, scales = "free_x") +
-    geom_hline(yintercept = params$jaccard_target, linetype = 2) +
-    labs(x = "|S| (number of features)", y = "Min clusterwise Jaccard (bootstrap)", title = "MVFS trace: bootstrap stability (min clusterwise Jaccard)") +
-    theme_minimal(base_size = 12)
-  
-  ggsave(
-    file.path(paths$fig_dir, "mvfs_trace_jaccard_min.png"),
-    p_j,
-    width = 9,
-    height = 5,
-    dpi = 300)
-  
-  #7.3.4 Print MVFS summary to HTML
-  mvfs_pick |>
-    knitr::kable(caption = "Selected MVFS size per trace (first set meeting ARI + stability thresholds)") |>
-    kableExtra::kable_styling(full_width = FALSE)
+    dpi = 600,
+    bg = "white"
+  )
+
   
 }
 
@@ -942,7 +1141,6 @@ log <- list(
   boot_seed = params$boot_seed,
   ari_target = params$ari_target,
   jaccard_target = params$jaccard_target,
-  silhouette_sample_n = params$silhouette_sample_n,
   container = "abcd-mds-risk-r_0.1.7.sif")
 
 writeLines(jsonlite::toJSON(log, pretty = TRUE), con = file.path(paths$sum_dir, "run_log.json"))

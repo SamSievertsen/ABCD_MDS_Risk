@@ -1,0 +1,885 @@
+---
+title: "5. Comorbidity Sensitivity Analysis (GEE)"
+author: "Sam A. Sievertsen"
+output:
+  html_document:
+    self_contained: true
+    toc: true
+    toc_depth: 3
+    number_sections: false
+    df_print: paged
+params:
+  
+  # Core paths
+  analysis_panel_rds: "data/data_processed/analysis_datasets/bd_panel_k2_z_score.rds"
+  supplementary_dx_csv: "data/data_processed/supplementary_outcome_variable_data.csv"
+
+  # Output directory
+  out_dir: "results/5_comorbidity_sensitivity_analysis"
+
+  # Waves
+  analytic_waves: ["ses-02A", "ses-04A", "ses-06A"]
+  wave_ref: "ses-02A"           # matches prior BD-occurrence GEE scripts
+  wave_ref_sparse: "ses-04A"    # fallback ref for sparse outcomes (e.g., BSD-only)
+
+  # Modeling
+  corstr: "exchangeable"        # exchangeable matches prior; also try "independence" as sensitivity
+  min_events_per_wave: 5        # if a wave has < this many events for an outcome, we drop that wave for that outcome
+  include_baseline_status: true # include baseline status covariate (derived from ses-00A)
+  covars: ["sex", "age_wave_gmc"] # additional covariates (only those present are used)
+
+  # Cluster label mapping
+  cluster_levels: ["Lower-Risk", "Higher-Risk"]
+  
+---
+
+```{r global, include = FALSE}
+knitr::opts_chunk$set(cache = FALSE, message = TRUE, warning = TRUE, results = "markup", verbose = TRUE, comment = "")
+options(scipen = 999, digits = 8)
+set.seed(123)
+```
+
+## Overview
+
+Goal: test whether baseline-derived *BD risk clusters* carry unique BD-specific signal (vs a broader, transdiagnostic signal) by modeling longitudinal diagnostic group membership:
+
+- any_bsd (replicate prior BD occurrence logic, but using the validated KSADS-derived BSD indicator)
+- dx_other_any (any comorbidity umbrella dx)
+- dx_group4 contrasts vs *No Dx*:
+  - BSD only vs No Dx
+  - BSD + other Dx vs No Dx
+  - Other Dx only (no BSD) vs No Dx
+
+Primary approach: marginal logistic GEE (geepack::geeglm), `cluster x wave`, with your existing covariates and (optionally) baseline-status adjustment. We keep the same “GEE-by-wave ORs” workflow via emmeans as your prior scripts.
+
+> Note on sparse cells: BSD-only at ses-02A is extremely rare (n~3). The script includes a guardrail to drop wave(s) with very low event counts *for that outcome only* (default threshold = 5), and refactors the wave reference level for sparse outcomes (default = ses-04A).
+
+```{r environment, echo = FALSE, message = FALSE, warning = FALSE}
+suppressPackageStartupMessages({
+  library(here)
+  library(knitr)
+  library(kableExtra)
+  library(dplyr)
+  library(tidyr)
+  library(readr)
+  library(purrr)
+  library(stringr)
+  library(glue)
+  library(forcats)
+  library(ggplot2)
+  library(geepack)
+  library(emmeans)
+  library(broom)
+})
+
+# Optional multinomial GEE (only used if installed)
+has_multgee <- requireNamespace("multgee", quietly = TRUE)
+```
+
+## 1. Read + Merge Datasets
+
+```{r read_data, echo = FALSE, warning = FALSE}
+
+#1.1 Resolve paths
+panel_path <- here::here(params$analysis_panel_rds)
+supp_path <- here::here(params$supplementary_dx_csv)
+out_dir <- here::here(params$out_dir)
+
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(out_dir, "tables"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(out_dir, "figures"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(out_dir, "rds"), recursive = TRUE, showWarnings = FALSE)
+
+#1.2 Read analysis panel (should already include cluster labels + covariates)
+if (!file.exists(panel_path)) stop("Missing panel rds: ", panel_path)
+panel <- readRDS(panel_path)
+
+# Expected columns (fail early with informative error)
+req_panel <- c("participant_id", "wave", "cluster")
+missing_req_panel <- setdiff(req_panel, names(panel))
+if (length(missing_req_panel) > 0) {
+  stop("Panel dataset is missing required columns: ", paste(missing_req_panel, collapse = ", "))
+}
+
+#1.3 Read supplementary dx (analytic waves only are present in this csv)
+if (!file.exists(supp_path)) stop("Missing supplementary dx csv: ", supp_path)
+supp <- readr::read_csv(supp_path, show_col_types = FALSE) %>%
+  rename(wave = session_id)
+
+req_supp <- c("participant_id", "wave", "any_bsd", "dx_other_any", "dx_group4")
+missing_req_supp <- setdiff(req_supp, names(supp))
+if (length(missing_req_supp) > 0) {
+  stop("Supplementary dx csv is missing required columns: ", paste(missing_req_supp, collapse = ", "))
+}
+
+#1.4 Create person-wave covariate frame from PANEL
+#    (critical: prevents duplicating rows from panel's long outcome structure)
+
+#1.4.1 Normalize join keys
+panel <- panel %>%
+  mutate(
+    participant_id = as.character(participant_id),
+    wave = as.character(wave)
+  )
+
+supp <- supp %>%
+  mutate(
+    participant_id = as.character(participant_id),
+    wave = as.character(wave)
+  )
+
+#1.4.2 Keep only columns we actually want to import from panel
+#      (cluster + covariates used in models; add others only if truly needed)
+panel_keep <- unique(c("participant_id", "wave", "cluster", params$covars))
+panel_keep <- panel_keep[panel_keep %in% names(panel)]
+
+panel_pw <- panel %>%
+  dplyr::select(all_of(panel_keep)) %>%
+  distinct()
+
+#1.4.3 Hard-stop if PANEL still has >1 unique covariate row per participant-wave
+panel_pw_dups <- panel_pw %>%
+  count(participant_id, wave) %>%
+  filter(n > 1)
+
+if (nrow(panel_pw_dups) > 0) {
+  print(head(panel_pw_dups, 10))
+  stop(
+    "Panel collapse failure: >1 unique (participant_id, wave) row remains after distinct().\n",
+    "This means covariates/cluster differ across panel rows within the same participant-wave.\n",
+    "Inspect panel structure before proceeding."
+  )
+}
+
+#1.5 Create person-wave DX frame from SUPP
+dx_keep <- names(supp)[stringr::str_detect(names(supp), "^(dx_|any_bsd$)")]
+supp_dx <- supp %>%
+  dplyr::select(participant_id, wave, all_of(dx_keep)) %>%
+  distinct(participant_id, wave, .keep_all = TRUE)
+
+supp_dups <- supp_dx %>%
+  count(participant_id, wave) %>%
+  filter(n > 1)
+
+if (nrow(supp_dups) > 0) {
+  print(head(supp_dups, 10))
+  stop("Duplicate (participant_id, wave) rows in supp_dx; fix upstream before joining.")
+}
+
+#1.6 Merge (ONE ROW PER PARTICIPANT-WAVE)
+dat0 <- supp_dx %>%
+  left_join(panel_pw, by = c("participant_id", "wave"))
+
+#1.6.1 Sanity checks
+cat("\n#1 Data merge summary\n")
+cat("panel rows (raw):", nrow(panel), "\n")
+cat("panel rows (person-wave):", nrow(panel_pw), "\n")
+cat("supp rows (person-wave):", nrow(supp_dx), "\n")
+cat("merged rows:", nrow(dat0), "\n\n")
+
+#1.76 Derive baseline-status covariates from ses-00A in supplementary dx (person-level baseline)
+baseline_wave <- "ses-00A"
+
+baseline <- supp %>%
+  filter(wave == baseline_wave) %>%
+  select(participant_id, any_bsd, dx_other_any, dx_group4, starts_with("dx_")) %>%
+  distinct(participant_id, .keep_all = TRUE) %>% # <-- guardrail
+  rename_with(~ paste0("baseline_", .x), -participant_id)
+
+#1.7.1 Join baseline onto the merged person-wave dataset
+dat <- dat0 %>%
+  left_join(baseline, by = "participant_id")
+
+#1.8 Recode cluster labels (panel uses C1/C2) WITHOUT dropping baseline cols
+dat <- dat %>%
+  mutate(
+    cluster = as.character(cluster),
+    cluster = case_when(
+      cluster == "C1" ~ "Lower-Risk",
+      cluster == "C2" ~ "Higher-Risk",
+      TRUE ~ cluster
+    ),
+    cluster = factor(cluster, levels = c("Lower-Risk", "Higher-Risk")),
+    wave = factor(wave, levels = c("ses-00A","ses-02A","ses-04A","ses-06A")),
+    dx_group4 = factor(dx_group4)
+  )
+
+#1.9 Restrict to analytic waves for modeling
+dat_an <- dat %>%
+  filter(wave %in% params$analytic_waves, !is.na(cluster)) %>%
+  droplevels()
+
+#1.9.1 Hard-stop if baseline columns are expected but missing
+if (params$include_baseline_status && !("baseline_any_bsd" %in% names(dat_an))) {
+  stop(
+    "Baseline columns missing after join.\n",
+    "Either ses-00A is not present in supplementary_dx_csv, or `dat` got overwritten.\n",
+    "Fix baseline join or set include_baseline_status: false."
+  )
+}
+
+```
+
+## 2. Quick QC Tables
+
+```{r qc_tables, echo = FALSE, warning = FALSE}
+
+#2.1 Count table: dx_group4 by wave and cluster (analytic waves)
+qc_dxgroup4 <- dat_an %>%
+  filter(!is.na(dx_group4)) %>%
+  count(wave, cluster, dx_group4) %>%
+  group_by(wave, cluster) %>%
+  mutate(pct = n / sum(n)) %>%
+  ungroup()
+
+knitr::kable(
+  qc_dxgroup4,
+  caption = "QC: dx_group4 by wave x cluster (analytic waves; observed only)",
+  digits = 3
+) %>% kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+#2.2 Missingness by wave
+qc_missing <- dat_an %>%
+  summarise(
+    n = n(),
+    n_any_bsd_nonmiss = sum(!is.na(any_bsd)),
+    n_other_any_nonmiss = sum(!is.na(dx_other_any)),
+    n_dx_group4_nonmiss = sum(!is.na(dx_group4)),
+    .by = wave
+  )
+
+knitr::kable(
+  qc_missing,
+  caption = "QC: Non-missing denominators by wave (analytic waves)",
+  digits = 0
+) %>% kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+#2.3 Save QC outputs
+readr::write_csv(qc_dxgroup4, file.path(out_dir, "tables", "qc_dx_group4_by_wave_cluster.csv"))
+readr::write_csv(qc_missing, file.path(out_dir, "tables", "qc_nonmissing_by_wave.csv"))
+```
+
+## 3. Define Outcomes and Contrast Datasets
+
+We treat `dx_group4` as a multiclass variable, but (to keep the workflow identical to prior binary GEE scripts) we model pairwise binary contrasts vs No Dx by creating contrast-specific datasets.
+
+```{r outcome_contrasts, echo = FALSE, warning = FALSE}
+
+#3.1 Helper: build a binary contrast vs a reference:
+#     - keeps only rows where dx_group4 is either (ref_label) or (case_label)
+#     - status = 1 for case_label; 0 for ref_label
+make_dxgroup4_pair <- function(df, case_label, ref_label) {
+  df %>%
+    filter(dx_group4 %in% c(ref_label, case_label)) %>%
+    mutate(
+      status = if_else(dx_group4 == case_label, 1L, 0L),
+      baseline_status = case_when(
+        is.na(baseline_dx_group4) ~ NA_real_,
+        baseline_dx_group4 == case_label ~ 1,
+        TRUE ~ 0
+      )
+    )
+}
+
+#3.2 Standard outcomes (binary directly)
+dat_any_bsd <- dat_an %>%
+  mutate(
+    status = any_bsd,
+    baseline_status = if_else(is.na(baseline_any_bsd), NA_real_, baseline_any_bsd)
+  )
+
+dat_other_any <- dat_an %>%
+  mutate(
+    status = dx_other_any,
+    baseline_status = if_else(is.na(baseline_dx_other_any), NA_real_, baseline_dx_other_any)
+  )
+
+#3.3 dx_group4 contrasts vs No Dx
+ref_dx <- "No Dx (Dx-set of interest)"
+
+dat_bsd_only_vs_nodx    <- make_dxgroup4_pair(dat_an, "BSD only", ref_dx)
+dat_bsdplus_vs_nodx     <- make_dxgroup4_pair(dat_an, "BSD + other Dx", ref_dx)
+dat_otheronly_vs_nodx   <- make_dxgroup4_pair(dat_an, "Other Dx only (no BSD)", ref_dx)
+
+dat_bsdplus_vs_otheronly <- make_dxgroup4_pair(dat_an, "BSD + other Dx", "Other Dx only (no BSD)")
+dat_bsdonly_vs_otheronly <- make_dxgroup4_pair(dat_an, "BSD only", "Other Dx only (no BSD)")
+dat_bsdplus_vs_bsdonly   <- make_dxgroup4_pair(dat_an, "BSD + other Dx", "BSD only")
+
+outcome_list <- list(
+  any_bsd = dat_any_bsd,
+  dx_other_any = dat_other_any,
+  bsd_only_vs_nodx = dat_bsd_only_vs_nodx,
+  bsd_plus_other_vs_nodx = dat_bsdplus_vs_nodx,
+  other_only_vs_nodx = dat_otheronly_vs_nodx,
+  bsd_plus_vs_other_only = dat_bsdplus_vs_otheronly,
+  bsd_only_vs_other_only = dat_bsdonly_vs_otheronly,
+  bsd_plus_vs_bsd_only = dat_bsdplus_vs_bsdonly
+)
+
+#3.5 Quick event-count diagnostic per outcome
+event_diag <- imap_dfr(outcome_list, function(df, nm) {
+  df %>%
+    filter(!is.na(status)) %>%
+    summarise(
+      outcome = nm,
+      n = n(),
+      n_events = sum(status == 1, na.rm = TRUE),
+      .by = wave
+    )
+})
+
+knitr::kable(event_diag, caption = "QC: Event counts by wave per outcome (analytic waves; excludes NA)", digits = 0) %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+readr::write_csv(event_diag, file.path(out_dir, "tables", "qc_event_counts_by_wave_outcome.csv"))
+```
+
+## 4. Helper Functions
+
+```{r helpers, echo = FALSE, warning = FALSE}
+
+#4.1 Save plot helper
+save_fig <- function(plot_obj, filename, width = 10, height = 6, dpi = 320) {
+  ggplot2::ggsave(
+    filename = file.path(out_dir, "figures", filename),
+    plot = plot_obj, width = width, height = height, dpi = dpi
+  )
+}
+
+#4.2 Robust extraction of emmeans CI columns (handles emmeans naming differences)
+extract_emm_ci_cols <- function(df) {
+  if ("asymp.LCL" %in% names(df)) {
+    df$lcl <- df$asymp.LCL
+    df$ucl <- df$asymp.UCL
+  } else if (all(c("lower.CL","upper.CL") %in% names(df))) {
+    df$lcl <- df$lower.CL
+    df$ucl <- df$upper.CL
+  } else {
+    df$lcl <- NA_real_
+    df$ucl <- NA_real_
+  }
+  df
+}
+
+#4.3 OR of High-Risk vs Low-Risk by wave using emmeans (with 95% CIs)
+or_by_wave_emm <- function(mod, level = 0.95) {
+
+  #4.3.1 Use robust vcov from the fitted model (when available)
+  V <- try(vcov(mod), silent = TRUE)
+
+  emm <- emmeans::emmeans(
+    mod,
+    ~ cluster | wave,
+    type = "link",
+    vcov. = if (!inherits(V, "try-error")) V else NULL
+  )
+
+  ctr <- emmeans::contrast(
+    emm,
+    method = list("Higher-Risk vs Lower-Risk" = c(-1, 1)),
+    adjust = "none"
+  )
+
+  sm <- as.data.frame(summary(ctr, infer = c(TRUE, TRUE), level = level))
+
+  lcl_col <- dplyr::coalesce(
+    if ("asymp.LCL" %in% names(sm)) "asymp.LCL" else NA_character_,
+    if ("lower.CL" %in% names(sm)) "lower.CL" else NA_character_
+  )
+  ucl_col <- dplyr::coalesce(
+    if ("asymp.UCL" %in% names(sm)) "asymp.UCL" else NA_character_,
+    if ("upper.CL" %in% names(sm)) "upper.CL" else NA_character_
+  )
+
+  if (is.na(lcl_col) || is.na(ucl_col)) {
+    stop("emmeans did not return CI columns for contrast; check names(sm).")
+  }
+
+  sm %>%
+    dplyr::transmute(
+      wave,
+      contrast,
+      log_or = estimate,
+      se = SE,
+      lcl = .data[[lcl_col]],
+      ucl = .data[[ucl_col]],
+      or  = exp(estimate),
+      or_lcl = exp(.data[[lcl_col]]),
+      or_ucl = exp(.data[[ucl_col]]),
+      p = p.value
+    )
+}
+
+#4.4 Predicted probabilities by cluster x wave
+prob_by_wave_emm <- function(mod, level = 0.95) {
+
+  #4.4.1 Use robust vcov from the fitted model (when available)
+  V <- try(vcov(mod), silent = TRUE)
+
+  emm <- emmeans::emmeans(
+    mod,
+    ~ cluster | wave,
+    type = "response",
+    vcov. = if (!inherits(V, "try-error")) V else NULL
+  )
+
+  sm <- as.data.frame(summary(emm, infer = c(TRUE, TRUE), level = level))
+
+  p_col <- if ("prob" %in% names(sm)) "prob" else if ("response" %in% names(sm)) "response" else NA_character_
+  if (is.na(p_col)) stop("emmeans did not return a probability column (prob/response).")
+
+  lcl_col <- dplyr::coalesce(
+    if ("asymp.LCL" %in% names(sm)) "asymp.LCL" else NA_character_,
+    if ("lower.CL" %in% names(sm)) "lower.CL" else NA_character_
+  )
+  ucl_col <- dplyr::coalesce(
+    if ("asymp.UCL" %in% names(sm)) "asymp.UCL" else NA_character_,
+    if ("upper.CL" %in% names(sm)) "upper.CL" else NA_character_
+  )
+  if (is.na(lcl_col) || is.na(ucl_col)) stop("emmeans did not return CI columns for probabilities.")
+
+  sm %>%
+    dplyr::transmute(
+      wave,
+      cluster,
+      p = .data[[p_col]],
+      lcl = .data[[lcl_col]],
+      ucl = .data[[ucl_col]]
+    )
+}
+
+#4.5 Fit GEE with strong guardrails (prevents zsca/y mismatch)
+fit_gee <- function(df, outcome_name, wave_ref) {
+
+  #4.5.1 Drop missing outcome + required design vars early
+  df0 <- df %>%
+    dplyr::filter(!is.na(status), !is.na(cluster), !is.na(wave)) %>%
+    dplyr::mutate(
+      status = as.integer(status),
+      wave   = forcats::fct_relevel(as.factor(wave), wave_ref),
+      cluster = droplevels(as.factor(cluster)),
+      participant_id = as.factor(participant_id)
+    )
+
+  #4.5.2 Optional: drop waves with too-few events (per outcome)
+  min_events <- params$min_events_per_wave
+  ev_by_wave <- df0 %>%
+    dplyr::summarise(n_events = sum(status == 1, na.rm = TRUE), .by = wave)
+
+  sparse_waves <- ev_by_wave %>%
+    dplyr::filter(n_events < min_events) %>%
+    dplyr::pull(wave) %>%
+    as.character()
+
+  if (length(sparse_waves) > 0) {
+    cat(glue("\n[{outcome_name}] Dropping sparse wave(s): {paste(sparse_waves, collapse = ', ')} (n_events < {min_events})\n"))
+    df0 <- df0 %>%
+      dplyr::filter(!(as.character(wave) %in% sparse_waves)) %>%
+      droplevels()
+  }
+
+  #4.5.3 Build covariate set (only keep columns present)
+  covars <- params$covars
+  covars <- covars[covars %in% names(df0)]
+
+  # Add baseline status only if requested AND present
+  if (isTRUE(params$include_baseline_status)) {
+    if (!("baseline_status" %in% names(df0))) {
+      stop("[", outcome_name, "] include_baseline_status=TRUE but baseline_status column is missing.")
+    }
+    df0$baseline_status <- as.integer(df0$baseline_status)
+    covars <- unique(c(covars, "baseline_status"))
+  }
+
+  #4.5.4 Complete-case ONLY on model vars (this is key)
+  model_vars <- unique(c("participant_id", "status", "cluster", "wave", covars))
+  df0 <- df0 %>%
+    dplyr::select(all_of(model_vars)) %>%
+    tidyr::drop_na() %>%
+    as.data.frame()
+
+  #4.5.4.1 Hard-stops for degenerate situations (post complete-case)
+  if (nrow(df0) == 0) stop("[", outcome_name, "] No complete-case rows after drop_na().")
+
+  n_events <- sum(df0$status == 1)
+  n_nonevents <- sum(df0$status == 0)
+  if (n_events == 0 || n_nonevents == 0) {
+    stop("[", outcome_name, "] Degenerate outcome after complete-case filtering: ",
+         "n_events=", n_events, ", n_nonevents=", n_nonevents)
+  }
+
+  u_status <- sort(unique(df0$status))
+  if (!all(u_status %in% c(0L, 1L))) {
+    stop("[", outcome_name, "] status has non-binary values: ", paste(u_status, collapse = ", "))
+  }
+  if (nlevels(df0$cluster) < 2) stop("[", outcome_name, "] <2 cluster levels after filtering.")
+  if (nlevels(df0$wave) < 2) stop("[", outcome_name, "] <2 wave levels after filtering.")
+
+  #4.5.4.2 QC snapshot after all filtering
+  qc_post <- df0 %>%
+    dplyr::summarise(
+      n = n(),
+      n_id = dplyr::n_distinct(participant_id),
+      n_events = sum(status == 1),
+      .by = wave
+    )
+
+  #4.5.5 Sort (recommended for sanity with repeated measures)
+  df0 <- df0[order(df0$participant_id, df0$wave), ]
+
+  #4.5.6 Create formula
+  rhs <- paste(c("cluster * wave", covars), collapse = " + ")
+  fml <- as.formula(paste0("status ~ ", rhs))
+
+  #4.5.7 Fit
+  mod <- tryCatch(
+    geepack::geeglm(
+      formula = fml,
+      id = df0$participant_id,
+      family = binomial(),
+      data = df0,
+      corstr = params$corstr,
+      std.err = "san.se"
+    ),
+    error = function(e) e
+  )
+
+  if (inherits(mod, "error")) return(mod)
+
+  if (isTRUE(params$include_baseline_status) &&
+      !any(grepl("baseline_status", names(coef(mod))))) {
+    stop("[", outcome_name, "] baseline_status was requested but is not in the fitted model coefficients.")
+  }
+
+  #4.5.8 Attach post-filter QC to the fitted object for auditing downstream
+  attr(mod, "qc_post") <- qc_post
+
+  mod
+}
+
+```
+
+## 5. Fit GEE Models + Summarize ORs
+
+```{r fit_models, echo = FALSE, warning = FALSE}
+
+#5.1 Fit all outcomes
+mods <- imap(outcome_list, function(df, nm) {
+  # Use a more stable reference wave for known-sparse outcomes
+  wave_ref_use <- if (nm %in% c("bsd_only_vs_nodx"))
+    params$wave_ref_sparse
+  else
+    params$wave_ref
+  
+  cat(glue("================ Outcome: {nm} (wave_ref={wave_ref_use}) ================"))
+  mod <- fit_gee(df, outcome_name = nm, wave_ref = wave_ref_use)
+  
+  if (inherits(mod, "error")) {
+    cat("MODEL FAILED:")
+    cat(mod$message, "")
+    return(NULL)
+  }
+  
+  print(summary(mod))
+  mod
+})
+
+#5.2 Save model objects
+walk2(mods, names(mods), ~ {
+  if (!is.null(.x))
+    saveRDS(.x, file.path(out_dir, "rds", paste0(.y, "_gee.rds")))
+})
+
+#5.3 Extract by-wave ORs (High-Risk vs Low-Risk)
+or_tables <- imap_dfr(mods, function(mod, nm) {
+  if (is.null(mod))
+    return(NULL)
+  or_by_wave_emm(mod) %>% mutate(outcome = nm, .before = 1)
+})
+
+#5.3 Publication-ready OR forest plot (salient contrasts; linear scale)
+#5.3.1 Salient outcomes to display for specificity vs transdiagnostic signal
+salient_outs <- c(
+  "any_bsd",
+  "dx_other_any",
+  "bsd_plus_other_vs_nodx",
+  "bsd_plus_vs_other_only"
+)
+
+salient_labs <- c(
+  any_bsd = "Any BSD",
+  dx_other_any = "Any Other Dx",
+  bsd_plus_other_vs_nodx = "BSD + Other Dx vs No Dx",
+  bsd_plus_vs_other_only = "BSD + Other Dx vs Other Dx only"
+)
+
+wave_labs <- c(
+  "ses-02A" = "Year-2",
+  "ses-04A" = "Year-4",
+  "ses-06A" = "Year-6"
+)
+
+#5.3.2 Prep plotting df
+or_plot_df <- or_tables %>%
+  dplyr::filter(outcome %in% salient_outs) %>%
+  dplyr::mutate(
+    out_lab = dplyr::recode(outcome, !!!salient_labs),
+    wave_pretty = dplyr::recode(as.character(wave), !!!wave_labs),
+    out_lab = factor(out_lab, levels = salient_labs[salient_outs]),
+    wave_pretty = factor(wave_pretty, levels = unname(wave_labs))
+  )
+
+#5.3.3 Visual params (aligned to prior purple)
+dot_color <- "#7F3C8D"
+ci_linewidth <- 0.35
+cap_linewidth <- 0.35
+dot_size <- 1.8
+arrow_len_mm <- 1.2
+cap_y <- 1e-7
+
+#5.3.4 Linear axis limits (truncate with arrows if CI exceeds)
+x_min <- 0
+x_max <- 20
+x_brk <- c(0, 1, 2, 5, 10, 15, 20)
+
+or_plot_df <- or_plot_df %>%
+  dplyr::mutate(
+    x_low_plot  = pmax(or_lcl, x_min),
+    x_high_plot = pmin(or_ucl, x_max),
+    trunc_right = or_ucl > x_max + 1e-10,
+    trunc_left  = or_lcl < x_min - 1e-10,
+    x_or_plot   = pmin(pmax(or, x_min), x_max)
+  )
+
+seg_ok <- dplyr::filter(or_plot_df, !trunc_right & !trunc_left)
+seg_right <- dplyr::filter(or_plot_df, trunc_right & !trunc_left)
+seg_left <- dplyr::filter(or_plot_df, trunc_left & !trunc_right)
+
+#5.3.5 Theme helper (no gridlines; dashed ref at OR=1)
+jamafy_forest <- function(base_size = 10,
+                          strip_size = 9,
+                          axis_text_x_size = 8,
+                          axis_title_x_size = 9,
+                          tick_len_pt = 3,
+                          tick_color = "grey35",
+                          col_spacing_pt = 14,
+                          row_spacing_pt = 3) {
+  ggplot2::theme_minimal(base_size = base_size) +
+    ggplot2::theme(
+      panel.grid.major = ggplot2::element_blank(),
+      panel.grid.minor = ggplot2::element_blank(),
+      axis.title.y = ggplot2::element_blank(),
+      axis.text.y = ggplot2::element_blank(),
+      axis.ticks.y = ggplot2::element_blank(),
+      axis.title.x = ggplot2::element_text(size = axis_title_x_size, margin = ggplot2::margin(t = 6)),
+      axis.text.x = ggplot2::element_text(size = axis_text_x_size),
+      axis.ticks.x = ggplot2::element_line(color = tick_color, linewidth = 0.3),
+      axis.ticks.length = grid::unit(tick_len_pt, "pt"),
+      strip.placement = "outside",
+      strip.text.x = ggplot2::element_text(size = strip_size, face = "bold", margin = ggplot2::margin(b = 2)),
+      strip.text.y.left = ggplot2::element_text(size = strip_size, face = "bold", angle = 0, margin = ggplot2::margin(r = 6)),
+      strip.background = ggplot2::element_blank(),
+      panel.spacing.x = grid::unit(col_spacing_pt, "pt"),
+      panel.spacing.y = grid::unit(row_spacing_pt, "pt"),
+      legend.position = "none",
+      plot.title = ggplot2::element_text(size = 11, face = "bold", hjust = 0, margin = ggplot2::margin(b = 6))
+    )
+}
+
+#5.3.6 Build forest plot (linear OR axis)
+p_or_salient <- ggplot2::ggplot(or_plot_df, ggplot2::aes(y = 0)) +
+  ggplot2::geom_vline(xintercept = 1.0, linetype = 2, linewidth = 0.4, color = "grey40") +
+  ggplot2::geom_segment(
+    data = seg_ok,
+    ggplot2::aes(x = x_low_plot, xend = x_high_plot, y = 0, yend = 0),
+    linewidth = ci_linewidth, color = "black"
+  ) +
+  ggplot2::geom_segment(
+    data = seg_right,
+    ggplot2::aes(x = x_low_plot, xend = x_high_plot, y = 0, yend = 0),
+    linewidth = ci_linewidth, color = "black",
+    arrow = grid::arrow(type = "closed", length = grid::unit(arrow_len_mm, "mm"))
+  ) +
+  ggplot2::geom_segment(
+    data = seg_left,
+    ggplot2::aes(x = x_high_plot, xend = x_low_plot, y = 0, yend = 0),
+    linewidth = ci_linewidth, color = "black",
+    arrow = grid::arrow(type = "closed", length = grid::unit(arrow_len_mm, "mm"))
+  ) +
+  ggplot2::geom_segment(
+    data = dplyr::filter(or_plot_df, !trunc_left),
+    ggplot2::aes(x = x_low_plot, xend = x_low_plot, y = -cap_y, yend = cap_y),
+    linewidth = cap_linewidth, color = "black"
+  ) +
+  ggplot2::geom_segment(
+    data = dplyr::filter(or_plot_df, !trunc_right),
+    ggplot2::aes(x = x_high_plot, xend = x_high_plot, y = -cap_y, yend = cap_y),
+    linewidth = cap_linewidth, color = "black"
+  ) +
+  ggplot2::geom_point(ggplot2::aes(x = x_or_plot), size = dot_size, color = dot_color) +
+  ggplot2::scale_x_continuous(limits = c(x_min, x_max), breaks = x_brk) +
+  ggplot2::scale_y_continuous(NULL, breaks = NULL, limits = c(-0.05, 0.05), expand = ggplot2::expansion(mult = 0)) +
+  ggplot2::facet_grid(
+    rows = ggplot2::vars(out_lab),
+    cols = ggplot2::vars(wave_pretty),
+    switch = "y"
+  ) +
+  ggplot2::labs(
+    title = "Higher- vs Lower-Risk Cluster: Odds Ratios by Wave (Salient Comparisons)",
+    x = "Odds Ratio (Higher-Risk vs Lower-Risk)"
+  ) +
+  jamafy_forest()
+
+print(p_or_salient)
+save_fig(p_or_salient, "GEE_OR_Salient_Forest.png", width = 7.2, height = 4.8, dpi = 720)
+
+if (nrow(or_tables) == 0) {
+  stop("No models fit successfully; OR table is empty. Fix model fitting errors above first.")
+}
+
+knitr::kable(or_tables %>% arrange(outcome, wave),
+             caption = "GEE: Cluster OR (High-Risk vs Low-Risk) by wave (emmeans on link scale)",
+             digits = 3) %>% kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+readr::write_csv(or_tables, file.path(out_dir, "tables", "gee_or_by_wave.csv"))
+
+#5.4 Extract predicted probabilities by wave for plotting
+prob_tables <- imap_dfr(mods, function(mod, nm) {
+  if (is.null(mod))
+    return(NULL)
+  prob_by_wave_emm(mod) %>% mutate(outcome = nm, .before = 1)
+})
+
+#5.4 Publication-ready predicted probability plot (key outcomes; Higher-Risk in purple)
+#5.4.1 Keep only outcomes with clean marginal prevalence interpretation
+prob_plot_df <- prob_tables %>%
+  dplyr::filter(outcome %in% c("any_bsd", "dx_other_any")) %>%
+  dplyr::mutate(
+    out_lab = dplyr::recode(outcome,
+      "any_bsd" = "Any BSD",
+      "dx_other_any" = "Any Other Dx"
+    ),
+    wave_pretty = dplyr::recode(as.character(wave),
+      "ses-02A" = "Year-2",
+      "ses-04A" = "Year-4",
+      "ses-06A" = "Year-6"
+    ),
+    out_lab = factor(out_lab, levels = c("Any BSD", "Any Other Dx")),
+    wave_pretty = factor(wave_pretty, levels = c("Year-2", "Year-4", "Year-6")),
+    cluster = factor(cluster, levels = c("Lower-Risk", "Higher-Risk"))
+  )
+
+#5.4.2 Colors (match project purple)
+risk_cols <- c("Lower-Risk" = "grey55", "Higher-Risk" = "#7F3C8D")
+
+#5.4.3 Theme helper (no gridlines)
+jamafy_prob <- function(base_size = 10,
+                        strip_size = 9,
+                        axis_text_size = 8,
+                        axis_title_size = 9) {
+  ggplot2::theme_minimal(base_size = base_size) +
+    ggplot2::theme(
+      panel.grid.major = ggplot2::element_blank(),
+      panel.grid.minor = ggplot2::element_blank(),
+      strip.text = ggplot2::element_text(size = strip_size, face = "bold"),
+      strip.background = ggplot2::element_blank(),
+      axis.title = ggplot2::element_text(size = axis_title_size),
+      axis.text = ggplot2::element_text(size = axis_text_size),
+      legend.position = "bottom",
+      legend.title = ggplot2::element_blank(),
+      plot.title = ggplot2::element_text(size = 11, face = "bold", hjust = 0, margin = ggplot2::margin(b = 6))
+    )
+}
+
+#5.4.4 Build plot
+p_prob_pub <- prob_plot_df %>%
+  ggplot2::ggplot(ggplot2::aes(x = wave_pretty, y = p, group = cluster, color = cluster, fill = cluster)) +
+  ggplot2::geom_ribbon(ggplot2::aes(ymin = lcl, ymax = ucl), alpha = 0.15, colour = NA) +
+  ggplot2::geom_line(linewidth = 0.85) +
+  ggplot2::geom_point(size = 2.0) +
+  ggplot2::facet_wrap(~ out_lab, scales = "free_y") +
+  ggplot2::scale_color_manual(values = risk_cols) +
+  ggplot2::scale_fill_manual(values = risk_cols) +
+  ggplot2::labs(
+    title = "Predicted Probability by Risk Cluster Across Waves (Key Outcomes)",
+    x = "Wave",
+    y = "Predicted Probability"
+  ) +
+  jamafy_prob()
+
+print(p_prob_pub)
+save_fig(p_prob_pub, "GEE_PredProb_KeyOutcomes.png", width = 7.2, height = 4.2, dpi = 720)
+
+readr::write_csv(prob_tables,
+                 file.path(out_dir, "tables", "gee_predicted_prob_by_wave.csv"))
+```
+
+## 6. Optional: Nominal Multinomial GEE for dx_group4 (if available)
+
+If `multgee` is installed in the container, this section fits a *single* nominal GEE with `dx_group4` as the response (baseline category = "No Dx"). This is closer to the “true” multiclass problem than the pairwise binary contrasts above.
+
+```{r multinom_gee, echo = FALSE, warning = FALSE}
+if (has_multgee) {
+
+  #6.1 Prep data: keep only non-missing dx_group4
+  dx_dat <- dat_an %>%
+    filter(!is.na(dx_group4)) %>%
+    mutate(
+      dx_group4 = fct_relevel(dx_group4, "No Dx (Dx-set of interest)"),
+      y = as.integer(dx_group4), # 1..K
+      wave = fct_relevel(wave, params$wave_ref)
+    )
+
+  #6.2 Covariates: use only those present
+  covars <- params$covars
+  covars <- covars[covars %in% names(dx_dat)]
+  rhs <- paste(c("cluster * wave", covars), collapse = " + ")
+  fml <- as.formula(paste0("y ~ ", rhs))
+
+  suppressPackageStartupMessages(library(multgee))
+
+  #6.3 Fit nominal GEE
+  mod_mnom <- tryCatch(
+    multgee::nomLORgee(
+      formula = fml,
+      id = participant_id,
+      repeated = wave,
+      data = dx_dat,
+      LORstr = "independence"
+    ),
+    error = function(e) e
+  )
+
+  if (inherits(mod_mnom, "error")) {
+    cat("
+[Multinomial GEE] FAILED:
+")
+    cat(mod_mnom$message, "
+")
+  } else {
+    cat("
+[Multinomial GEE] Fit succeeded.
+")
+    print(summary(mod_mnom))
+    saveRDS(mod_mnom, file.path(out_dir, "rds", "dx_group4_multgee_nomLORgee.rds"))
+  }
+
+} else {
+  cat("
+(multgee not installed in this environment - skipping multinomial GEE section.)
+")
+}
+
+```
+
+## 7. Notes on Interpretation
+
+- any_bsd: aligns with the prior BD-occurrence framing (binary BSD signal).
+- dx_other_any / other_only_vs_nodx: if clusters show similar magnitude effects here, that supports a *transdiagnostic* risk profile.
+- bsd_only_vs_nodx: interpret cautiously (small n, especially at ses-02A). This model is best treated as exploratory.
+
+## Session info
+
+```{r session_info, echo = FALSE}
+sessionInfo()
+```

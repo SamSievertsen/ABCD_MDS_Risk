@@ -26,15 +26,19 @@ library(dplyr)
 library(tidyr)
 library(skimr)
 library(ggplot2)
+library(here)
 
 # Set env options
 options(scipen = 999, digits = 8)
 set.seed(123)
 
 # Paths
-raw_path <- "../../../data/data_raw/dataset.csv"
-outcome_path <- "../../../data/data_processed/outcome_variable_data.csv"
-out_path <- "../../../data/data_processed/supplementary_outcome_variable_data.csv"
+REPO <- here()
+proc_dir <- file.path(REPO, "data", "data_processed")
+kproto_file <- file.path(proc_dir, "kproto_results", sprintf("kproto_%s.rds", "z_score"))
+raw_path <- file.path(REPO, "data", "data_raw", "dataset.csv")
+outcome_path <- file.path(proc_dir, "outcome_variable_data.csv")
+out_path <- file.path(proc_dir, "supplementary_outcome_variable_data.csv")
 
 # Read in raw data
 raw_data <- read.csv(raw_path)
@@ -52,6 +56,35 @@ outcome_data <- read.csv(outcome_path)
 # Merge previously generated outcomes into the raw dataset
 dat <- raw_data %>%
   left_join(outcome_data, by = c("participant_id", "session_id"))
+
+# Read in cluster label inputs
+kp_list <- readRDS(kproto_file)
+pos <- 1
+kp <- kp_list[[pos]]
+
+# Create a function to extract participant_id and corresponding cluster labels from kproto$data 
+get_cluster_labels <- function(kp, k_value) {
+  dat <- as.data.frame(kp$data)
+  
+  # Prioritize rownames of the kp obj first
+  if (!is.null(rownames(dat)) && all(nzchar(rownames(dat)))) {
+    ids <- rownames(dat)
+  } else if ("participant_id" %in% names(dat)) {
+    ids <- as.character(dat$participant_id)
+  } else {
+    stop("Could not infer participant_id for cluster labels from kproto$data. ",
+         "Ensure rownames carry IDs or participant_id is a column.")
+  }
+  cl <- factor(kp$cluster, levels = seq_len(k_value), labels = paste0("C", seq_len(k_value)))
+  tibble(participant_id = as.character(ids), cluster = cl)
+}
+
+# Extract cluster labels
+labels_tbl <- get_cluster_labels(kp, 2)
+
+# Merge cluster labels into dataset to be wrangled
+dat <- dat %>% 
+  left_join(labels_tbl, by = "participant_id")
 
 ```
 
@@ -207,7 +240,7 @@ if (length(missing_cols) > 0) {
 
 ```
 
-## 3. Helper functions + code normalization
+## Helper functions + code normalization
 
 ```{r helper functions, echo = FALSE, warning = FALSE}
 
@@ -232,7 +265,7 @@ mk_umbrella_dx <- function(df, vars) {
 
 ```
 
-## 4. Create umbrella dx variables + 4-group categorical variable
+## Create umbrella dx variables + 4-group categorical variable
 
 ```{r create dx, echo = FALSE, warning = FALSE}
 
@@ -313,9 +346,83 @@ dat2 <- dat2 %>%
         "Other Dx only (no BSD)"))
   )
 
+#4.5 Create covariates needed for the supplementary occurrence analyses
+#4.5.1 Establish ordered wave levels + a numeric wave index
+wave_levels <- c("ses-00A", "ses-01A", "ses-02A", "ses-03A", "ses-04A", "ses-05A", "ses-06A")
+
+#4.5.2 Create cleaned covariates to be used in analyses
+dat2 <- dat2 %>%
+  mutate(
+
+    #4.5.2.1 Ensure session_id is ordered
+    session_id = factor(session_id, levels = wave_levels),
+
+    #4.5.2.2 Numeric wave index (00, 01, 02...) extracted from session_id
+    wave_num = suppressWarnings(as.numeric(substr(as.character(session_id), 5, 6))),
+
+    #4.5.2.3 Time-varying age covariate
+    age_wave = suppressWarnings(as.numeric(ab_g_dyn__visit_age)),
+
+    #4.5.2.4 Grand-mean center age across all observed age_wave values
+    age_wave_gmc = age_wave - mean(age_wave, na.rm = TRUE),
+
+    #4.5.2.5 Static covariates
+    #4.5.2.5.1 Family ID
+    family_id = as.character(ab_g_stc__design_id__fam),
+
+    #4.5.2.5.2 Sex at birth
+    sex = case_when(
+      ab_g_stc__cohort_sex %in% c(1, "1", "M", "Male") ~ "Male",
+      ab_g_stc__cohort_sex %in% c(2, "2", "F", "Female") ~ "Female",
+      ab_g_stc__cohort_sex %in% c(3, "3", "Other", "Intersex") ~ "Intersex",
+      TRUE ~ as.character(ab_g_stc__cohort_sex)),
+
+    #4.5.2.5.3 Site (can fluctuate between visits but is rare)
+    site_factor = factor(paste0("Site_", as.character(ab_g_dyn__design_site))),
+
+    #4.5.2.5.4 Race/ethnicity (not to be used as covar)
+    race_ethnicity = factor(as.character(ab_g_stc__cohort_ethnrace__meim))) %>%
+  group_by(participant_id) %>%
+  mutate(
+
+    #4.5.2.6 Person-mean age + within-person deviation in case we later want age decomposition
+    age_wave_person_mean = mean(age_wave, na.rm = TRUE),
+    age_wave_cwc = age_wave - age_wave_person_mean) %>%
+  ungroup() %>%
+  mutate(
+
+    #4.5.2.7 Between-person age component
+    age_wave_between = age_wave_person_mean - mean(age_wave, na.rm = TRUE)
+  )
+
+#4.6 Create baseline diagnosis status covariates (to control for pre-existing dx at cluster formation)
+#4.6.1 Extract baseline statuses at ses-00A
+baseline_status_tbl <- dat2 %>%
+  filter(session_id == "ses-00A") %>%
+  select(
+    participant_id,
+    baseline_any_bsd = any_bsd,
+    baseline_dx_other_any = dx_other_any,
+    baseline_dx_group4_code = dx_group4_code,
+    baseline_dx_group4 = dx_group4) %>%
+  distinct(participant_id, .keep_all = TRUE) %>%
+  mutate(
+
+    #4.6.1.1 Binary baseline dx flag: any dx in the set of interest (BSD and/or other dx umbrellas)
+    baseline_any_dx = case_when(
+      is.na(baseline_dx_group4_code) ~ NA_real_,
+      baseline_dx_group4_code == 1 ~ 0,
+      baseline_dx_group4_code %in% c(2, 3, 4) ~ 1,
+      TRUE ~ NA_real_)
+  )
+
+#4.6.2 Attach baseline statuses back to all waves
+dat2 <- dat2 %>%
+  left_join(baseline_status_tbl, by = "participant_id")
+
 ```
 
-## 5. Quick QC tables
+## Quick QC tables
 
 ```{r QC check, echo = FALSE, warning = FALSE}
 
@@ -326,30 +433,42 @@ if (!("any_bsd" %in% names(dat2))) {
 }
 
 #5.2 Prevalence by wave/session
-#5.2.1 Log the prevalence of dx by wave
-qc_by_wave <- dat2 %>%
+#5.2.0 Define analytic waves (for this project, these are the waves we will actually analyze)
+analytic_waves <- c("ses-00A", "ses-02A", "ses-04A", "ses-06A")
+
+#5.2.1 Create a QC-only dataset restricted to analytic waves (prevents NA-heavy intermediate waves from dominating output)
+dat2_qc <- dat2 %>%
+  dplyr::filter(session_id %in% analytic_waves)
+
+#5.2.2 Log prevalence with explicit denominators (prevents NaN when a wave has no observed data)
+qc_by_wave <- dat2_qc %>%
   group_by(session_id) %>%
   summarise(
     n = n(),
-    any_bsd_pct = mean(any_bsd == 1, na.rm = TRUE),
-    other_dx_any_pct = mean(dx_other_any == 1, na.rm = TRUE),
-    group4_na_pct = mean(is.na(dx_group4_code)),
-    .groups = "drop")
+    n_any_bsd_nonmiss = sum(!is.na(any_bsd)),
+    any_bsd_pct = if_else(n_any_bsd_nonmiss > 0, mean(any_bsd == 1, na.rm = TRUE), NA_real_),
+    n_other_any_nonmiss = sum(!is.na(dx_other_any)),
+    other_dx_any_pct = if_else(n_other_any_nonmiss > 0, mean(dx_other_any == 1, na.rm = TRUE), NA_real_),
+    n_group4_nonmiss = sum(!is.na(dx_group4_code)),
+    group4_na_pct = 1 - (n_group4_nonmiss / n),
+    .groups = "drop"
+  )
 
-#5.2.2 Print a kable outlining dx prevalence per wave
-knitr::kable(qc_by_wave, caption = "QC: BSD / Other Dx / Group4 NA by Session", digits = 3) %>%
+#5.2.3 Print QC prevalence table
+knitr::kable(qc_by_wave, caption = "QC: BSD / Other Dx / Group4 Missingness (analytic waves only)", digits = 3) %>%
   kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
 
-#5.3 Group4 distribution by wave/session
-#5.3.1 Log the composition of the 4 group categorical var by wave
-group_dist <- dat2 %>%
+#5.3 Group4 distribution by wave/session (exclude NA rows from the distribution table)
+#5.3.1 Log the composition of the 4-group categorical var by wave (observed only)
+group_dist <- dat2_qc %>%
+  dplyr::filter(!is.na(dx_group4)) %>%
   count(session_id, dx_group4) %>%
   group_by(session_id) %>%
   mutate(pct = n / sum(n)) %>%
   ungroup()
 
-#5.3.2 Pribt a kable outlining the composition of the 4 group categorical var by wave
-knitr::kable(group_dist, caption = "QC: dx_group4 Distribution by Session", digits = 3) %>%
+#5.3.2 Print distribution table
+knitr::kable(group_dist, caption = "QC: dx_group4 Distribution by Session (observed only; analytic waves)", digits = 3) %>%
   kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
 
 #5.4 Skim just the derived columns
@@ -364,7 +483,10 @@ derived_cols <- c(
   "dx_group4")
 
 #5.4.2 Check relevant column distributions with skimr
-suppressWarnings(skimr::skim_without_charts(dat2 %>% dplyr::select(any_of(derived_cols))))
+suppressWarnings(skimr::skim_without_charts(
+  dat2 %>%
+    filter(session_id %in% analytic_waves) %>%
+    dplyr::select(any_of(derived_cols))))
 
 #5.5 Join integrity checks (protect against unintended row duplication from the left_join)
 #5.5.1 Check for duplicate keys in raw_data
@@ -435,8 +557,7 @@ dat2 <- dat2 %>%
     dx_n_other = rowSums(dplyr::select(., all_of(other_dx_umbrella_cols)) == 1, na.rm = TRUE),
     dx_n_other_nonmiss = rowSums(!is.na(dplyr::select(., all_of(other_dx_umbrella_cols)))))
 
-#5.7.2 Verify group logic has no internal contradictions
-#       - "No Dx" + "BSD only" groups should have dx_n_other == 0 by construction
+#5.7.2 Verify group logic has no internal contradictions. "No Dx" + "BSD only" groups should have dx_n_other == 0 by construction
 contradictions <- dat2 %>%
   filter(dx_group4 %in% c("No Dx (Dx-set of interest)", "BSD only")) %>%
   filter(dx_n_other > 0)
@@ -447,9 +568,9 @@ if (nrow(contradictions) > 0) {
                select(participant_id, session_id, dx_group4, dx_n_other, all_of(other_dx_umbrella_cols)), 10))
 }
 
-#5.7.3 Table: overall umbrella dx prevalence by session (with denominators)
-dx_prev_overall <- dat2 %>%
-  select(session_id, all_of(other_dx_umbrella_cols)) %>%
+#5.7.3 Create a table with the overall umbrella dx prevalence by session (with denominators; analytic waves only)
+dx_prev_overall <- dat2_qc %>%
+  dplyr::select(session_id, all_of(other_dx_umbrella_cols)) %>%
   pivot_longer(cols = all_of(other_dx_umbrella_cols),
                names_to = "umbrella_dx",
                values_to = "val") %>%
@@ -459,18 +580,17 @@ dx_prev_overall <- dat2 %>%
     n_yes = sum(val == 1, na.rm = TRUE),
     pct_yes = if_else(n_nonmiss > 0, n_yes / n_nonmiss, NA_real_),
     .groups = "drop") %>%
+  dplyr::filter(n_nonmiss > 0) %>%
   arrange(session_id, desc(pct_yes))
 
-knitr::kable(
-  dx_prev_overall,
-  caption = "QC: Umbrella Dx Prevalence by Session (overall; denominators exclude NA)",
-  digits = 3) %>%
+#5.7.3.1 Print a kable of the overall umbrella dx prevalence by session
+knitr::kable(dx_prev_overall, caption = "QC: Umbrella Dx Prevalence by Session (overall; denominators exclude NA)", digits = 3) %>%
   kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
 
-#5.7.4 Table: umbrella dx prevalence within dx_group4 strata (focus on strata where other dx should exist)
-dx_prev_by_group <- dat2 %>%
-  filter(dx_group4 %in% c("BSD + other Dx", "Other Dx only (no BSD)")) %>%
-  select(session_id, dx_group4, all_of(other_dx_umbrella_cols)) %>%
+#5.7.4 Create a table of the umbrella dx prevalence within dx_group4 strata (focus on strata where other dx should exist)
+dx_prev_by_group <- dat2_qc %>%
+  dplyr::filter(dx_group4 %in% c("BSD + other Dx", "Other Dx only (no BSD)")) %>%
+  dplyr::select(session_id, dx_group4, all_of(other_dx_umbrella_cols)) %>%
   pivot_longer(cols = all_of(other_dx_umbrella_cols),
                names_to = "umbrella_dx",
                values_to = "val") %>%
@@ -480,15 +600,17 @@ dx_prev_by_group <- dat2 %>%
     n_yes = sum(val == 1, na.rm = TRUE),
     pct_yes = if_else(n_nonmiss > 0, n_yes / n_nonmiss, NA_real_),
     .groups = "drop") %>%
+  dplyr::filter(n_nonmiss > 0) %>%
   arrange(session_id, dx_group4, desc(pct_yes))
 
+#5.7.4.1 Print a kable of the umbrella dx prevalence within dx_group4 strata
 knitr::kable(
   dx_prev_by_group,
   caption = "QC: Umbrella Dx Prevalence by Session within Other-Dx Strata (denominators exclude NA)",
   digits = 3) %>%
   kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
 
-#5.7.5 Table: distribution of number of comorbidity umbrellas endorsed (dx_n_other) by session + dx_group4
+#5.7.5 Create a table of distribution of number of comorbidity umbrellas endorsed (dx_n_other) by session + dx_group4
 dx_count_dist <- dat2 %>%
   filter(dx_group4 %in% c("BSD + other Dx", "Other Dx only (no BSD)")) %>%
   group_by(session_id, dx_group4, dx_n_other) %>%
@@ -497,32 +619,215 @@ dx_count_dist <- dat2 %>%
   mutate(pct = n / sum(n)) %>%
   ungroup()
 
+#5.7.5.1 Print the kable of umbrella comorbidity distributions
 knitr::kable(dx_count_dist, caption = "QC: Number of Umbrella Dx Endorsed among Other-Dx Strata", digits = 3) %>%
   kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
 
-#5.7.6 Plot: umbrella dx prevalence within the two “other dx present” strata, faceted by session (this is the direct "what’s driving dx_other_any" visual)
+#5.7.6 Plot umbrella dx prevalence within the two "other dx present" strata (analytic waves; observed only)
+#5.7.6.1 Create a dataframe for the umbrella dx prevalence plot
 dx_prev_plot_dat <- dx_prev_by_group %>%
-  mutate(pct_yes = pct_yes * 100)
+  mutate(pct_yes = pct_yes * 100) %>%
+  dplyr::filter(!is.na(pct_yes))
 
+#5.7.6.2 Plot the umbrella dx prevalence
 ggplot(dx_prev_plot_dat, aes(x = umbrella_dx, y = pct_yes)) +
   geom_col() +
   coord_flip() +
   facet_grid(dx_group4 ~ session_id) +
   labs(
-    title = "Umbrella Dx Prevalence within Other-Dx Strata (by Session)",
+    title = "Umbrella Dx Prevalence within Other-Dx Strata (analytic waves; observed only)",
     x = "Umbrella Dx",
-    y = "Percent endorsed (among non-missing)")
+    y = "Percent endorsed (among non-missing)"
+  )
 
+#5.8 Characterize missingness for dx_group4 on analytic waves
+#5.8.1 Create a vector of which waves we are interested in characterizing
+analytic_waves <- c("ses-00A","ses-02A","ses-04A","ses-06A")
+
+#5.8.2 Create a table outlining why variables are missing at each timepoint of interest
+dx_group4_na_reason <- dat2 %>%
+  filter(session_id %in% analytic_waves) %>%
+  mutate(
+    any_bsd_na = is.na(any_bsd),
+    other_any_na = is.na(dx_other_any),
+    group4_na = is.na(dx_group4_code),
+    na_reason = case_when(
+      !group4_na ~ "Observed",
+      any_bsd_na & other_any_na ~ "Missing: any_bsd + dx_other_any",
+      any_bsd_na ~ "Missing: any_bsd",
+      other_any_na ~ "Missing: dx_other_any",
+      TRUE ~ "Missing: other")) %>%
+  count(session_id, na_reason) %>%
+  group_by(session_id) %>%
+  mutate(pct = n / sum(n)) %>%
+  ungroup()
+
+#5.8.3 Print a kable outlining why variables are missing at each timepoint of interest
+knitr::kable(dx_group4_na_reason, caption = "QC: Reasons dx_group4 is Missing (analytic waves only)", digits = 3) %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+#5.9 Check top comorbidity combinations among BSD cases (by wave) to sanity-check patterns. To note, NA dx values are simply not counted as present in the combo string
+bsd_combo_top <- dat2_qc %>%
+  dplyr::filter(any_bsd == 1) %>%
+  rowwise() %>%
+  mutate(
+    dx_combo = {
+      vals <- c_across(all_of(other_dx_umbrella_cols))
+      n_nonmiss <- sum(!is.na(vals))
+      idx_yes <- which(vals == 1)
+      
+      if (n_nonmiss == 0) {
+        NA_character_
+      } else if (length(idx_yes) == 0) {
+        "BSD only (no other dx endorsed among observed)"
+      } else {
+        paste(other_dx_umbrella_cols[idx_yes], collapse = " + ")
+      }
+    }
+  ) %>%
+  ungroup() %>%
+  dplyr::filter(!is.na(dx_combo)) %>%
+  count(session_id, dx_combo, sort = TRUE) %>%
+  group_by(session_id) %>%
+  mutate(pct = n / sum(n)) %>%
+  slice_max(order_by = n, n = 10, with_ties = FALSE) %>%
+  ungroup()
+
+#5.9.1 Print top comorbidity combo kable
+knitr::kable(bsd_combo_top, caption = "QC: Top 10 Comorbidity Combinations Among BSD Cases (analytic waves; observed only)", digits = 3) %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+#5.10 Comorbidity structure QC for "Other Dx only (no BSD)" (analytic waves; observed only)
+#5.10.1 Top combinations among Other-Dx-only group
+other_only_combo_top <- dat2_qc %>%
+  dplyr::filter(dx_group4 == "Other Dx only (no BSD)") %>%
+  rowwise() %>%
+  mutate(
+    dx_combo = {
+      vals <- c_across(all_of(other_dx_umbrella_cols))
+      n_nonmiss <- sum(!is.na(vals))
+      idx_yes <- which(vals == 1)
+      
+      if (n_nonmiss == 0) {
+        NA_character_
+      } else if (length(idx_yes) == 0) {
+        "Other-Dx-only, but no umbrella dx endorsed (among observed)"
+      } else {
+        paste(other_dx_umbrella_cols[idx_yes], collapse = " + ")
+      }
+    }
+  ) %>%
+  ungroup() %>%
+  dplyr::filter(!is.na(dx_combo)) %>%
+  count(session_id, dx_combo, sort = TRUE) %>%
+  group_by(session_id) %>%
+  mutate(pct = n / sum(n)) %>%
+  slice_max(order_by = n, n = 10, with_ties = FALSE) %>%
+  ungroup()
+
+#5.10.2 Print a kable of top combinations among Other-Dx-only group
+knitr::kable(other_only_combo_top, caption = "QC: Top 10 Comorbidity Combinations Among Other-Dx-Only Group (analytic waves; observed only)", digits = 3) %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+#5.10.3 Function to calculate top dyads (pairs) among Other-Dx-only group
+calc_top_dyads <- function(df, dx_cols, top_k = 15) {
+  pairs <- combn(dx_cols, 2, simplify = FALSE)
+  out <- lapply(pairs, function(p) {
+    a <- df[[p[1]]]
+    b <- df[[p[2]]]
+    n_nonmiss <- sum(!is.na(a) & !is.na(b))
+    n_both <- sum(a == 1 & b == 1, na.rm = TRUE)
+    tibble(
+      dx1 = p[1],
+      dx2 = p[2],
+      n_nonmiss = n_nonmiss,
+      n_both = n_both,
+      pct_both = if_else(n_nonmiss > 0, n_both / n_nonmiss, NA_real_))}) %>%
+    bind_rows() %>%
+    dplyr::filter(n_nonmiss > 0) %>%
+    arrange(desc(pct_both), desc(n_both)) %>%
+    slice_head(n = top_k)
+  out
+}
+
+#5.10.4 Create a table of the cleaned top dyads (no BSD)
+other_only_top_dyads <- dat2_qc %>%
+  dplyr::filter(dx_group4 == "Other Dx only (no BSD)") %>%
+  group_by(session_id) %>%
+  group_modify(~ calc_top_dyads(.x, other_dx_umbrella_cols, top_k = 12)) %>%
+  ungroup()
+
+#5.10.5 Print a kable outlining the cleaned top dyads (no BSD) 
+knitr::kable(other_only_top_dyads, caption = "QC: Top Umbrella Dx Dyads in Other-Dx-Only Group (analytic waves; observed only)", digits = 3) %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
 
 ```
 
-## 6. Write supplementary processed dataset
+## Write supplementary processed dataset
 
 ```{r write data, echo = FALSE, warning = FALSE}
 
 #6.1 Only retain essential columns for the supplementary analysis
-supplementary_outcome_data <- dat2 %>% 
-  dplyr::select(participant_id, session_id, ab_g_dyn__design_site, ab_g_dyn__visit_age, ab_g_stc__cohort_ethnrace__meim, ab_g_stc__cohort_sex, ab_g_stc__design_id__fam, si_passive, si_active, sa, nssi, bipolar_I, bipolar_II, bd_nos, any_bsd, dx_adhd, dx_gad, dx_socanx, dx_sepanx, dx_panic, dx_ocd, dx_dmdd, dx_mdd, dx_pdd, dx_ptsd, dx_odd, dx_cd, dx_other_any, dx_group4_code, dx_group4)
+supplementary_outcome_data <- dat2 %>%
+  dplyr::select(
+
+    #6.1.1 Subject ID keys
+    participant_id,
+    session_id,
+    wave_num,
+
+    #6.1.2 Covariates (raw + cleaned)
+    cluster,
+    ab_g_dyn__design_site,
+    ab_g_dyn__visit_age,
+    ab_g_stc__cohort_ethnrace__meim,
+    ab_g_stc__cohort_sex,
+    ab_g_stc__design_id__fam,
+    site_factor,
+    race_ethnicity,
+    sex,
+    family_id,
+    age_wave,
+    age_wave_gmc,
+    age_wave_person_mean,
+    age_wave_cwc,
+    age_wave_between,
+
+    #6.1.3 Baseline-status covariates
+    baseline_any_dx,
+    baseline_any_bsd,
+    baseline_dx_other_any,
+    baseline_dx_group4_code,
+    baseline_dx_group4,
+
+    #6.1.4 Suicidality outcomes
+    si_passive,
+    si_active,
+    sa,
+    nssi,
+
+    #6.1.5 BD outcomes
+    bipolar_I,
+    bipolar_II,
+    bd_nos,
+    any_bsd,
+
+    #6.1.6 Umbrella dx + composites + 4-group variable
+    dx_adhd,
+    dx_gad,
+    dx_socanx,
+    dx_sepanx,
+    dx_panic,
+    dx_ocd,
+    dx_dmdd,
+    dx_mdd,
+    dx_pdd,
+    dx_ptsd,
+    dx_odd,
+    dx_cd,
+    dx_other_any,
+    dx_group4_code,
+    dx_group4)
 
 #6.2 Write the full dataset (raw + validated outcomes + derived dx vars)
 write.csv(supplementary_outcome_data, out_path, row.names = FALSE)
