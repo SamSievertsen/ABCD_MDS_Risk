@@ -72,15 +72,16 @@ suppressPackageStartupMessages({
   library(broom)
 })
 
-# Optional multinomial GEE (only used if installed)
+# Multinomial GEE (only used if installed)
 has_multgee <- requireNamespace("multgee", quietly = TRUE)
+
 ```
 
 ## 1. Read + Merge Datasets
 
 ```{r read_data, echo = FALSE, warning = FALSE}
 
-#1.1 Resolve paths
+#1.1 List paths
 panel_path <- here::here(params$analysis_panel_rds)
 supp_path <- here::here(params$supplementary_dx_csv)
 out_dir <- here::here(params$out_dir)
@@ -112,24 +113,20 @@ if (length(missing_req_supp) > 0) {
   stop("Supplementary dx csv is missing required columns: ", paste(missing_req_supp, collapse = ", "))
 }
 
-#1.4 Create person-wave covariate frame from PANEL
-#    (critical: prevents duplicating rows from panel's long outcome structure)
+#1.4 Create person-wave covariate frame from PANEL (prevents duplicating rows from panel's long outcome structure)
 
 #1.4.1 Normalize join keys
 panel <- panel %>%
   mutate(
     participant_id = as.character(participant_id),
-    wave = as.character(wave)
-  )
+    wave = as.character(wave))
 
 supp <- supp %>%
   mutate(
     participant_id = as.character(participant_id),
-    wave = as.character(wave)
-  )
+    wave = as.character(wave))
 
-#1.4.2 Keep only columns we actually want to import from panel
-#      (cluster + covariates used in models; add others only if truly needed)
+#1.4.2 Keep only columns we actually want to import from panel (cluster + covariates used in models; add others only if truly needed)
 panel_keep <- unique(c("participant_id", "wave", "cluster", params$covars))
 panel_keep <- panel_keep[panel_keep %in% names(panel)]
 
