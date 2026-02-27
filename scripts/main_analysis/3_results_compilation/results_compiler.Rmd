@@ -3782,21 +3782,26 @@ if (!exists("su_pp_model")) {
     dplyr::select(-first_onset_row, -row_id)
 }
 
-# ---- Display helpers ----------------------------------------------------------
+#S3.3 Helper functions for display options
+#S3.3.1 Make sure cluster values are listed as desired
 coerce_cluster <- function(x) dplyr::recode(as.character(x),
   "C1"="Higher-Risk","1"="Higher-Risk","high"="Higher-Risk","higher"="Higher-Risk",
   "C2"="Lower-Risk","2"="Lower-Risk","low"="Lower-Risk","lower"="Lower-Risk",
-  .default = as.character(x)
-)
+  .default = as.character(x))
 
-time_map    <- c("ses-02A"="2y","ses-04A"="4y","ses-06A"="6y")
+#S3.3.2 Create vectors for the preferred assessment timepoint values and their temporal ordering
+time_map <- c("ses-02A"="2y","ses-04A"="4y","ses-06A"="6y")
 time_levels <- c("2y","4y","6y")
 
+#S3.3.3 Format how descriptive statistics should be displayed
+#S3.3.3.1 Mean +- SD
 fmt_mean_sd <- function(x) {
   x <- x[is.finite(x)]
   if (!length(x)) return("\u2014")
   sprintf("%.2f \u00B1 %.2f", mean(x), stats::sd(x))
 }
+
+#S3.3.3.2 N and % distributions
 fmt_n <- function(n) ifelse(is.na(n), "\u2014", format(as.integer(n), big.mark = ","))
 fmt_n_pct <- function(n, den) {
   out <- ifelse(is.na(den) | den == 0,
@@ -3805,48 +3810,47 @@ fmt_n_pct <- function(n, den) {
   as.character(out)
 }
 
-# Working frame (one row per pp interval) --------------------------------------
+#S3.4 Ensure the working person-period dataframe exists and is structured as desired
 stopifnot(exists("su_pp_model"))
 pp <- su_pp_model %>%
   dplyr::mutate(
     cluster_disp = coerce_cluster(cluster),
-    time = factor(dplyr::recode(as.character(end_wave), !!!time_map), levels = time_levels)
-  ) %>%
+    time = factor(dplyr::recode(as.character(end_wave), !!!time_map), levels = time_levels)) %>%
   dplyr::filter(!is.na(time), cluster_disp %in% c("Lower-Risk","Higher-Risk"))
 
-# ---- DEMOGRAPHICS (ever-BD set; one row per participant x wave) --------------
+#S3.5 Clean up demographics data in ever-BD set by cluster
+#S3.5.1 Collapse data to one row per person per wave to avoid duplicating across outcomes
 demo_base <- pp %>%
-  # collapse to one row per person per wave to avoid duplicating across outcomes
   dplyr::distinct(participant_id, time, cluster_disp, sex, site_factor, age_mid)
 
+#S3.5.2 Compile base demographic descriptive stats for the ever-BD person-period set by cluster
 demo_counts <- demo_base %>%
   dplyr::group_by(time, cluster_disp) %>%
   dplyr::summarise(
-    n_pp = dplyr::n(),                             # = unique participants this wave
-    n_part = dplyr::n_distinct(participant_id),    # same as n_pp by construction
+    n_pp = dplyr::n(),
+    n_part = dplyr::n_distinct(participant_id),
     age_mean_sd = fmt_mean_sd(age_mid),
-    .groups = "drop"
-  )
+    .groups = "drop")
 
+#S3.5.3 Create a formatted age in years descriptive stat row by cluster
 age_row <- demo_counts %>%
   dplyr::transmute(time, cluster_disp, Row = "Age in years, Mean (SD)", val = age_mean_sd)
 
+#S3.5.4 List the N participants at each timepoint interval by cluster
 n_rows <- demo_counts %>%
   tidyr::pivot_longer(c(n_pp, n_part), names_to = "what", values_to = "val_raw") %>%
   dplyr::mutate(
     Row = dplyr::case_when(
       what == "n_part" ~ "N (participants)",
-      what == "n_pp"   ~ "N (person-periods)"
-    ),
-    val = fmt_n(val_raw)
-  ) %>%
+      what == "n_pp" ~ "N (person-periods)"),
+    val = fmt_n(val_raw)) %>%
   dplyr::select(time, cluster_disp, Row, val)
 
+#S3.5.5 List the sex distribution by cluster
 sex_tab <- demo_base %>%
   dplyr::mutate(sex2 = dplyr::case_when(
     !is.na(sex) & sex %in% c("Male","Female") ~ as.character(sex),
-    TRUE ~ "Other/Unknown"
-  )) %>%
+    TRUE ~ "Other/Unknown")) %>%
   dplyr::distinct(time, cluster_disp, participant_id, sex2) %>%
   dplyr::count(time, cluster_disp, sex2, name = "n_sex") %>%
   dplyr::left_join(demo_counts %>% dplyr::select(time, cluster_disp, n_part), by = c("time","cluster_disp")) %>%
@@ -3855,39 +3859,40 @@ sex_tab <- demo_base %>%
   dplyr::mutate(Row = paste0("Sex at birth - ", sex2)) %>%
   dplyr::select(time, cluster_disp, Row, val)
 
+#S3.5.6 Bind all of the cluster grouped N, age, and sex descriptive stats into a single dataframe
 demo_rows_cs <- dplyr::bind_rows(n_rows, age_row, sex_tab) %>%
   dplyr::mutate(Section = "Demographics")
 
-# Totals across clusters
+#S3.6 Create total descriptive stats across whole sample (both clusters) otherwise as above
+#S3.6.1 Collapse data to one row per person per wave to avoid duplicating across outcomes
 demo_counts_tot <- demo_base %>%
   dplyr::group_by(time) %>%
   dplyr::summarise(
     n_pp = dplyr::n(),
     n_part = dplyr::n_distinct(participant_id),
     age_mean_sd = fmt_mean_sd(age_mid),
-    .groups = "drop"
-  )
+    .groups = "drop")
 
+#S3.6.2 Compile base demographic descriptive stats for the ever-BD person-period set
 n_rows_total <- demo_counts_tot %>%
   tidyr::pivot_longer(c(n_pp, n_part), names_to = "what", values_to = "val_raw") %>%
   dplyr::mutate(
     Row = dplyr::case_when(
       what == "n_part" ~ "N (participants)",
-      what == "n_pp"   ~ "N (person-periods)"
-    ),
+      what == "n_pp" ~ "N (person-periods)"),
     val = fmt_n(val_raw),
-    cluster_disp = "Total"
-  ) %>%
+    cluster_disp = "Total") %>%
   dplyr::select(time, cluster_disp, Row, val)
 
+#S3.6.3 Create a formatted age in years descriptive stat row
 age_row_total <- demo_counts_tot %>%
   dplyr::transmute(time, cluster_disp = "Total", Row = "Age in years, Mean (SD)", val = age_mean_sd)
 
+#S3.6.4 List the sex distribution by cluster
 sex_tab_total <- demo_base %>%
   dplyr::mutate(sex2 = dplyr::case_when(
     !is.na(sex) & sex %in% c("Male","Female") ~ as.character(sex),
-    TRUE ~ "Other/Unknown"
-  )) %>%
+    TRUE ~ "Other/Unknown")) %>%
   dplyr::distinct(time, participant_id, sex2) %>%
   dplyr::count(time, sex2, name = "n_sex") %>%
   dplyr::left_join(demo_counts_tot %>% dplyr::select(time, n_part), by = "time") %>%
@@ -3896,6 +3901,7 @@ sex_tab_total <- demo_base %>%
   dplyr::mutate(cluster_disp = "Total", Row = paste0("Sex at birth - ", sex2)) %>%
   dplyr::select(time, cluster_disp, Row, val)
 
+#S3.6.5 Bind all of the N, age, and sex descriptive stats into a single dataframe
 demo_rows_total <- dplyr::bind_rows(n_rows_total, age_row_total, sex_tab_total) %>%
   dplyr::mutate(Section = "Demographics")
 
@@ -4060,7 +4066,7 @@ tS3 <- gt::gt(wide, groupname_col = "Section", rowname_col = "Row") |>
   gt::tab_spanner(label = "Higher-Risk", columns = dplyr::all_of(paste0("Higher-Risk::", time_levels))) |>
   gt::cols_align(align = "center", columns = dplyr::all_of(have)) |>
   gt::tab_caption("**Table S3. Characteristics of Participants in the Nested Onset of Suicidality Within Ever-BD by Risk Cluster Analysis**
-Counts are shown per assessment interval (2y, 4y, 6y). Demographics are from the *ever-BD* risk set (one person-period per participant per interval). Interval onset rows report events within suicidality outcome-specific first-onset risk sets (post baseline-negative restriction and censoring), shown as *n (percent)* of person-periods at risk.") |>
+Counts are shown per assessment interval (2y, 4y, 6y). Demographics are from the ever-BD risk set (one person-period per participant per interval). Interval onset rows report events within suicidality outcome-specific first-onset risk sets (post baseline-negative restriction and censoring), shown as *n (percent)* of person-periods at risk.") |>
   gt::tab_options(table.font.size = gt::px(12)) |>
   gt::fmt_missing(columns = dplyr::everything(), missing_text = "\u2014")
 
