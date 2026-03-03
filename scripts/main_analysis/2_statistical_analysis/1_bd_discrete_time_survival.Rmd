@@ -917,12 +917,17 @@ save_dharma_plots_and_tests <- function(fit, tag) {
 cumrisk_by_wave_ci <- function(fit, data, B = 500) {
 
   #1.19.1 Build reference newdata with REQUIRED covariates for the primary model
+  sex_ref <- if ("sex" %in% names(data) && is.factor(data$sex) && nlevels(data$sex) > 0) {
+    factor(levels(data$sex)[1], levels = levels(data$sex))
+  } else {
+    stop("cumrisk_by_wave_ci(): `data$sex` is missing or has 0 levels.")
+  }
   nd <- expand.grid(
     end_wave = factor(levels(data$end_wave), levels = levels(data$end_wave)),
-    cluster = factor(levels(data$cluster), levels = levels(data$cluster)),
+    cluster = factor(levels(data$cluster),  levels = levels(data$cluster)),
     age_mid_between = 0,
-    age_mid_cwc = 0,
-    sex = factor(levels(data$sex)[1], levels = levels(data$sex))) %>%
+    age_mid_cwc     = 0,
+    sex = sex_ref) %>%
     dplyr::arrange(cluster, end_wave)
 
   #1.19.2 Keep only variables the model actually uses; add any missing ones safely
@@ -1217,7 +1222,7 @@ hazard_by_wave_ci <- function(fit, data) {
 }
 
 #1.23 Cumulative risk by wave with bootstrap CIs (parametric via bootMer)
-cumrisk_by_wave_ci <- function(fit, data, B = 500) {
+cumrisk_by_wave_ci_glmer <- function(fit, data, B = 500) {
   
   #1.23.1 Build reference newdata
   nd <- expand.grid(
@@ -1577,8 +1582,42 @@ add_decision <- function(log_tbl,
 
 ## 2. Fit models (primary GLM + sensitivities), summarize, and save ##
 
-#2.1 Outcomes to iterate on for this analysis
+#2.0 Outcomes to iterate on for this analysis
 OUTCOMES <- c("bipolar_I","bipolar_II","bd_nos","any_bsd")
+
+#2.1 Preflight: fail-fast checks to avoid multi-hour jobs dying late
+preflight_dth <- function(dat, outcomes = OUTCOMES) {
+
+  #2.1.1 Minimal required columns
+  req <- c("event","cluster","sex","end_wave","age_mid_between","participant_id","family_id")
+  miss <- setdiff(req, names(dat))
+  if (length(miss) > 0) stop("Preflight failed: missing required columns: ", paste(miss, collapse = ", "))
+
+  #2.1.2 Check factor levels exist (prevents empty levels() calls)
+  if (nlevels(dat$end_wave) < 2) stop("Preflight failed: end_wave has <2 levels after filtering.")
+  if (nlevels(dat$cluster) < 2)  stop("Preflight failed: cluster has <2 levels after filtering.")
+  if (nlevels(dat$sex) < 1)      stop("Preflight failed: sex has 0 levels after filtering.")
+
+  #2.1.3 Run one quick smoke test outcome to exercise:
+  # - glm fit
+  # - predict(newdata=...)
+  # - cumrisk_by_wave_ci grid + bootMer path (with tiny B)
+  out0 <- outcomes[1]
+  dat0 <- dat %>% dplyr::filter(outcome == out0) %>% droplevels() %>% prep_dth_terms()
+
+  #2.1.3.1 Ensure model can be fit
+  fit0 <- fit_glm_safe(build_formula_primary(), dat0, link = "logit")
+
+  #2.1.3.2 Ensure prediction helpers don't error (these are common late-fail points)
+  invisible(pred_fixedwave_with_ci(fit0, dat0, ages = ages_pred_vec, wave_ref = params$wave_ref))
+  invisible(hazard_by_wave_ci(fit0, dat0))
+  invisible(cumrisk_by_wave_ci(fit0, dat0, B = 5))  # tiny B just to ensure code path works
+  TRUE
+}
+
+message("Running preflight checks...")
+preflight_dth(bd_pp_model)
+message("Preflight passed.")
 
 #2.2 Containers
 fits_primary <- list()
@@ -1640,7 +1679,7 @@ model_log <- add_decision(
   engine = "mgcv (e.g., gam/bam)",
   specification = "event ~ cluster + sex + s(age_mid) + (random effects as applicable) + wave terms",
   status = "attempted_previous",
-  key_diagnostics = "Add your prior notes/results here (e.g., concurvity, unstable smooths with only 3 waves, separation in cells)",
+  key_diagnostics = "Issues with concurvity, unstable smooths with only 3 waves, separation in cells",
   decision_rationale = "Not carried forward: limited unique timepoints (3 waves) makes smooth terms poorly supported")
 
 model_log <- add_decision(
@@ -1649,8 +1688,8 @@ model_log <- add_decision(
   engine = "glmmTMB",
   specification = "Binomial mixed model variants (including alternative RE structures / dispersion handling)",
   status = "attempted_previous",
-  key_diagnostics = "Add your prior notes/results here (e.g., convergence warnings, boundary fits, separation)",
-  decision_rationale = "Not carried forward if convergence/identifiability issues persisted or estimates were optimizer-dependent")
+  key_diagnostics = "Issues with convergence warnings, boundary fits, separation, etc.",
+  decision_rationale = "Not carried forward since convergence/identifiability issues persisted and estimates were optimizer-dependent")
 
 model_log <- add_decision(
   model_log,
@@ -1658,8 +1697,8 @@ model_log <- add_decision(
   engine = "brms",
   specification = "Bernoulli/logit or cloglog with priors; random intercepts; optional varying effects",
   status = "attempted_previous",
-  key_diagnostics = "Add your prior notes/results here (e.g., divergent transitions, weak ID for RE, sensitivity to priors)",
-  decision_rationale = "Not carried forward if computationally heavy without improving stability/interpretability given sparse intervals")
+  key_diagnostics = "Issues with divergent transitions, weak ID for RE, and especially sensitivity to priors (without justification for any specific prior distribution)",
+  decision_rationale = "Not carried forward since computationally heavy without improving stability/interpretability given sparse intervals")
 
 #2.4 Loop per outcome
 for (out in OUTCOMES) {
@@ -1877,11 +1916,13 @@ cumrisk_tables_all <- dplyr::bind_rows(lapply(OUTCOMES, function(out) {
     cumrisk_by_wave_ci(fit, dat, B = 500),
     error = function(e) {
       warning("cumrisk_by_wave_ci failed for ", out, ": ", conditionMessage(e))
-      tibble::tibble(
+      tidyr::crossing(
         end_wave = factor(levels(dat$end_wave), levels = levels(dat$end_wave)),
-        cluster = factor(rep(levels(dat$cluster), each = length(levels(dat$end_wave))),
-                         levels = levels(dat$cluster)),
-        cumrisk = NA_real_, cumrisk_lo = NA_real_, cumrisk_hi = NA_real_)
+        cluster = factor(levels(dat$cluster), levels = levels(dat$cluster))) %>%
+        dplyr::mutate(
+          cumrisk = NA_real_,
+          cumrisk_lo = NA_real_,
+          cumrisk_hi = NA_real_)
     })
 
   dplyr::mutate(df, outcome = out, model = params$link_primary, .before = 1)
@@ -2061,12 +2102,10 @@ cum_plots <- lapply(OUTCOMES, function(out) {
   cr <- tryCatch(
   cumrisk_by_wave_ci(fit, dat, B = 500),
   error = function(e) {
-    warning("cumrisk_by_wave_ci failed for plot ", out, ": ", conditionMessage(e))
-    tibble::tibble(
-      end_wave = factor(levels(dat$end_wave), levels = levels(dat$end_wave)),
-      cluster = factor(levels(dat$cluster), levels = levels(dat$cluster))) %>%
-      tidyr::crossing(end_wave) %>%
-      dplyr::mutate(cumrisk = NA_real_, cumrisk_lo = NA_real_, cumrisk_hi = NA_real_)
+  tidyr::crossing(
+    end_wave = factor(levels(dat$end_wave), levels = levels(dat$end_wave)),
+    cluster = factor(levels(dat$cluster), levels = levels(dat$cluster))) %>%
+    dplyr::mutate(cumrisk = NA_real_, cumrisk_lo = NA_real_, cumrisk_hi = NA_real_)
   }) 
   has_ci <- "cumrisk_lo" %in% names(cr) && "cumrisk_hi" %in% names(cr) &&
             any(is.finite(cr$cumrisk_lo) & is.finite(cr$cumrisk_hi))
