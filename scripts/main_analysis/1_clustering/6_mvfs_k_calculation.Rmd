@@ -1,0 +1,642 @@
+---
+title: "6. MVFS k-Calculation (k-prototypes; MVFS feature set)"
+author: "Sam A. Sievertsen"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: false
+    df_print: paged
+params:
+  
+  # Root repo path (container-safe). Set this from SLURM
+  repo: !r Sys.getenv("REPO", unset = NA)
+
+  # I/O built off repo
+  risk_data_rel: "data/data_processed/risk_variable_data.csv"
+  out_dir_rel: "results/main_analysis/1_clustering/6_mvfs_k_calculation"
+
+  # Candidate MVFS feature sets to evaluate
+  # - for now, just "mvfs7": the 7-feature mixed-type set (includes family_history_depression)
+  which_sets: ["mvfs7"]
+
+  mvfs7_features:
+    - mh_p_cbcl__dsm__dep_tscore
+    - mh_p_cbcl__synd__aggr_tscore
+    - mh_p_cbcl__synd__attn_tscore
+    - mh_p_cbcl__dsm__anx_tscore
+    - mh_p_gbi_sum
+    - sds_total
+    - family_history_depression
+
+  mvfs6_features:
+    - mh_p_cbcl__dsm__dep_tscore
+    - mh_p_cbcl__synd__aggr_tscore
+    - mh_p_cbcl__synd__attn_tscore
+    - mh_p_cbcl__dsm__anx_tscore
+    - mh_p_gbi_sum
+    - sds_total
+    
+  mvfs5_features:
+    - mh_p_cbcl__dsm__dep_tscore
+    - mh_p_cbcl__synd__aggr_tscore
+    - mh_p_cbcl__synd__attn_tscore
+    - mh_p_cbcl__dsm__anx_tscore
+    - mh_p_gbi_sum
+
+  # k-prototypes search grid
+  k_grid: [2,3,4,5,6,7,8]
+  nstart: 8
+
+  # Lambda handling
+  # - "estimate": lambdaest() when mixed-type; else lambda irrelevant
+  # - "fixed": use lambda_fixed
+  lambda_mode: "estimate"
+  lambda_fixed: 2.5
+
+  # Stability bootstrap
+  boot_B: 250
+  boot_seed: 123
+
+  # UMAP settings
+  umap_neighbors: 15
+  umap_min_dist: 0.1
+  umap_seed: 123
+
+  # Misc
+  keep_model_data: true
+---
+
+```{r global, include=FALSE}
+knitr::opts_chunk$set(cache = FALSE, message = TRUE, warning = TRUE, results = "markup", verbose = TRUE, comment = "")
+```
+
+## 6.1 Setup & Paths
+
+``` {r set up, include = FALSE, echo = FALSE, warning = FALSE}
+
+## 6.1 Set Up ##
+
+cat("6.1 Set-up beginning\n")
+
+suppressPackageStartupMessages({
+  library(here)
+  library(dplyr)
+  library(tidyr)
+  library(readr)
+  library(stringr)
+  library(glue)
+  library(purrr)
+  library(tibble)
+  library(data.table)
+  library(ggplot2)
+  library(clustMixType)
+  library(cluster)
+  library(clue)
+  library(uwot)
+})
+
+#6.1.1 Resolve repo-rooted paths (container-safe)
+if (is.null(params$repo) || is.na(params$repo) || !nzchar(params$repo)) {
+  stop("params$repo is missing. Pass REPO via Sys.getenv() (recommended) or set params$repo in YAML.")
+}
+repo <- normalizePath(params$repo, winslash = "/", mustWork = TRUE)
+
+#6.1.2 Allow explicit overrides, otherwise build from repo + rel paths
+risk_path <- if (!is.null(params$risk_data_path) && nzchar(params$risk_data_path)) {
+  params$risk_data_path
+} else {
+  file.path(repo, params$risk_data_rel)
+}
+
+out_dir <- if (!is.null(params$out_dir) && nzchar(params$out_dir)) {
+  params$out_dir
+} else {
+  file.path(repo, params$out_dir_rel)
+}
+
+#6.1.3 Re-assign into params-like locals for downstream consistency
+risk_path <- normalizePath(risk_path, winslash = "/", mustWork = TRUE)
+out_dir <- normalizePath(out_dir,   winslash = "/", mustWork = FALSE)
+
+#6.1.4 Output directories
+paths <- list(
+  out_dir = out_dir,
+  fig_dir = file.path(out_dir, "figures"),
+  tab_dir = file.path(out_dir, "tables"),
+  rds_dir = file.path(out_dir, "rds"))
+
+dir.create(paths$out_dir, showWarnings = FALSE, recursive = TRUE) 
+dir.create(paths$fig_dir, showWarnings = FALSE, recursive = TRUE) 
+dir.create(paths$tab_dir, showWarnings = FALSE, recursive = TRUE) 
+dir.create(paths$rds_dir, showWarnings = FALSE, recursive = TRUE)
+
+#6.1.5 Safe writers
+write_csv2 <- function(x, path) {
+  dir.create(dirname(path), TRUE, TRUE)
+  readr::write_csv(x, path)
+}
+
+save_rds2 <- function(x, path) {
+  dir.create(dirname(path), TRUE, TRUE)
+  saveRDS(x, path)
+}
+
+cat("6.1 Set-up complete\n")
+
+```
+
+## 6.2 Load Data + MVFS Feature Sets
+
+```{r load assets, echo = FALSE, warning = FALSE}
+
+## 6.2 Load Assets ## 
+
+#6.2.1 Read in risk dataset safely
+if (!file.exists(risk_path)) stop(glue("Risk data CSV not found: {risk_path}"))
+risk_df_raw <- readr::read_csv(risk_path, show_col_types = FALSE)
+risk_dt_raw <- as.data.table(risk_df_raw)
+
+#6.2.2 Define feature sets
+mvfs_sets <- list(
+  mvfs7 = params$mvfs7_features,
+  mvfs6 = params$mvfs6_features)
+
+#6.2.3 Restrict to requested sets
+use_sets <- params$which_sets
+use_sets <- use_sets[use_sets %in% names(mvfs_sets)]
+if (!length(use_sets)) stop("No valid feature sets found in params$which_sets.")
+
+#6.2.4 Basic feature existence check
+for (nm in use_sets) {
+  feats <- mvfs_sets[[nm]]
+  missing <- setdiff(feats, names(risk_dt_raw))
+  if (length(missing)) {
+    stop(glue("Missing features for set '{nm}': {paste(missing, collapse=', ')}"))
+  }
+}
+
+#6.2.5 Convenience: keep row id for merges (prefer subjectkey if present)
+id_col <- if ("subjectkey" %in% names(risk_dt_raw)) "subjectkey" else NULL
+risk_dt_raw[, .row_id := .I]
+
+cat(glue("Loaded N={nrow(risk_dt_raw)} rows. ID col = {ifelse(is.null(id_col),'(none)',id_col)}\n"))
+
+```
+
+## 6.3 Preprocessing Helpers for MVFS-only
+
+```{r helper functions, echo = FALSE, warning = FALSE}
+
+## 6.3 Helper Functions ##
+
+#6.3.1 Coerce likely binary/character to factor, keep numerics numeric
+coerce_types_mvfs <- function(df) {
+  df <- as.data.frame(df)
+
+  for (nm in names(df)) {
+    x <- df[[nm]]
+
+    #6.3.1.1 If already numeric, keep numeric
+    if (is.numeric(x)) next
+
+    #6.3.1.2 If logical, treat as factor
+    if (is.logical(x)) {
+      df[[nm]] <- factor(x, levels = c(FALSE, TRUE))
+      next
+    }
+
+    #6.3.1.3 If character, factor
+    if (is.character(x)) {
+      df[[nm]] <- factor(x)
+      next
+    }
+
+    #6.3.1.4 If integer but looks categorical (small number of unique levels), treat as factor
+    if (is.integer(x)) {
+      u <- unique(x[!is.na(x)])
+      if (length(u) <= 10) df[[nm]] <- factor(x) else df[[nm]] <- as.numeric(x)
+      next
+    }
+
+    #6.3.1.5 Otherwise try factor
+    if (!is.factor(x)) df[[nm]] <- factor(x)
+  }
+
+  df
+}
+
+#6.3.2 Z-score numeric columns (MVFS-only)
+zscore_numeric <- function(df) {
+  df <- as.data.frame(df)
+  is_num <- vapply(df, is.numeric, logical(1))
+  for (nm in names(df)[is_num]) {
+    x <- df[[nm]]
+    mu <- mean(x, na.rm = TRUE)
+    sdv <- stats::sd(x, na.rm = TRUE)
+    if (is.finite(sdv) && sdv > 0) {
+      df[[nm]] <- (x - mu) / sdv
+    } else {
+      
+      #6.3.2.1 Constant or degenerate => set to 0
+      df[[nm]] <- 0
+    }
+  }
+  df
+}
+
+#6.3.3 Ensure kproto input has at least 1 numeric + 1 factor
+count_types <- function(df) {
+  df <- as.data.frame(df)
+  is_num <- vapply(df, is.numeric, logical(1))
+  is_fac <- vapply(df, is.factor,  logical(1))
+  list(n_num = sum(is_num), n_fac = sum(is_fac), is_num = is_num, is_fac = is_fac)
+}
+
+prep_for_kproto <- function(df) {
+  df <- as.data.frame(df)
+  ct <- count_types(df)
+  add_num <- (ct$n_num == 0L)
+  add_fac <- (ct$n_fac == 0L)
+
+  if (add_num) df$.mvfs_dummy_num <- 0
+  if (add_fac) df$.mvfs_dummy_fac <- factor("A")
+
+  list(x = df, added_dummy = (add_num || add_fac), ct = ct)
+}
+
+#6.3.4 Lambda rule
+lambda_safe <- function(X_orig, lambda_mode, lambda_fixed = 2.5) {
+  if (identical(lambda_mode, "fixed")) {
+    return(list(lambda = as.numeric(lambda_fixed), reason = "fixed"))
+  }
+
+  ct <- count_types(X_orig)
+  if (ncol(X_orig) < 2L) {
+    return(list(lambda = 1, reason = "p<2: lambdaest undefined; lambda irrelevant"))
+  }
+  if (ct$n_num == 0L || ct$n_fac == 0L) {
+    return(list(lambda = 1, reason = "single-type set: lambda irrelevant"))
+  }
+
+  lam <- clustMixType::lambdaest(X_orig, verbose = FALSE)
+  list(lambda = lam, reason = "lambdaest (mixed-type set)")
+}
+
+#6.3.5 Objective extractor
+kproto_objective <- function(kp) {
+  for (nm in c("tot.withinss","tot.withindist","tot.within.dist","tot.within")) {
+    if (!is.null(kp[[nm]]) && is.finite(kp[[nm]])) return(as.numeric(kp[[nm]]))
+  }
+  NA_real_
+}
+
+#6.3.6 Silhouette on fitted kproto
+extract_validation_index <- function(x) {
+  if (is.numeric(x) && length(x) == 1L) return(as.numeric(x))
+  if (is.list(x) && "index" %in% names(x)) return(as.numeric(x$index))
+  if (is.list(x) && "index_opt" %in% names(x)) return(as.numeric(x$index_opt))
+  NA_real_
+}
+
+silhouette_validation_kproto <- function(kp, type = "huang") {
+  out <- tryCatch(
+    clustMixType::validation_kproto(method = "silhouette", object = kp, type = type),
+    error = function(e) NA)
+  extract_validation_index(out)
+}
+
+#6.3.7 Hungarian mapping + clusterwise Jaccard stability
+#6.3.7.1 Hungarian map search function
+hungarian_map <- function(from, to) {
+  from <- as.integer(from)
+  to <- as.integer(to)
+  K <- max(length(unique(from)), length(unique(to)))
+  tab <- table(from, to)
+  tab_full <- matrix(0, nrow = K, ncol = K)
+  tab_full[seq_len(nrow(tab)), seq_len(ncol(tab))] <- tab
+  maxv <- max(tab_full)
+  cost <- maxv - tab_full
+  assign <- clue::solve_LSAP(cost)
+  as.integer(assign)
+}
+
+#6.3.7.2 Dispatch hungarian algorithm
+apply_map <- function(lbl, mapping) {
+  lbl <- as.integer(lbl)
+  out <- lbl
+  ok <- lbl >= 1 & lbl <= length(mapping)
+  out[ok] <- mapping[lbl[ok]]
+  out
+}
+
+#6.3.7.3 Compute clusterwise jaccard similarity coefficient
+clusterwise_jaccard <- function(lbl_a, lbl_b, K = NULL) {
+  lbl_a <- as.integer(lbl_a)
+  lbl_b <- as.integer(lbl_b)
+  if (is.null(K)) K <- max(length(unique(lbl_a)), length(unique(lbl_b)))
+  out <- rep(NA_real_, K)
+  for (k in seq_len(K)) {
+    A <- which(lbl_a == k)
+    B <- which(lbl_b == k)
+    den <- length(union(A, B))
+    out[k] <- if (den == 0) NA_real_ else length(intersect(A, B)) / den
+  }
+  out
+}
+
+#6.3.7.4 Compute bootstrapped clusterwise jaccard similarity coefficient across B runs
+bootstrap_stability <- function(X_fit,
+  base_lbl,
+  k,
+  lambda,
+  nstart,
+  B = 200L,
+  seed = 123L) {
+  
+    n <- nrow(X_fit)
+    K <- length(unique(base_lbl))
+    set.seed(seed)
+    
+    J <- matrix(NA_real_, nrow = as.integer(B), ncol = as.integer(K))
+    
+    #6.3.7.4.1 Iteratively calculate jaccard across kproto runs
+    for (b in seq_len(as.integer(B))) {
+      idx <- sample(seq_len(n), n, replace = TRUE)
+      Xb  <- X_fit[idx, , drop = FALSE]
+      
+      kp_b <- clustMixType::kproto(
+        x = Xb,
+        k = k,
+        lambda = lambda,
+        nstart = as.integer(nstart),
+        verbose = FALSE)
+      
+      #6.3.7.4.2 Predict bootstrap model on full universe
+      pr <- predict(kp_b, newdata = X_fit)
+      boot_lbl <- if (is.list(pr))
+        pr$cluster
+      else
+        pr
+      
+      #6.3.7.4.3 Map bootstrap labels -> base labels
+      mapping <- hungarian_map(from = boot_lbl, to = base_lbl)
+      boot_m  <- apply_map(boot_lbl, mapping)
+      
+      J[b, ] <- clusterwise_jaccard(base_lbl, boot_m, K = K)
+    }
+    
+    #6.3.7.4.4 Store results
+    list(
+      jaccard_by_cluster = colMeans(J, na.rm = TRUE),
+      jaccard_mean = mean(J, na.rm = TRUE),
+      jaccard_min = min(colMeans(J, na.rm = TRUE), na.rm = TRUE))
+}
+
+#6.3.8 UMAP design matrix for mixed data (one-hot factors + numeric)
+make_umap_matrix <- function(df) {
+  df <- as.data.frame(df)
+  
+  #6.3.8.1 model.matrix will one-hot encode factors; keep numerics as-is
+  mm <- model.matrix(~ . - 1, data = df)
+  
+  #6.3.8.2 Scale numeric columns inside mm since that avoids huge one-hot dominance issues
+  mm <- scale(mm)
+  mm
+}
+
+```
+
+## 6.4 Main Loop for Fitting k=2:8 for Each MVFS Set
+
+```{r mvfs k calculation loop, echo = FALSE, warning = FALSE}
+
+## 6.4 Fit the k=2:8 Solution Across MVFS ##
+
+#6.4 Function loop for running k calculation
+run_one_set <- function(set_name, feats) {
+
+  cat(glue("\n--- Running set: {set_name} (p={length(feats)}) ---\n"))
+
+  #6.4.1 Build MVFS-only frame
+  dt <- risk_dt_raw[, c(".row_id", id_col, feats), with = FALSE]
+  X  <- as.data.frame(dt[, feats, with = FALSE])
+
+  #6.4.2 Types + z-score numeric
+  X <- coerce_types_mvfs(X)
+  X <- zscore_numeric(X)
+
+  #6.4.3 Lambda
+  lam_info <- lambda_safe(X, lambda_mode = params$lambda_mode, lambda_fixed = params$lambda_fixed)
+
+  #6.4.4 Ensure kproto can run for single-type sets
+  prep <- prep_for_kproto(X)
+  X_fit <- prep$x
+
+  #6.4.5 Fit across k
+  res_list <- list()
+  model_list <- list()
+  assign_list <- list()
+
+  for (k in params$k_grid) {
+
+    #6.4.5.1 Fit
+    set.seed(6000 + k)
+    kp <- clustMixType::kproto(
+      x = X_fit,
+      k = as.integer(k),
+      lambda = lam_info$lambda,
+      nstart = as.integer(params$nstart),
+      verbose = FALSE)
+
+    lbl <- kp$cluster
+    k_obs <- length(unique(lbl))
+    min_n <- min(tabulate(lbl))
+
+    #6.4.5.2 Metrics
+    sil <- if (k_obs >= 2 && min_n >= 2) silhouette_validation_kproto(kp, type = "huang") else NA_real_
+    obj <- kproto_objective(kp)
+
+    #6.4.5.3 Stability (bootstrap Jaccard vs fitted partition)
+    stab <- if (k_obs >= 2 && min_n >= 2) {
+      bootstrap_stability(
+        X_fit = X_fit,
+        base_lbl = lbl,
+        k = k,
+        lambda = lam_info$lambda,
+        nstart = params$nstart,
+        B = params$boot_B,
+        seed = params$boot_seed + 100L * k)
+    } else {
+      list(jaccard_mean = NA_real_, jaccard_min = NA_real_, jaccard_by_cluster = rep(NA_real_, k_obs))
+    }
+
+    #6.4.5.4 Store
+    res_list[[as.character(k)]] <- tibble::tibble(
+      set = set_name,
+      k = as.integer(k),
+      k_observed = as.integer(k_obs),
+      min_cluster_n = as.integer(min_n),
+      lambda = as.numeric(lam_info$lambda),
+      lambda_reason = lam_info$reason,
+      added_dummy = prep$added_dummy,
+      objective = as.numeric(obj),
+      silhouette_huang = as.numeric(sil),
+      jaccard_mean = as.numeric(stab$jaccard_mean),
+      jaccard_min = as.numeric(stab$jaccard_min))
+
+    #6.4.5.5 Save assignment table
+    assign_tbl <- dt[, .(._row_id = .row_id)]
+    if (!is.null(id_col)) assign_tbl[[id_col]] <- dt[[id_col]]
+    assign_tbl[["cluster"]] <- as.integer(lbl)
+    assign_tbl[["k"]] <- as.integer(k)
+    assign_tbl[["set"]] <- set_name
+
+    assign_list[[as.character(k)]] <- assign_tbl
+
+    #6.4.5.6 Save model (optionally trim data)
+    if (!params$keep_model_data) kp$data <- NULL
+    model_list[[as.character(k)]] <- kp
+  }
+
+  res_df <- bind_rows(res_list) %>% arrange(k)
+
+  #6.4.6 Write outputs
+  write_csv2(res_df, file.path(paths$tab_dir, glue("mvfs_{set_name}_k_grid_metrics.csv")))
+  assign_df <- rbindlist(assign_list, fill = TRUE)
+  write_csv2(as.data.frame(assign_df), file.path(paths$tab_dir, glue("mvfs_{set_name}_k_grid_assignments.csv")))
+  save_rds2(model_list, file.path(paths$rds_dir, glue("mvfs_{set_name}_k_grid_models.rds")))
+
+  #6.4.7 Plot: silhouette + stability across k
+  p1 <- ggplot(res_df, aes(x = k, y = silhouette_huang)) +
+    geom_line(linewidth = 0.6) +
+    geom_point(size = 1.8) +
+    theme_classic(base_size = 12) +
+    labs(
+      title = glue("Silhouette across k (MVFS: {set_name})"),
+      subtitle = glue("lambda_mode={params$lambda_mode}; lambda={round(lam_info$lambda, 3)}; nstart={params$nstart}"),
+      x = "k", y = "Silhouette (Huang)")
+  ggsave(file.path(paths$fig_dir, glue("mvfs_{set_name}_silhouette_by_k.png")),
+         p1, width = 7, height = 4.2, dpi = 600, bg = "white")
+
+  p2 <- ggplot(res_df, aes(x = k, y = jaccard_min)) +
+    geom_line(linewidth = 0.6) +
+    geom_point(size = 1.8) +
+    theme_classic(base_size = 12) +
+    labs(
+      title = glue("Bootstrap stability across k (MVFS: {set_name})"),
+      subtitle = glue("Metric = min clusterwise Jaccard; B={params$boot_B}"),
+      x = "k", y = "min Jaccard")
+  ggsave(file.path(paths$fig_dir, glue("mvfs_{set_name}_jaccard_min_by_k.png")),
+         p2, width = 7, height = 4.2, dpi = 600, bg = "white")
+
+  #6.4.8 UMAP visualization for a single k choice: pick argmax silhouette (ties => smaller k)
+  k_star <- res_df %>%
+    filter(is.finite(silhouette_huang)) %>%
+    arrange(desc(silhouette_huang), k) %>%
+    slice(1) %>%
+    pull(k)
+
+  if (length(k_star) == 1 && is.finite(k_star)) {
+
+    kp_star <- model_list[[as.character(k_star)]]
+    lbl_star <- kp_star$cluster
+
+    set.seed(params$umap_seed)
+    mm <- make_umap_matrix(X_fit)
+    emb <- uwot::umap(
+      mm,
+      n_neighbors = params$umap_neighbors,
+      min_dist = params$umap_min_dist,
+      metric = "euclidean",
+      verbose = TRUE)
+
+    umap_df <- tibble::tibble(
+      UMAP1 = emb[, 1],
+      UMAP2 = emb[, 2],
+      cluster = factor(lbl_star))
+
+    p3 <- ggplot(umap_df, aes(x = UMAP1, y = UMAP2, color = cluster)) +
+      geom_point(alpha = 0.6, size = 0.8) +
+      theme_classic(base_size = 12) +
+      labs(
+        title = glue("UMAP of MVFS feature space (set={set_name})"),
+        subtitle = glue("k*={k_star} (max silhouette); n_neighbors={params$umap_neighbors}, min_dist={params$umap_min_dist}"),
+        x = "UMAP1", y = "UMAP2", color = "Cluster")
+    ggsave(file.path(paths$fig_dir, glue("mvfs_{set_name}_umap_k{k_star}.png")),
+           p3, width = 7.2, height = 5.2, dpi = 600, bg = "white")
+
+    #6.4.8.1 Save embedding table
+    write_csv2(
+      umap_df %>% mutate(set = set_name, k = as.integer(k_star)),
+      file.path(paths$tab_dir, glue("mvfs_{set_name}_umap_k{k_star}.csv")))
+  }
+
+  #6.4.9 Return objects for in-knit inspection
+  list(
+    set = set_name,
+    features = feats,
+    lambda_info = lam_info,
+    metrics = res_df)
+}
+
+all_runs <- lapply(use_sets, function(nm) run_one_set(nm, mvfs_sets[[nm]]))
+names(all_runs) <- use_sets
+
+```
+
+## 6.5 Summary Table Across MVFS Sets
+
+```{r summary, echo = FALSE, warning = FALSE}
+
+## 6.5 Summary Table of Results ##
+
+summary_df <- bind_rows(lapply(all_runs, function(x) x$metrics)) %>%
+  group_by(set) %>%
+  arrange(desc(silhouette_huang), desc(jaccard_min), k) %>%
+  mutate(rank = row_number()) %>%
+  ungroup()
+
+write_csv2(summary_df, file.path(paths$tab_dir, "mvfs_all_sets_k_grid_metrics_long.csv"))
+
+#6.5.1 One-row recommendation per set (argmax silhouette; tie-break by higher jaccard_min then smaller k)
+best_df <- summary_df %>%
+  filter(is.finite(silhouette_huang)) %>%
+  group_by(set) %>%
+  arrange(desc(silhouette_huang), desc(jaccard_min), k) %>%
+  slice(1) %>%
+  ungroup()
+
+write_csv2(best_df, file.path(paths$tab_dir, "mvfs_all_sets_k_recommendation.csv"))
+
+knitr::kable(best_df, digits = 3, caption = "Recommended k per MVFS set (max silhouette; tie-break by stability then smaller k)") %>%
+  kableExtra::kable_styling(full_width = FALSE)
+
+```
+
+## 6.6 Reproducibility Log
+
+```{r reproducibility log, echo = FALSE, warning = FALSE}
+
+## 6.6 Reproducibility Log ##
+
+log <- list(
+  timestamp = as.character(Sys.time()),
+  repo = repo,
+  risk_data_path = risk_path,
+  out_dir = paths$out_dir,
+  sets_run = use_sets,
+  k_grid = params$k_grid,
+  nstart = params$nstart,
+  lambda_mode = params$lambda_mode,
+  lambda_fixed = params$lambda_fixed,
+  boot_B = params$boot_B,
+  boot_seed = params$boot_seed,
+  umap = list(
+    n_neighbors = params$umap_neighbors,
+    min_dist = params$umap_min_dist,
+    seed = params$umap_seed))
+
+writeLines(jsonlite::toJSON(log, pretty = TRUE), con = file.path(paths$out_dir, "run_log.json"))
+
+```
