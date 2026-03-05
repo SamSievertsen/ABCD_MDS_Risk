@@ -8,13 +8,12 @@ output:
     number_sections: false
     df_print: paged
 params:
-  
   # Root repo path (container-safe). Set this from SLURM
   repo: !r Sys.getenv("REPO", unset = NA)
 
   # I/O built off repo
   risk_data_rel: "data/data_processed/risk_variable_data.csv"
-  out_dir_rel: "results/main_analysis/1_clustering/6_mvfs_k_calculation"
+  out_dir_rel: "../../../results/main_analysis/1_clustering/6_mvfs_k_calculation"
 
   # Candidate MVFS feature sets to evaluate
   # - for now, just "mvfs7": the 7-feature mixed-type set (includes family_history_depression)
@@ -159,8 +158,7 @@ risk_dt_raw <- as.data.table(risk_df_raw)
 
 #6.2.2 Define feature sets
 mvfs_sets <- list(
-  mvfs7 = params$mvfs7_features,
-  mvfs6 = params$mvfs6_features)
+  mvfs7 = params$mvfs7_features)
 
 #6.2.3 Restrict to requested sets
 use_sets <- params$which_sets
@@ -306,93 +304,6 @@ silhouette_validation_kproto <- function(kp, type = "huang") {
   extract_validation_index(out)
 }
 
-#6.3.7 Hungarian mapping + clusterwise Jaccard stability
-#6.3.7.1 Hungarian map search function
-hungarian_map <- function(from, to) {
-  from <- as.integer(from)
-  to <- as.integer(to)
-  K <- max(length(unique(from)), length(unique(to)))
-  tab <- table(from, to)
-  tab_full <- matrix(0, nrow = K, ncol = K)
-  tab_full[seq_len(nrow(tab)), seq_len(ncol(tab))] <- tab
-  maxv <- max(tab_full)
-  cost <- maxv - tab_full
-  assign <- clue::solve_LSAP(cost)
-  as.integer(assign)
-}
-
-#6.3.7.2 Dispatch hungarian algorithm
-apply_map <- function(lbl, mapping) {
-  lbl <- as.integer(lbl)
-  out <- lbl
-  ok <- lbl >= 1 & lbl <= length(mapping)
-  out[ok] <- mapping[lbl[ok]]
-  out
-}
-
-#6.3.7.3 Compute clusterwise jaccard similarity coefficient
-clusterwise_jaccard <- function(lbl_a, lbl_b, K = NULL) {
-  lbl_a <- as.integer(lbl_a)
-  lbl_b <- as.integer(lbl_b)
-  if (is.null(K)) K <- max(length(unique(lbl_a)), length(unique(lbl_b)))
-  out <- rep(NA_real_, K)
-  for (k in seq_len(K)) {
-    A <- which(lbl_a == k)
-    B <- which(lbl_b == k)
-    den <- length(union(A, B))
-    out[k] <- if (den == 0) NA_real_ else length(intersect(A, B)) / den
-  }
-  out
-}
-
-#6.3.7.4 Compute bootstrapped clusterwise jaccard similarity coefficient across B runs
-bootstrap_stability <- function(X_fit,
-  base_lbl,
-  k,
-  lambda,
-  nstart,
-  B = 200L,
-  seed = 123L) {
-  
-    n <- nrow(X_fit)
-    K <- length(unique(base_lbl))
-    set.seed(seed)
-    
-    J <- matrix(NA_real_, nrow = as.integer(B), ncol = as.integer(K))
-    
-    #6.3.7.4.1 Iteratively calculate jaccard across kproto runs
-    for (b in seq_len(as.integer(B))) {
-      idx <- sample(seq_len(n), n, replace = TRUE)
-      Xb  <- X_fit[idx, , drop = FALSE]
-      
-      kp_b <- clustMixType::kproto(
-        x = Xb,
-        k = k,
-        lambda = lambda,
-        nstart = as.integer(nstart),
-        verbose = FALSE)
-      
-      #6.3.7.4.2 Predict bootstrap model on full universe
-      pr <- predict(kp_b, newdata = X_fit)
-      boot_lbl <- if (is.list(pr))
-        pr$cluster
-      else
-        pr
-      
-      #6.3.7.4.3 Map bootstrap labels -> base labels
-      mapping <- hungarian_map(from = boot_lbl, to = base_lbl)
-      boot_m  <- apply_map(boot_lbl, mapping)
-      
-      J[b, ] <- clusterwise_jaccard(base_lbl, boot_m, K = K)
-    }
-    
-    #6.3.7.4.4 Store results
-    list(
-      jaccard_by_cluster = colMeans(J, na.rm = TRUE),
-      jaccard_mean = mean(J, na.rm = TRUE),
-      jaccard_min = min(colMeans(J, na.rm = TRUE), na.rm = TRUE))
-}
-
 #6.3.8 UMAP design matrix for mixed data (one-hot factors + numeric)
 make_umap_matrix <- function(df) {
   df <- as.data.frame(df)
@@ -448,6 +359,11 @@ run_one_set <- function(set_name, feats) {
       lambda = lam_info$lambda,
       nstart = as.integer(params$nstart),
       verbose = FALSE)
+    
+    if (!is.null(rownames(kp$data))) rownames(kp$data) <- NULL
+
+    # ADD TEMPORARILY:
+    cat("DEBUG k=", k, "| cluster length:", length(kp$cluster), "| kp$data nrow:", nrow(kp$data), "| lambda class:", class(kp$lambda), "| lambda length:", length(kp$lambda), "\n")
 
     lbl <- kp$cluster
     k_obs <- length(unique(lbl))
@@ -457,18 +373,27 @@ run_one_set <- function(set_name, feats) {
     sil <- if (k_obs >= 2 && min_n >= 2) silhouette_validation_kproto(kp, type = "huang") else NA_real_
     obj <- kproto_objective(kp)
 
-    #6.4.5.3 Stability (bootstrap Jaccard vs fitted partition)
-    stab <- if (k_obs >= 2 && min_n >= 2) {
-      bootstrap_stability(
-        X_fit = X_fit,
-        base_lbl = lbl,
-        k = k,
-        lambda = lam_info$lambda,
-        nstart = params$nstart,
-        B = params$boot_B,
-        seed = params$boot_seed + 100L * k)
+    #6.4.5.3 Stability (stability_kproto: Rand + Jaccard)
+    if (k_obs >= 2 && min_n >= 2) {
+      set.seed(params$boot_seed + 100L * k)
+      stab_formals <- names(formals(clustMixType::stability_kproto))
+      stab_args <- list(
+        object = kp,
+        method = c("rand", "jaccard"),
+        nstart = 1L,
+        verbose = FALSE)
+      if ("B" %in% stab_formals) {
+        stab_args$B <- as.integer(params$boot_B)
+      } else if ("nboot" %in% stab_formals) {
+        stab_args$nboot <- as.integer(params$boot_B)
+      }
+      stab_raw <- do.call(clustMixType::stability_kproto, stab_args)
+      stab_overall <- stab_raw[[1]]
+      stab_tbl <- as.data.frame(stab_raw[[2]])
+      colnames(stab_tbl) <- c("B", "Rand", "Jaccard")
     } else {
-      list(jaccard_mean = NA_real_, jaccard_min = NA_real_, jaccard_by_cluster = rep(NA_real_, k_obs))
+      stab_overall <- c(R = NA_real_, J = NA_real_)
+      stab_tbl <- data.frame(B = integer(0), Rand = numeric(0), Jaccard = numeric(0))
     }
 
     #6.4.5.4 Store
@@ -482,8 +407,12 @@ run_one_set <- function(set_name, feats) {
       added_dummy = prep$added_dummy,
       objective = as.numeric(obj),
       silhouette_huang = as.numeric(sil),
-      jaccard_mean = as.numeric(stab$jaccard_mean),
-      jaccard_min = as.numeric(stab$jaccard_min))
+      rand_overall = as.numeric(stab_overall["R"]),
+      jacc_overall = as.numeric(stab_overall["J"]),
+      rand_mean = mean(stab_tbl$Rand,    na.rm = TRUE),
+      jacc_mean = mean(stab_tbl$Jaccard, na.rm = TRUE),
+      rand_sd = sd(stab_tbl$Rand, na.rm = TRUE),
+      jacc_sd = sd(stab_tbl$Jaccard, na.rm = TRUE))
 
     #6.4.5.5 Save assignment table
     assign_tbl <- dt[, .(._row_id = .row_id)]
@@ -519,7 +448,7 @@ run_one_set <- function(set_name, feats) {
   ggsave(file.path(paths$fig_dir, glue("mvfs_{set_name}_silhouette_by_k.png")),
          p1, width = 7, height = 4.2, dpi = 600, bg = "white")
 
-  p2 <- ggplot(res_df, aes(x = k, y = jaccard_min)) +
+  p2 <- ggplot(res_df, aes(x = k, y = jacc_mean)) +
     geom_line(linewidth = 0.6) +
     geom_point(size = 1.8) +
     theme_classic(base_size = 12) +
@@ -527,7 +456,7 @@ run_one_set <- function(set_name, feats) {
       title = glue("Bootstrap stability across k (MVFS: {set_name})"),
       subtitle = glue("Metric = min clusterwise Jaccard; B={params$boot_B}"),
       x = "k", y = "min Jaccard")
-  ggsave(file.path(paths$fig_dir, glue("mvfs_{set_name}_jaccard_min_by_k.png")),
+  ggsave(file.path(paths$fig_dir, glue("mvfs_{set_name}_jacc_mean_by_k.png")),
          p2, width = 7, height = 4.2, dpi = 600, bg = "white")
 
   #6.4.8 UMAP visualization for a single k choice: pick argmax silhouette (ties => smaller k)
@@ -593,17 +522,17 @@ names(all_runs) <- use_sets
 
 summary_df <- bind_rows(lapply(all_runs, function(x) x$metrics)) %>%
   group_by(set) %>%
-  arrange(desc(silhouette_huang), desc(jaccard_min), k) %>%
+  arrange(desc(silhouette_huang), desc(jacc_mean), k) %>%
   mutate(rank = row_number()) %>%
   ungroup()
 
 write_csv2(summary_df, file.path(paths$tab_dir, "mvfs_all_sets_k_grid_metrics_long.csv"))
 
-#6.5.1 One-row recommendation per set (argmax silhouette; tie-break by higher jaccard_min then smaller k)
+#6.5.1 One-row recommendation per set (argmax silhouette; tie-break by higher jacc_mean then smaller k)
 best_df <- summary_df %>%
   filter(is.finite(silhouette_huang)) %>%
   group_by(set) %>%
-  arrange(desc(silhouette_huang), desc(jaccard_min), k) %>%
+  arrange(desc(silhouette_huang), desc(jacc_mean), k) %>%
   slice(1) %>%
   ungroup()
 
