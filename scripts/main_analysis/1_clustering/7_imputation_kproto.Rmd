@@ -23,7 +23,7 @@ params:
   # Missingness inclusion rule for imputation
   # Require at least this proportion of the 17 risk variables observed for a row to be imputable.
   # (Set to 0 to impute everyone; set higher to be more conservative.)
-  min_obs_prop: 0.30
+  min_obs_prop: 0.50
 
   # Imputation settings
   do_missForest: true
@@ -64,7 +64,7 @@ knitr::opts_chunk$set(cache = FALSE, message = TRUE, warning = TRUE, results = "
 
 cat("7.1 Setup beginning\n")
 
-#7.1.0 Resolve REPO + out_dir safely (YAML can't reference params$REPO via !r)
+#7.1.1 Resolve REPO + out_dir safely since YAML can't reference params$REPO via !r
 REPO <- Sys.getenv("REPO", unset = params$REPO)
 
 if (!nzchar(params$out_dir)) {
@@ -80,31 +80,28 @@ suppressPackageStartupMessages({
   library(tibble)
   library(data.table)
   library(ggplot2)
-
   library(naniar)      # mcar_test + missingness visuals
   library(clustMixType)
   library(cluster)
   library(clue)
   library(mclust)
-
   library(missForest)  # primary imputation
   library(mice)        # sensitivity imputation
 })
 
-#7.1.1 Output dirs
+#7.1.2 Output dirs
 paths <- list(
   out_dir = params$out_dir,
   fig_dir = file.path(params$out_dir, "figures"),
   tab_dir = file.path(params$out_dir, "tables"),
-  rds_dir = file.path(params$out_dir, "rds")
-)
+  rds_dir = file.path(params$out_dir, "rds"))
 
 dir.create(paths$out_dir, showWarnings = FALSE, recursive = TRUE)
 dir.create(paths$fig_dir, showWarnings = FALSE, recursive = TRUE)
 dir.create(paths$tab_dir, showWarnings = FALSE, recursive = TRUE)
 dir.create(paths$rds_dir, showWarnings = FALSE, recursive = TRUE)
 
-#7.1.2 Safe writers
+#7.1.3 Safe writers
 write_csv2 <- function(x, path) {
   dir.create(dirname(path), TRUE, TRUE)
   readr::write_csv(x, path)
@@ -124,11 +121,14 @@ cat("7.1 Setup complete\n")
 
 ## 7.2 Load anchor clustering object and recover canonical feature set ##
 
+#7.2.1 Load kp obj into env
 kp_path <- params$kproto_anchor_rds
 if (!file.exists(kp_path)) stop(glue("Anchor kproto RDS not found: {kp_path}"))
 
 kp_any <- readRDS(kp_path)
 
+
+#7.2.2 Select & parse target kproto solution
 pick_kproto <- function(obj, k_target) {
   if (inherits(obj, "kproto")) return(obj)
   stopifnot(is.list(obj))
@@ -148,6 +148,7 @@ pick_kproto <- function(obj, k_target) {
 
 kp2 <- pick_kproto(kp_any, 2)
 
+#7.2.3 Pull data from target kproto solution
 X_fit <- kp2$data
 if (is.null(X_fit) || nrow(X_fit) == 0) stop("kp2$data is missing/empty; cannot recover canonical feature frame.")
 
@@ -157,19 +158,20 @@ risk_features_17 <- names(risk_anchor_dt)
 
 cat(glue("Recovered p={length(risk_features_17)} canonical clustering features from anchor.\n"))
 
-# Baseline anchor labels (k=2)
+#7.2.4 Baseline anchor labels (k=2)
 anchor_lbl <- if (!is.null(kp2$cluster)) kp2$cluster else {
   pr <- predict(kp2, newdata = as.data.frame(risk_anchor_dt))
   if (is.list(pr)) pr$cluster else pr
 }
 stopifnot(length(anchor_lbl) == nrow(risk_anchor_dt))
 
-# participant_id is stored in rownames of kp2$data
+#7.2.5 Ensure participant_id is stored in rownames of kp2$data
 anchor_id <- rownames(risk_anchor_df)
 if (is.null(anchor_id) || anyNA(anchor_id) || length(anchor_id) != nrow(risk_anchor_df)) {
   stop("Could not recover participant_id from rownames(kp2$data). Please confirm rownames are participant IDs.")
 }
 
+#7.2.6 Store anchor clustering IDs
 anchor_id <- as.character(anchor_id)
 
 ```
@@ -180,6 +182,7 @@ anchor_id <- as.character(anchor_id)
 
 ## 7.3 Load unfiltered baseline risk frame (full baseline N) ##
 
+#7.3.1 Load in unfiltered baseline risk df to be used in imputation
 risk_path <- params$risk_unfiltered_path
 if (!file.exists(risk_path)) stop(glue("Unfiltered risk CSV not found: {risk_path}"))
 
@@ -190,7 +193,7 @@ if (!("participant_id" %in% names(risk_dt_raw))) {
   stop("Unfiltered risk frame does not include participant_id; needed for alignment and downstream merges.")
 }
 
-#7.3.1 Restrict to canonical 17 features + participant_id
+#7.3.2 Restrict to canonical 17 features + participant_id
 missing_feats <- setdiff(risk_features_17, names(risk_dt_raw))
 if (length(missing_feats)) {
   stop(glue("Unfiltered frame is missing canonical features: {paste(missing_feats, collapse=', ')}"))
@@ -215,8 +218,7 @@ X0 <- as.data.frame(risk_dt[, risk_features_17, with = FALSE])
 miss_var <- tibble::tibble(
   feature = names(X0),
   n_miss = vapply(X0, function(x) sum(is.na(x)), numeric(1)),
-  pct_miss = n_miss / nrow(X0)
-) %>% arrange(desc(pct_miss))
+  pct_miss = n_miss / nrow(X0)) %>% arrange(desc(pct_miss))
 
 write_csv2(miss_var, file.path(paths$tab_dir, "missingness_by_variable.csv"))
 knitr::kable(head(miss_var, 25), digits = 3, caption = "Top missingness (variables)") %>%
@@ -227,8 +229,7 @@ obs_prop <- rowMeans(!is.na(X0))
 risk_dt[, obs_prop := obs_prop]
 
 miss_row <- tibble::tibble(
-  obs_prop = obs_prop
-) %>%
+  obs_prop = obs_prop) %>%
   summarise(
     n = n(),
     min = min(obs_prop),
@@ -237,8 +238,7 @@ miss_row <- tibble::tibble(
     median = median(obs_prop),
     p75 = quantile(obs_prop, 0.75),
     p90 = quantile(obs_prop, 0.90),
-    max = max(obs_prop)
-  )
+    max = max(obs_prop))
 
 write_csv2(miss_row, file.path(paths$tab_dir, "missingness_row_obsprop_summary.csv"))
 knitr::kable(miss_row, digits = 3, caption = "Row-level observed proportion summary") %>%
@@ -255,9 +255,8 @@ ggsave(file.path(paths$fig_dir, "missingness_by_variable.png"),
        p_miss_var, width = 7.2, height = 6.2, dpi = 600, bg = "white")
 
 #7.4.4 Missingness pattern heatmap (subset for readability if huge N)
-#     (naniar handles large N OK, but plot file size can balloon)
 set.seed(1)
-idx_plot <- if (nrow(X0) > 5000) sample(seq_len(nrow(X0)), 5000) else seq_len(nrow(X0))
+idx_plot <- if (nrow(X0) > 12000) sample(seq_len(nrow(X0)), 12000) else seq_len(nrow(X0))
 p_vis <- naniar::vis_miss(X0[idx_plot, , drop = FALSE]) +
   theme_classic(base_size = 12) +
   labs(title = "Missingness heatmap (sampled rows)")
@@ -265,8 +264,7 @@ p_vis <- naniar::vis_miss(X0[idx_plot, , drop = FALSE]) +
 ggsave(file.path(paths$fig_dir, "missingness_heatmap_vis_miss.png"),
        p_vis, width = 9.0, height = 5.2, dpi = 600, bg = "white")
 
-#7.4.5 Little's MCAR test (heuristic in mixed-type settings; most interpretable on numeric-only)
-#     We run it on numeric columns only and report as one piece of evidence.
+#7.4.5 Little's MCAR test (most interpretable on numeric-only)
 is_num <- vapply(X0, is.numeric, logical(1))
 X_num <- X0[, is_num, drop = FALSE]
 
@@ -276,7 +274,7 @@ if (ncol(X_num) >= 2) {
 }
 
 if (!is.null(mcar_out)) {
-  # mcar_out is a tibble-like output
+
   write_csv2(as.data.frame(mcar_out), file.path(paths$tab_dir, "little_mcar_test_numeric_only.csv"))
   knitr::kable(mcar_out, digits = 3, caption = "Little's MCAR test (numeric features only)") %>%
     kableExtra::kable_styling(full_width = FALSE)
@@ -286,7 +284,7 @@ if (!is.null(mcar_out)) {
 
 #7.4.6 Practical MAR-style check: do missingness indicators relate to other observed variables?
 #     For each feature f, regress I(missing_f) on all other features (simple GLM on model.matrix).
-#     This is an exploratory screen (not a definitive MAR test).
+#     This is an exploratory screen and not a definitive MAR test
 make_mm <- function(df) {
   mm <- model.matrix(~ . - 1, data = df)
   mm[, apply(mm, 2, function(x) stats::sd(x) > 0), drop = FALSE]
@@ -299,13 +297,11 @@ glm_screen <- lapply(names(X0), function(f) {
   y <- as.integer(is.na(X0[[f]]))
   if (all(y == 0) || all(y == 1)) return(NULL)
 
-  # predictors exclude the target feature's own columns as best-effort:
-  # (we drop raw f from df and rebuild mm)
+  #7.4.6.1 Predictors exclude the target feature's own columns as best-effort: we drop raw f from df and rebuild mm
   df_pred <- X0[, setdiff(names(X0), f), drop = FALSE]
   mm_pred <- make_mm(df_pred)
 
-  # keep it light: use a ridge-like workaround by limiting predictors if enormous
-  # (still simple; no heavy CV)
+  #7.4.6.2 Keep it light; use a ridge-like workaround by limiting predictors if enormous
   if (ncol(mm_pred) > 200) {
     set.seed(1)
     keep <- sample(seq_len(ncol(mm_pred)), 200)
@@ -315,7 +311,7 @@ glm_screen <- lapply(names(X0), function(f) {
   fit <- tryCatch(glm(y ~ mm_pred, family = binomial()), error = function(e) NULL)
   if (is.null(fit)) return(NULL)
 
-  # omnibus LRT vs intercept-only
+  #7.4.6.3 Omnibus LRT vs intercept-only
   fit0 <- glm(y ~ 1, family = binomial())
   lr <- tryCatch(anova(fit0, fit, test = "Chisq"), error = function(e) NULL)
   if (is.null(lr) || nrow(lr) < 2) return(NULL)
@@ -326,8 +322,7 @@ glm_screen <- lapply(names(X0), function(f) {
     pct_miss = mean(y == 1),
     df = lr$Df[2],
     chisq = lr$Deviance[2],
-    p = lr$`Pr(>Chi)`[2]
-  )
+    p = lr$`Pr(>Chi)`[2])
 }) %>% bind_rows()
 
 if (nrow(glm_screen) > 0) {
@@ -348,7 +343,22 @@ if (nrow(glm_screen) > 0) {
 
 ## 7.5 Helper functions ##
 
-#7.5.1 Coerce types: numeric stays numeric; character/logical -> factor; small-int -> factor
+#7.5.1 Force known categorical risk variables to factor
+force_known_categoricals <- function(df) {
+  df <- as.data.frame(df)
+
+  known_cat <- intersect(
+    c("family_history_depression", "family_history_mania", "bullying"),
+    names(df))
+
+  for (nm in known_cat) {
+    df[[nm]] <- factor(df[[nm]])
+  }
+
+  df
+}
+
+#7.5.2 Coerce types: numeric stays numeric; character/logical -> factor; small-int -> factor
 coerce_types <- function(df) {
   df <- as.data.frame(df)
   for (nm in names(df)) {
@@ -366,7 +376,7 @@ coerce_types <- function(df) {
   df
 }
 
-#7.5.2 Z-score numeric columns
+#7.5.3 Z-score numeric columns
 zscore_numeric <- function(df) {
   df <- as.data.frame(df)
   is_num <- vapply(df, is.numeric, logical(1))
@@ -379,7 +389,7 @@ zscore_numeric <- function(df) {
   df
 }
 
-#7.5.3 Ensure >=1 numeric and >=1 factor column for kproto
+#7.5.4 Ensure >=1 numeric and >=1 factor column for kproto
 count_types <- function(df) {
   df <- as.data.frame(df)
   is_num <- vapply(df, is.numeric, logical(1))
@@ -397,7 +407,7 @@ prep_for_kproto <- function(df) {
   list(x = df, added_dummy = (add_num || add_fac), ct = ct)
 }
 
-#7.5.4 Lambda rule
+#7.5.5 Lambda rule
 lambda_safe <- function(X_orig, lambda_mode, lambda_fixed = 2.5) {
   if (identical(lambda_mode, "fixed")) return(list(lambda = as.numeric(lambda_fixed), reason = "fixed"))
   ct <- count_types(X_orig)
@@ -407,7 +417,7 @@ lambda_safe <- function(X_orig, lambda_mode, lambda_fixed = 2.5) {
   list(lambda = lam, reason = "lambdaest (mixed-type set)")
 }
 
-#7.5.5 Objective + silhouette
+#7.5.6 Objective + silhouette
 kproto_objective <- function(kp) {
   for (nm in c("tot.withinss","tot.withindist","tot.within.dist","tot.within")) {
     if (!is.null(kp[[nm]]) && is.finite(kp[[nm]])) return(as.numeric(kp[[nm]]))
@@ -425,66 +435,26 @@ extract_validation_index <- function(x) {
 silhouette_validation_kproto <- function(kp, type = "huang") {
   out <- tryCatch(
     clustMixType::validation_kproto(method = "silhouette", object = kp, type = type),
-    error = function(e) NA
-  )
+    error = function(e) NA)
   extract_validation_index(out)
 }
 
-#7.5.6 Hungarian mapping + clusterwise Jaccard stability
-hungarian_map <- function(from, to) {
-  from <- as.integer(from)
-  to <- as.integer(to)
-  K <- max(length(unique(from)), length(unique(to)))
-  tab <- table(from, to)
-  tab_full <- matrix(0, nrow = K, ncol = K)
-  tab_full[seq_len(nrow(tab)), seq_len(ncol(tab))] <- tab
-  maxv <- max(tab_full)
-  cost <- maxv - tab_full
-  assign <- clue::solve_LSAP(cost)
-  as.integer(assign)
-}
-apply_map <- function(lbl, mapping) {
-  lbl <- as.integer(lbl)
-  out <- lbl
-  ok <- lbl >= 1 & lbl <= length(mapping)
-  out[ok] <- mapping[lbl[ok]]
-  out
-}
-clusterwise_jaccard <- function(lbl_a, lbl_b, K = NULL) {
-  lbl_a <- as.integer(lbl_a)
-  lbl_b <- as.integer(lbl_b)
-  if (is.null(K)) K <- max(length(unique(lbl_a)), length(unique(lbl_b)))
-  out <- rep(NA_real_, K)
-  for (k in seq_len(K)) {
-    A <- which(lbl_a == k)
-    B <- which(lbl_b == k)
-    den <- length(union(A, B))
-    out[k] <- if (den == 0) NA_real_ else length(intersect(A, B)) / den
-  }
-  out
-}
-bootstrap_stability <- function(X_fit, base_lbl, k, lambda, nstart, B = 100L, seed = 123L) {
-  n <- nrow(X_fit)
-  K <- length(unique(base_lbl))
-  set.seed(seed)
-  J <- matrix(NA_real_, nrow = as.integer(B), ncol = as.integer(K))
-  for (b in seq_len(as.integer(B))) {
-    idx <- sample(seq_len(n), n, replace = TRUE)
-    Xb  <- X_fit[idx, , drop = FALSE]
-    kp_b <- clustMixType::kproto(x = Xb, k = as.integer(k), lambda = lambda,
-                                 nstart = as.integer(nstart), verbose = FALSE)
-    pr <- predict(kp_b, newdata = X_fit)
-    boot_lbl <- if (is.list(pr)) pr$cluster else pr
-    mapping <- hungarian_map(from = boot_lbl, to = base_lbl)
-    boot_m  <- apply_map(boot_lbl, mapping)
-    J[b, ] <- clusterwise_jaccard(base_lbl, boot_m, K = K)
-  }
-  
-  list(
-    jaccard_by_cluster = colMeans(J, na.rm = TRUE),
-    jaccard_mean = mean(J, na.rm = TRUE),
-    jaccard_min = min(colMeans(J, na.rm = TRUE), na.rm = TRUE)
-  )
+#7.5.7 Clean kproto object for stability_kproto()
+clean_kproto_for_stability <- function(kp) {
+  kp2 <- kp
+
+  #7.5.7.1 Ensure data is a plain data.frame, no rownames
+  kp2$data <- as.data.frame(kp2$data)
+  rownames(kp2$data) <- NULL
+
+  #7.5.7.2 Ensure cluster is a plain integer vector, no names
+  kp2$cluster <- as.integer(kp2$cluster)
+  names(kp2$cluster) <- NULL
+
+  #7.5.7.3 Ensure lambda is scalar numeric
+  if (!is.null(kp2$lambda)) kp2$lambda <- as.numeric(kp2$lambda)[1]
+
+  kp2
 }
 
 ```
@@ -495,8 +465,7 @@ bootstrap_stability <- function(X_fit, base_lbl, k, lambda, nstart, B = 100L, se
 
 ## 7.6 Define which rows are imputable ##
 
-#7.6.1 Apply inclusion rule for imputation
-# Rows with too few observed values are excluded from imputation + downstream clustering.
+#7.6.1 Apply inclusion rule for imputation clustering; rows with too few observed values are excluded from imputation + downstream
 min_obs_prop <- params$min_obs_prop
 risk_dt[, imputable := (obs_prop >= min_obs_prop)]
 
@@ -504,8 +473,7 @@ tab_imputable <- risk_dt[, .(
   N_total = .N,
   N_imputable = sum(imputable),
   pct_imputable = mean(imputable),
-  min_obs_prop = min_obs_prop
-)]
+  min_obs_prop = min_obs_prop)]
 
 write_csv2(as.data.frame(tab_imputable), file.path(paths$tab_dir, "imputation_inclusion_summary.csv"))
 knitr::kable(tab_imputable, digits = 3, caption = "Imputation inclusion summary") %>%
@@ -524,33 +492,41 @@ X_imp0 <- as.data.frame(risk_imp_dt[, risk_features_17, with = FALSE])
 
 ## 7.7.1 missForest Primary Imputation ##
 
+#7.7.1.1 Store empty object to store results
 imp_mf <- NULL
 
+#7.7.1.2 Dynamically run missForest imputation
 if (isTRUE(params$do_missForest)) {
 
   cat("Running missForest...\n")
 
-  X_mf <- coerce_types(X_imp0)
+  #7.7.1.2.1 Prep data
+  X_mf <- X_imp0 
+  X_mf <- force_known_categoricals(X_mf) 
+  X_mf <- coerce_types(X_mf)
 
+  #7.7.1.2.2 Set seed for reproducibility
   set.seed(params$missForest_seed)
+  
+  #7.7.1.2.3 Run missForest model on data
   imp_mf <- missForest::missForest(
     xmis = X_mf,
     maxiter = params$missForest_maxiter,
     ntree = params$missForest_ntree,
-    verbose = TRUE
-  )
+    verbose = TRUE)
 
-  # Completed data
+  #7.7.1.2.4 Store completed data
   X_mf_comp <- imp_mf$ximp
 
-  # Post-imputation: z-score numeric to match your kproto z-score convention
+  #7.7.1.2.5 Post-imputation: z-score numeric to match kproto z-score convention
   X_mf_comp <- zscore_numeric(X_mf_comp)
 
+  #7.7.1.2.6 Save output
   save_rds2(imp_mf, file.path(paths$rds_dir, "imputation_missForest_object.rds"))
   write_csv2(
     tibble::tibble(
       method = "missForest",
-      OOBerror = imp_mf$OOBerror %||% NA_real_),
+      OOBerror = if (!is.null(imp_mf$OOBerror)) imp_mf$OOBerror else NA_real_),
     file.path(paths$tab_dir, "imputation_missForest_oob.csv"))
 }
 
@@ -562,47 +538,51 @@ if (isTRUE(params$do_missForest)) {
 
 ## 7.7.2 MICE Sensitivity Imputation ##
 
+#7.7.2.1 Create objects to store MICE results
 imp_mice <- NULL
 X_mice_comp <- NULL
 
+#7.7.2.2 Dynamically run MICE
 if (isTRUE(params$do_mice)) {
 
   cat("Running mice...\n")
 
-  X_mi <- coerce_types(X_imp0)
+  #7.7.2.2.1 Prep data for MICE
+  X_mi <- X_imp0
+  X_mi <- force_known_categoricals(X_mi)
+  X_mi <- coerce_types(X_mi)
 
-  #7.7.2.1 Define mice methods by type
+  #7.7.2.2.2 Define mice methods by type
   meth <- mice::make.method(X_mi)
 
   is_num <- vapply(X_mi, is.numeric, logical(1))
   is_fac <- vapply(X_mi, is.factor, logical(1))
 
-  # Numeric: predictive mean matching
+  #7.7.2.2.3 For numeric vars, run predictive mean matching
   meth[is_num] <- "pmm"
 
-  # Factor: binary logistic if 2 levels; else polyreg
+  #7.7.2.2.4 For factor vars binary logistic if 2 levels; else polyreg
   for (nm in names(X_mi)[is_fac]) {
     k <- nlevels(X_mi[[nm]])
     if (k == 2) meth[nm] <- "logreg" else meth[nm] <- "polyreg"
   }
 
-  #7.7.2.2 Run MI
+  #7.7.2.2.5 Run MICE
   set.seed(params$mice_seed)
   imp_mice <- mice::mice(
     data = X_mi,
     m = params$mice_m,
     maxit = params$mice_maxit,
     method = meth,
-    printFlag = TRUE
-  )
+    printFlag = TRUE)
 
-  #7.7.2.3 Use first completed dataset for clustering sensitivity
+  #7.7.2.2.6 Use first completed dataset for clustering sensitivity
   X_mice_comp <- mice::complete(imp_mice, action = 1)
   X_mice_comp <- zscore_numeric(X_mice_comp)
 
   save_rds2(imp_mice, file.path(paths$rds_dir, "imputation_mice_mids.rds"))
 
-  # Basic convergence plot artifact (saved)
+  ##7.7.2.2.7 Basic convergence plot artifact
   png(file.path(paths$fig_dir, "mice_traceplot.png"), width = 1400, height = 900, res = 180)
   plot(imp_mice)
   dev.off()
@@ -614,7 +594,6 @@ if (isTRUE(params$do_mice)) {
 
 ```{r refit kproto, echo = FALSE, warning = FALSE}
 
-
 ## 7.8 k-prototypes grid on imputed datasets ##
 
 run_k_grid <- function(X_completed, label, participant_id_vec) {
@@ -623,8 +602,7 @@ run_k_grid <- function(X_completed, label, participant_id_vec) {
   lam_info <- lambda_safe(
     X_completed,
     lambda_mode = params$lambda_mode,
-    lambda_fixed = params$lambda_fixed
-  )
+    lambda_fixed = params$lambda_fixed)
 
   #7.8.2 Prep input (dummy cols if needed)
   prep <- prep_for_kproto(X_completed)
@@ -635,9 +613,10 @@ run_k_grid <- function(X_completed, label, participant_id_vec) {
   model_list <- list()
   assign_list <- list()
 
-  # baseline alignment: overlap with anchor IDs
+  #7.8.3 Overlap with anchor IDs for ARI comparison
   pid <- as.character(participant_id_vec)
-  subj_overlap <- intersect(pid, anchor_id)
+  in_anchor <- pid %in% anchor_id
+  subj_overlap <- pid[in_anchor]
   anchor_lbl_overlap <- anchor_lbl[match(subj_overlap, anchor_id)]
 
   for (k in params$k_grid) {
@@ -649,8 +628,7 @@ run_k_grid <- function(X_completed, label, participant_id_vec) {
       k = as.integer(k),
       lambda = lam_info$lambda,
       nstart = as.integer(params$nstart),
-      verbose = FALSE
-    )
+      verbose = FALSE)
 
     lbl <- kp$cluster
     k_obs <- length(unique(lbl))
@@ -659,21 +637,43 @@ run_k_grid <- function(X_completed, label, participant_id_vec) {
     sil <- if (k_obs >= 2 && min_n >= 2) silhouette_validation_kproto(kp, type = "huang") else NA_real_
     obj <- kproto_objective(kp)
 
-    stab <- if (k_obs >= 2 && min_n >= 2) {
-      bootstrap_stability(
-        X_fit = X_fit,
-        base_lbl = lbl,
-        k = k,
-        lambda = lam_info$lambda,
-        nstart = params$nstart,
-        B = params$boot_B,
-        seed = params$boot_seed + 100L * k
+    #7.8.3.1 Stability via stability_kproto: Rand + Jaccard
+    if (k_obs >= 2 && min_n >= 2) {
+    
+      kp_stab <- clean_kproto_for_stability(kp)
+    
+      set.seed(params$boot_seed + 100L * k)
+    
+      stab_formals <- names(formals(clustMixType::stability_kproto))
+      stab_args <- list(
+        object = kp_stab,
+        method = c("rand", "jaccard"),
+        nstart = as.integer(params$nstart),
+        verbose = FALSE)
+    
+      if ("B" %in% stab_formals) {
+        stab_args$B <- as.integer(params$boot_B)
+      } else if ("nboot" %in% stab_formals) {
+        stab_args$nboot <- as.integer(params$boot_B)
+      }
+    
+      stab_raw <- tryCatch(
+        do.call(clustMixType::stability_kproto, stab_args),
+        error = function(e) {
+          stop(glue("stability_kproto() failed at {label}, k={k}: {conditionMessage(e)}"))
+        }
       )
+    
+      stab_overall <- stab_raw[[1]]
+      stab_tbl <- as.data.frame(stab_raw[[2]])
+      colnames(stab_tbl) <- c("B", "Rand", "Jaccard")
+    
     } else {
-      list(jaccard_mean = NA_real_, jaccard_min = NA_real_, jaccard_by_cluster = rep(NA_real_, k_obs))
+      stab_overall <- c(R = NA_real_, J = NA_real_)
+      stab_tbl <- data.frame(B = integer(0), Rand = numeric(0), Jaccard = numeric(0))
     }
 
-    #7.8.4 Agreement with baseline anchor (ARI) on the overlapping subject set
+    #7.8.3.2 Agreement with baseline anchor (ARI) on the overlapping subject set
     ari_vs_anchor <- NA_real_
     if (sum(in_anchor) > 10) {
       idx_overlap <- match(subj_overlap, pid)
@@ -691,20 +691,22 @@ run_k_grid <- function(X_completed, label, participant_id_vec) {
       added_dummy = prep$added_dummy,
       objective = as.numeric(obj),
       silhouette_huang = as.numeric(sil),
-      jaccard_mean = as.numeric(stab$jaccard_mean),
-      jaccard_min  = as.numeric(stab$jaccard_min),
+      rand_overall = as.numeric(stab_overall["R"]),
+      jacc_overall = as.numeric(stab_overall["J"]),
+      rand_mean = mean(stab_tbl$Rand, na.rm = TRUE),
+      jacc_mean = mean(stab_tbl$Jaccard, na.rm = TRUE),
+      rand_sd = sd(stab_tbl$Rand, na.rm = TRUE),
+      jacc_sd = sd(stab_tbl$Jaccard, na.rm = TRUE),,
       ari_vs_anchor_k2 = as.numeric(ari_vs_anchor),
-      n_overlap_anchor = as.integer(sum(in_anchor))
-    )
+      n_overlap_anchor = as.integer(sum(in_anchor)))
 
-    # assignments
+    #7.8.3.3 Assignments
     assign_list[[as.character(k)]] <- tibble::tibble(
       participant_id = participant_id_vec,
       imputation = label,
       k = as.integer(k),
       cluster = as.integer(lbl),
-      in_anchor = in_anchor
-    )
+      in_anchor = in_anchor)
 
     if (!isTRUE(params$keep_model_data)) kp$data <- NULL
     model_list[[as.character(k)]] <- kp
@@ -713,12 +715,12 @@ run_k_grid <- function(X_completed, label, participant_id_vec) {
   res_df <- bind_rows(res_list) %>% arrange(k)
   assign_df <- bind_rows(assign_list)
 
-  # write artifacts
+  #7.8.4 Write artifacts
   write_csv2(res_df, file.path(paths$tab_dir, glue("kgrid_metrics_{label}.csv")))
   write_csv2(assign_df, file.path(paths$tab_dir, glue("kgrid_assignments_{label}.csv")))
   save_rds2(model_list, file.path(paths$rds_dir, glue("kgrid_models_{label}.rds")))
 
-  # plots
+  #7.8.5 Plots
   p1 <- ggplot(res_df, aes(x = k, y = silhouette_huang)) +
     geom_line(linewidth = 0.6) +
     geom_point(size = 1.8) +
@@ -726,21 +728,19 @@ run_k_grid <- function(X_completed, label, participant_id_vec) {
     labs(
       title = glue("Silhouette across k ({label})"),
       subtitle = glue("lambda_mode={params$lambda_mode}; lambda={round(res_df$lambda[1], 3)}; nstart={params$nstart}"),
-      x = "k", y = "Silhouette (Huang)"
-    )
+      x = "k", y = "Silhouette (Huang)")
   ggsave(file.path(paths$fig_dir, glue("silhouette_by_k_{label}.png")),
          p1, width = 7, height = 4.2, dpi = 600, bg = "white")
 
-  p2 <- ggplot(res_df, aes(x = k, y = jaccard_min)) +
+  p2 <- ggplot(res_df, aes(x = k, y = jaccard_mean)) +
     geom_line(linewidth = 0.6) +
     geom_point(size = 1.8) +
     theme_classic(base_size = 12) +
     labs(
       title = glue("Bootstrap stability across k ({label})"),
       subtitle = glue("Metric = min clusterwise Jaccard; B={params$boot_B}"),
-      x = "k", y = "min Jaccard"
-    )
-  ggsave(file.path(paths$fig_dir, glue("jaccard_min_by_k_{label}.png")),
+      x = "k", y = "min Jaccard")
+  ggsave(file.path(paths$fig_dir, glue("jaccard_mean_by_k_{label}.png")),
          p2, width = 7, height = 4.2, dpi = 600, bg = "white")
 
   p3 <- ggplot(res_df, aes(x = k, y = ari_vs_anchor_k2)) +
@@ -750,30 +750,28 @@ run_k_grid <- function(X_completed, label, participant_id_vec) {
     labs(
       title = glue("Agreement vs baseline anchor labels across k ({label})"),
       subtitle = "ARI computed on subjects overlapping the original anchor clustering frame",
-      x = "k", y = "ARI vs anchor labels"
-    )
+      x = "k", y = "ARI vs anchor labels")
   ggsave(file.path(paths$fig_dir, glue("ari_vs_anchor_by_k_{label}.png")),
          p3, width = 7, height = 4.2, dpi = 600, bg = "white")
 
   list(metrics = res_df, assignments = assign_df)
 }
 
+#7.8.6 Run missForest & MICE k grids
 runs <- list()
 
 if (isTRUE(params$do_missForest) && !is.null(imp_mf)) {
   runs$missForest <- run_k_grid(
     X_completed = X_mf_comp,
     label = "missForest",
-    participant_id_vec = risk_imp_dt$participant_id
-  )
+    participant_id_vec = risk_imp_dt$participant_id)
 }
 
 if (isTRUE(params$do_mice) && !is.null(imp_mice)) {
   runs$mice <- run_k_grid(
     X_completed = X_mice_comp,
     label = "mice",
-    participant_id_vec = risk_imp_dt$participant_id
-  )
+    participant_id_vec = risk_imp_dt$participant_id)
 }
 
 ```
@@ -782,8 +780,7 @@ if (isTRUE(params$do_mice) && !is.null(imp_mice)) {
 
 ```{r summary, echo = FALSE, warning = FALSE}
 
-## 7.9 Summary ##
-
+## 7.9 Summary Table ##
 
 if (length(runs) > 0) {
 
@@ -792,17 +789,17 @@ if (length(runs) > 0) {
 
   write_csv2(sum_df, file.path(paths$tab_dir, "kgrid_metrics_all_imputation_methods.csv"))
 
-  # Recommendation rule: maximize silhouette, tie-break by higher jaccard_min, then smaller k
+  #7.9.1 Recommendation rule: maximize silhouette, tie-break by higher jaccard_mean, then smaller k
   best_df <- sum_df %>%
     filter(is.finite(silhouette_huang)) %>%
     group_by(imputation) %>%
-    arrange(desc(silhouette_huang), desc(jaccard_min), k) %>%
+    arrange(desc(silhouette_huang), desc(jacc_mean), k) %>%
     slice(1) %>%
     ungroup()
 
   write_csv2(best_df, file.path(paths$tab_dir, "k_recommendation_per_imputation_method.csv"))
 
-  knitr::kable(best_df, digits = 3, caption = "Recommended k per imputation method (max silhouette; tie-break by stability; then smaller k)") %>%
+  knitr::kable(best_df, digits = 3, caption = "Recommended k per imputation method (max silhouette; tie-break by mean bootstrap Jaccard; then smaller k)") %>%
     kableExtra::kable_styling(full_width = FALSE)
 }
 
@@ -812,6 +809,7 @@ if (length(runs) > 0) {
 
 ```{r reproducibility log, echo = FALSE, warning = FALSE}
 
+## 7.10 Store Reproducibility Log ##
 
 log <- list(
   timestamp = as.character(Sys.time()),
@@ -824,23 +822,19 @@ log <- list(
     run = params$do_missForest,
     seed = params$missForest_seed,
     maxiter = params$missForest_maxiter,
-    ntree = params$missForest_ntree
-  ),
+    ntree = params$missForest_ntree),
   mice = list(
     run = params$do_mice,
     seed = params$mice_seed,
     m = params$mice_m,
-    maxit = params$mice_maxit
-  ),
+    maxit = params$mice_maxit),
   clustering = list(
     k_grid = params$k_grid,
     nstart = params$nstart,
     lambda_mode = params$lambda_mode,
     lambda_fixed = params$lambda_fixed,
     boot_B = params$boot_B,
-    boot_seed = params$boot_seed
-  )
-)
+    boot_seed = params$boot_seed))
 
 writeLines(jsonlite::toJSON(log, pretty = TRUE), con = file.path(paths$out_dir, "run_log.json"))
 

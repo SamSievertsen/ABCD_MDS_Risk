@@ -4,28 +4,23 @@
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=sievertsen@ohsu.edu
 
-#SBATCH --account=basic
-#SBATCH --partition=basic
+#SBATCH --account=NagelLab
+#SBATCH --partition=batch
+#SBATCH --qos=long_jobs
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=256G
-#SBATCH --time=23:59:00
+#SBATCH --mem=128G
+#SBATCH --time=72:00:00
 
 #SBATCH --chdir /home/exacloud/gscratch/NagelLab/staff/sam/
 #SBATCH --export=all
 
-# -----------------------------
 # Strict Bash mode
-# -----------------------------
-
 set -euo pipefail
 IFS=$'\n\t'
 
-# -----------------------------
 # Set paths
-# -----------------------------
-
 IMG=/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.8.sif
 REPO=/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk
 
@@ -35,10 +30,7 @@ RMD_REL="scripts/main_analysis/1_clustering/6_mvfs_k_calculation.Rmd"
 export REPO
 export APPTAINER_CACHEDIR=/home/exacloud/gscratch/NagelLab/staff/${USER}/.apptainer_cache
 
-# -----------------------------
 # Log directories grouped by date
-# -----------------------------
-
 TODAY=$(date +%Y-%m-%d)
 LOGDIR="${REPO}/slurm_logs/${TODAY}"
 USAGEDIR="${REPO}/slurm_usage_logs"
@@ -57,29 +49,20 @@ fi
 exec > >(tee -a "${LOGDIR}/${SLURM_JOB_NAME}_${SLURM_JOB_ID}.out") \
      2> >(tee -a "${LOGDIR}/${SLURM_JOB_NAME}_${SLURM_JOB_ID}.err" >&2)
 
-# -----------------------------
 # Stamp logs with Git commit & container version
-# -----------------------------
-
 GIT_HASH=$(git -C "${REPO}" rev-parse HEAD)
 echo "Git commit: ${GIT_HASH}"
 echo "Container: ${IMG}"
 echo "Rmd: ${REPO}/${RMD_REL}"
 echo "REPO env: ${REPO}"
 
-# -----------------------------
 # Move to script directory
-# -----------------------------
-
 cd "${REPO}/scripts/main_analysis/1_clustering"
 
 # Stream the DETAILED_LOG to the .out
 tail -F "${DETAILED_LOG}" & TAILPID=$!
 
-# -----------------------------
 # Render Rmd inside Apptainer
-# -----------------------------
-
 apptainer exec \
   -B /home/exacloud/gscratch/NagelLab:/home/exacloud/gscratch/NagelLab \
   "${IMG}" \
@@ -88,10 +71,7 @@ apptainer exec \
 # Stop background tail
 kill "$TAILPID" 2>/dev/null || true
 
-# -----------------------------
 # Post-run usage accounting on EXIT
-# -----------------------------
-
 function log_usage {
   CSV="${USAGEDIR}/usage.csv"
 
