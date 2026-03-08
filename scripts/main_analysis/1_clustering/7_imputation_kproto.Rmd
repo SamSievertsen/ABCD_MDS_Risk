@@ -67,14 +67,18 @@ cat("7.1 Setup beginning\n")
 #7.1.1 Resolve REPO + out_dir safely since YAML can't reference params$REPO via !r
 REPO <- Sys.getenv("REPO", unset = params$REPO)
 
-if (!nzchar(params$out_dir)) {
-  params$out_dir <- file.path(REPO, "results", "main_analysis", "1_clustering", "7_imputation_kproto")
+out_dir <- if (nzchar(params$out_dir)) {
+  params$out_dir
+} else {
+  file.path(REPO, "results", "main_analysis", "1_clustering", "7_imputation_kproto")
 }
 
 suppressPackageStartupMessages({
   library(dplyr)
   library(tidyr)
   library(readr)
+  library(kableExtra)
+  library(jsonlite)
   library(glue)
   library(purrr)
   library(tibble)
@@ -696,7 +700,7 @@ run_k_grid <- function(X_completed, label, participant_id_vec) {
       rand_mean = mean(stab_tbl$Rand, na.rm = TRUE),
       jacc_mean = mean(stab_tbl$Jaccard, na.rm = TRUE),
       rand_sd = sd(stab_tbl$Rand, na.rm = TRUE),
-      jacc_sd = sd(stab_tbl$Jaccard, na.rm = TRUE),,
+      jacc_sd = sd(stab_tbl$Jaccard, na.rm = TRUE),
       ari_vs_anchor_k2 = as.numeric(ari_vs_anchor),
       n_overlap_anchor = as.integer(sum(in_anchor)))
 
@@ -732,7 +736,7 @@ run_k_grid <- function(X_completed, label, participant_id_vec) {
   ggsave(file.path(paths$fig_dir, glue("silhouette_by_k_{label}.png")),
          p1, width = 7, height = 4.2, dpi = 600, bg = "white")
 
-  p2 <- ggplot(res_df, aes(x = k, y = jaccard_mean)) +
+  p2 <- ggplot(res_df, aes(x = k, y = jacc_mean)) +
     geom_line(linewidth = 0.6) +
     geom_point(size = 1.8) +
     theme_classic(base_size = 12) +
@@ -740,7 +744,7 @@ run_k_grid <- function(X_completed, label, participant_id_vec) {
       title = glue("Bootstrap stability across k ({label})"),
       subtitle = glue("Metric = min clusterwise Jaccard; B={params$boot_B}"),
       x = "k", y = "min Jaccard")
-  ggsave(file.path(paths$fig_dir, glue("jaccard_mean_by_k_{label}.png")),
+  ggsave(file.path(paths$fig_dir, glue("jacc_mean_by_k_{label}.png")),
          p2, width = 7, height = 4.2, dpi = 600, bg = "white")
 
   p3 <- ggplot(res_df, aes(x = k, y = ari_vs_anchor_k2)) +
@@ -789,7 +793,7 @@ if (length(runs) > 0) {
 
   write_csv2(sum_df, file.path(paths$tab_dir, "kgrid_metrics_all_imputation_methods.csv"))
 
-  #7.9.1 Recommendation rule: maximize silhouette, tie-break by higher jaccard_mean, then smaller k
+  #7.9.1 Recommendation rule: maximize silhouette, tie-break by higher jacc_mean, then smaller k
   best_df <- sum_df %>%
     filter(is.finite(silhouette_huang)) %>%
     group_by(imputation) %>%
