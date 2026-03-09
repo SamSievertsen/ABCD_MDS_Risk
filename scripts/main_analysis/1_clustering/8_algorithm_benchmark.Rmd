@@ -1,0 +1,977 @@
+---
+title: "8. Baseline Mixed-Data Clustering Benchmark: k-prototypes vs KAMILA vs clustMD"
+author: "Sam A. Sievertsen"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: false
+    df_print: paged
+params:
+  # I/O
+  REPO: "/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk"
+  risk_data_path: "/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk/data/data_processed/risk_variable_data.csv"
+  kproto_anchor_rds: "/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk/data/data_processed/kproto_results/kproto_z_score.rds"
+  out_dir: "/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk/results/main_analysis/1_clustering/8_algorithm_benchmark"
+
+  # Search grid
+  k_grid: [2,3,4,5,6,7,8]
+
+  # Light-weight optimization settings
+  nstart: 8
+  seed: 123
+
+  # k-prototypes lambda handling
+  lambda_mode: "estimate"   # "estimate" | "fixed"
+  lambda_fixed: 2.5
+
+  # KAMILA settings
+  kamila_num_init: 8
+  kamila_num_pred_strt: 25
+  kamila_max_iter: 100
+
+  # KAMILA algorithm-native k selection
+  run_kamila_ps: true
+  kamila_ps_threshold: 0.80
+  kamila_ps_cv_runs: 10
+
+  # clustMD settings
+  run_clustMD: true
+  clustmd_model: "EII"
+  clustmd_max_iter: 200
+  clustmd_nnorms: 2000
+
+  # UMAP settings
+  umap_neighbors: 15
+  umap_min_dist: 0.1
+  umap_seed: 123
+
+  # Misc
+  keep_model_data: true
+---
+
+```{r global, include=FALSE}
+knitr::opts_chunk$set(cache = FALSE, message = TRUE, warning = TRUE, results = "markup", verbose = TRUE, comment = "")
+```
+
+## 8.1 Setup
+
+```{r setup, include = FALSE, echo = FALSE, warning = FALSE}
+
+## 8.1 Setup ##
+
+cat("8.1 Setup beginning\n")
+
+REPO <- Sys.getenv("REPO", unset = params$REPO)
+OUT_DIR <- if (nzchar(params$out_dir)) params$out_dir else {
+  file.path(REPO, "results", "main_analysis", "1_clustering", "8_algorithm_benchmark")
+}
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(readr)
+  library(glue)
+  library(purrr)
+  library(tibble)
+  library(data.table)
+  library(ggplot2)
+  library(cluster)
+  library(mclust)
+  library(clue)
+  library(uwot)
+  library(kableExtra)
+  library(jsonlite)
+  library(clustMixType)
+  library(kamila)
+  library(clustMD)
+})
+
+paths <- list(
+  out_dir = OUT_DIR,
+  fig_dir = file.path(OUT_DIR, "figures"),
+  tab_dir = file.path(OUT_DIR, "tables"),
+  rds_dir = file.path(OUT_DIR, "rds"))
+
+dir.create(paths$out_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(paths$fig_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(paths$tab_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(paths$rds_dir, recursive = TRUE, showWarnings = FALSE)
+
+write_csv2 <- function(x, path) {
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  readr::write_csv(x, path)
+}
+
+save_rds2 <- function(x, path) {
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  saveRDS(x, path)
+}
+
+set.seed(params$seed)
+
+cat("8.1 Setup complete\n")
+
+```
+
+## 8.2 Load Data + Recover Canonical 17-Feature Baseline Frame
+
+```{r load data, echo = FALSE, warning = FALSE}
+
+## 8.2 Load canonical clustering frame ##
+
+risk_path <- params$risk_data_path
+if (!file.exists(risk_path)) stop(glue("Risk data CSV not found: {risk_path}"))
+
+risk_df_raw <- readr::read_csv(risk_path, show_col_types = FALSE)
+risk_dt_raw <- as.data.table(risk_df_raw)
+
+if (!("participant_id" %in% names(risk_dt_raw))) {
+  stop("participant_id not found in risk data.")
+}
+
+#8.2.1 Load anchor k-prototypes object and recover canonical feature names
+kp_any <- readRDS(params$kproto_anchor_rds)
+
+pick_kproto <- function(obj, k_target) {
+  if (inherits(obj, "kproto")) return(obj)
+  stopifnot(is.list(obj))
+  nm <- names(obj)
+  if (!is.null(nm)) {
+    hit <- paste0("k", k_target)
+    if (hit %in% nm && inherits(obj[[hit]], "kproto")) return(obj[[hit]])
+  }
+  for (el in obj) {
+    if (inherits(el, "kproto")) {
+      sz <- tryCatch(el$size, error = function(...) NULL)
+      if (!is.null(sz) && length(sz) == k_target) return(el)
+    }
+  }
+  stop(glue("Could not locate kproto object for k={k_target}."))
+}
+
+kp2_anchor <- pick_kproto(kp_any, 2)
+anchor_df <- as.data.frame(kp2_anchor$data)
+anchor_features <- names(anchor_df)
+
+#8.2.2 Restrict baseline frame to participant_id + canonical clustering features
+missing_feats <- setdiff(anchor_features, names(risk_dt_raw))
+if (length(missing_feats) > 0) {
+  stop(glue("Risk data missing canonical features: {paste(missing_feats, collapse=', ')}"))
+}
+
+risk_dt <- risk_dt_raw[, c("participant_id", anchor_features), with = FALSE]
+risk_dt[, .row_id := .I]
+
+cat(glue("Loaded N={nrow(risk_dt)} rows and p={length(anchor_features)} canonical clustering features.\n"))
+
+#8.2.3 Recover anchor labels for ARI comparison
+anchor_lbl <- if (!is.null(kp2_anchor$cluster)) kp2_anchor$cluster else {
+  pr <- predict(kp2_anchor, newdata = as.data.frame(kp2_anchor$data))
+  if (is.list(pr)) pr$cluster else pr
+}
+
+anchor_id <- rownames(anchor_df)
+if (is.null(anchor_id) || length(anchor_id) != nrow(anchor_df)) {
+  stop("Could not recover participant IDs from rownames(anchor_df).")
+}
+
+anchor_id <- as.character(anchor_id)
+
+```
+
+## 8.3 Helper Functions for Type Handling + Common Validation
+
+```{r helper functions, echo = FALSE, warning = FALSE}
+
+## 8.3 Helper functions ##
+
+#8.3.1 Force known categorical variables to factor
+force_known_categoricals <- function(df) {
+  df <- as.data.frame(df)
+
+  known_cat <- intersect(
+    c("family_history_depression", "family_history_mania", "bullying"),
+    names(df))
+
+  for (nm in known_cat) {
+    df[[nm]] <- factor(df[[nm]])
+  }
+
+  df
+}
+
+#8.3.2 Coerce remaining variable classes
+coerce_types <- function(df) {
+  df <- as.data.frame(df)
+
+  for (nm in names(df)) {
+    x <- df[[nm]]
+
+    if (is.numeric(x)) next
+
+    if (is.logical(x)) {
+      df[[nm]] <- factor(x, levels = c(FALSE, TRUE))
+      next
+    }
+
+    if (is.character(x)) {
+      df[[nm]] <- factor(x)
+      next
+    }
+
+    if (is.integer(x)) {
+      u <- unique(x[!is.na(x)])
+      if (length(u) <= 10) {
+        df[[nm]] <- factor(x)
+      } else {
+        df[[nm]] <- as.numeric(x)
+      }
+      next
+    }
+
+    if (!is.factor(x)) df[[nm]] <- factor(x)
+  }
+
+  df
+}
+
+#8.3.3 Z-score numeric columns
+zscore_numeric <- function(df) {
+  df <- as.data.frame(df)
+  is_num <- vapply(df, is.numeric, logical(1))
+
+  for (nm in names(df)[is_num]) {
+    x <- df[[nm]]
+    mu <- mean(x, na.rm = TRUE)
+    sdv <- stats::sd(x, na.rm = TRUE)
+
+    if (is.finite(sdv) && sdv > 0) {
+      df[[nm]] <- (x - mu) / sdv
+    } else {
+      df[[nm]] <- 0
+    }
+  }
+
+  df
+}
+
+#8.3.4 Count numeric / factor columns
+count_types <- function(df) {
+  df <- as.data.frame(df)
+  is_num <- vapply(df, is.numeric, logical(1))
+  is_fac <- vapply(df, is.factor, logical(1))
+  list(
+    n_num = sum(is_num),
+    n_fac = sum(is_fac),
+    is_num = is_num,
+    is_fac = is_fac
+  )
+}
+
+#8.3.5 Safe lambda rule for k-prototypes
+lambda_safe <- function(X_orig, lambda_mode, lambda_fixed = 2.5) {
+  if (identical(lambda_mode, "fixed")) {
+    return(list(lambda = as.numeric(lambda_fixed), reason = "fixed"))
+  }
+
+  ct <- count_types(X_orig)
+  if (ncol(X_orig) < 2L) {
+    return(list(lambda = 1, reason = "p<2: lambdaest undefined; lambda irrelevant"))
+  }
+  if (ct$n_num == 0L || ct$n_fac == 0L) {
+    return(list(lambda = 1, reason = "single-type set: lambda irrelevant"))
+  }
+
+  lam <- clustMixType::lambdaest(X_orig, verbose = FALSE)
+  list(lambda = lam, reason = "lambdaest (mixed-type set)")
+}
+
+#8.3.6 Common Gower distance and silhouette
+gower_silhouette_mean <- function(df, lbl) {
+  df <- as.data.frame(df)
+  lbl <- as.integer(lbl)
+
+  if (length(unique(lbl)) < 2L) return(NA_real_)
+  if (min(tabulate(lbl)) < 2L) return(NA_real_)
+
+  d <- cluster::daisy(df, metric = "gower")
+  sil <- cluster::silhouette(lbl, dmatrix = as.matrix(d))
+  mean(sil[, "sil_width"], na.rm = TRUE)
+}
+
+#8.3.7 Hungarian alignment helper
+hungarian_map <- function(from, to) {
+  from <- as.integer(from)
+  to <- as.integer(to)
+  K <- max(length(unique(from)), length(unique(to)))
+  tab <- table(from, to)
+  tab_full <- matrix(0, nrow = K, ncol = K)
+  tab_full[seq_len(nrow(tab)), seq_len(ncol(tab))] <- tab
+  maxv <- max(tab_full)
+  cost <- maxv - tab_full
+  assign <- clue::solve_LSAP(cost)
+  as.integer(assign)
+}
+
+#8.3.8 KAMILA data prep for continuous + categorical split
+prep_kamila <- function(df) {
+  df <- as.data.frame(df)
+  is_num <- vapply(df, is.numeric, logical(1))
+  is_fac <- vapply(df, is.factor, logical(1))
+
+  x_con <- as.data.frame(df[, is_num, drop = FALSE])
+  x_cat <- as.data.frame(df[, is_fac, drop = FALSE])
+
+  for (nm in names(x_cat)) x_cat[[nm]] <- factor(x_cat[[nm]])
+
+  list(x_con = x_con, x_cat = x_cat)
+}
+
+#8.3.9 Build a version-safe kamila() argument list
+build_kamila_args <- function(x_con,
+                              x_cat,
+                              k,
+                              calc_mode = "none",
+                              num_init = 8,
+                              num_pred_strt = 25,
+                              max_iter = 100,
+                              ps_threshold = 0.80,
+                              ps_cv_runs = 10,
+                              verbose = FALSE) {
+
+  fm <- names(formals(kamila::kamila))
+  args <- list()
+
+  #8.3.9.1 Core data arguments
+  if ("conVar" %in% fm) {
+    args$conVar <- x_con
+  } else if ("xCon" %in% fm) {
+    args$xCon <- x_con
+  } else {
+    stop("Could not find continuous-data argument name for kamila::kamila().")
+  }
+
+  if ("catFactor" %in% fm) {
+    args$catFactor <- x_cat
+  } else if ("xCat" %in% fm) {
+    args$xCat <- x_cat
+  } else {
+    stop("Could not find categorical-data argument name for kamila::kamila().")
+  }
+
+  #8.3.9.2 Number of clusters
+  if ("numClust" %in% fm) {
+    args$numClust <- as.integer(k)
+  } else if ("K" %in% fm) {
+    args$K <- as.integer(k)
+  }
+
+  #8.3.9.3 Initialization count
+  if ("numInit" %in% fm) {
+    args$numInit <- as.integer(num_init)
+  } else if ("nstart" %in% fm) {
+    args$nstart <- as.integer(num_init)
+  }
+
+  #8.3.9.4 Prediction-strength starts
+  if ("numPredStrt" %in% fm) {
+    args$numPredStrt <- as.integer(num_pred_strt)
+  }
+
+  #8.3.9.5 Iteration cap
+  if ("maxIter" %in% fm) {
+    args$maxIter <- as.integer(max_iter)
+  } else if ("max.iter" %in% fm) {
+    args$max.iter <- as.integer(max_iter)
+  }
+
+  #8.3.9.6 Algorithm-native k selection
+  if ("calcNumClust" %in% fm) {
+    args$calcNumClust <- calc_mode
+  }
+
+  if (identical(calc_mode, "ps")) {
+    if ("numPredStrCvRun" %in% fm) {
+      args$numPredStrCvRun <- as.integer(ps_cv_runs)
+    }
+    if ("predStrThresh" %in% fm) {
+      args$predStrThresh <- as.numeric(ps_threshold)
+    }
+  }
+
+  if ("verbose" %in% fm) {
+    args$verbose <- verbose
+  }
+
+  args
+}
+
+#8.3.10 Extract labels from kamila fit robustly across versions
+extract_kamila_labels <- function(fit) {
+  if (!is.null(fit$finalMemb)) return(as.integer(fit$finalMemb))
+  if (!is.null(fit$cluster)) return(as.integer(fit$cluster))
+  if (!is.null(fit$clustering)) return(as.integer(fit$clustering))
+  stop("Could not extract cluster labels from KAMILA fit.")
+}
+
+#8.3.11 clustMD data prep for continuous first, then binary, then nominal
+prep_clustMD <- function(df) {
+  df <- as.data.frame(df)
+
+  is_num <- vapply(df, is.numeric, logical(1))
+  is_fac <- vapply(df, is.factor, logical(1))
+
+  fac_names <- names(df)[is_fac]
+  num_names <- names(df)[is_num]
+
+  bin_names <- fac_names[vapply(df[fac_names], nlevels, integer(1)) == 2L]
+  nom_names <- fac_names[vapply(df[fac_names], nlevels, integer(1)) > 2L]
+
+  X_num <- df[, num_names, drop = FALSE]
+  X_bin <- df[, bin_names, drop = FALSE]
+  X_nom <- df[, nom_names, drop = FALSE]
+
+  if (ncol(X_bin) > 0) X_bin[] <- lapply(X_bin, function(x) as.integer(factor(x)))
+  if (ncol(X_nom) > 0) X_nom[] <- lapply(X_nom, function(x) as.integer(factor(x)))
+
+  X_all <- cbind(X_num, X_bin, X_nom)
+
+  list(
+    X = as.matrix(X_all),
+    CnsIndx = ncol(X_num),
+    OrdIndx = ncol(X_num) + ncol(X_bin))
+}
+
+#8.3.12 Extract labels from clustMD fit
+extract_clustMD_labels <- function(fit) {
+  out <- NULL
+  if (!is.null(fit$cl)) out <- fit$cl
+  if (is.null(out) && !is.null(fit$map)) out <- fit$map
+  if (is.null(out) && !is.null(fit$class)) out <- fit$class
+  if (is.null(out)) stop("Could not extract cluster labels from clustMD fit.")
+  as.integer(out)
+}
+
+#8.3.13 Objective-like extractors
+#8.3.13.1 Kproto
+kproto_objective <- function(kp) {
+  for (nm in c("tot.withinss", "tot.withindist", "tot.within.dist", "tot.within")) {
+    if (!is.null(kp[[nm]]) && is.finite(kp[[nm]])) return(as.numeric(kp[[nm]]))
+  }
+  NA_real_
+}
+
+#8.3.13.2 KAMILA
+kamila_objective <- function(fit) {
+  if (!is.null(fit$objective)) return(as.numeric(fit$objective))
+  if (!is.null(fit$crit)) return(as.numeric(fit$crit))
+  NA_real_
+}
+
+#8.3.13.3 clustMD
+clustMD_bic <- function(fit) {
+  if (!is.null(fit$BIC)) return(as.numeric(fit$BIC))
+  NA_real_
+}
+
+#8.3.14 UMAP design matrix for mixed-data visualization
+make_umap_matrix <- function(df) {
+  mm <- model.matrix(~ . - 1, data = as.data.frame(df))
+  scale(mm)
+}
+
+```
+
+## 8.4 Prepare Benchmark Input Frame
+
+```{r prepare frame, echo = FALSE, warning = FALSE}
+
+## 8.4 Prepare complete-case benchmark frame ##
+
+X0 <- risk_dt[, anchor_features, with = FALSE] %>% as.data.frame()
+
+#8.4.1 Mirror original complete-case baseline clustering frame
+cc_idx <- stats::complete.cases(X0)
+bench_dt <- risk_dt[cc_idx == TRUE]
+X_cc <- X0[cc_idx, , drop = FALSE]
+
+#8.4.2 Coerce types to match mixed-data algorithms
+X_cc <- force_known_categoricals(X_cc)
+X_cc <- coerce_types(X_cc)
+X_cc <- zscore_numeric(X_cc)
+
+cat(glue("Benchmark frame complete-case N={nrow(X_cc)}.\n"))
+
+#8.4.3 Anchor overlap for ARI comparison
+pid_cc <- as.character(bench_dt$participant_id)
+in_anchor <- pid_cc %in% anchor_id
+subj_overlap <- pid_cc[in_anchor]
+anchor_lbl_overlap <- anchor_lbl[match(subj_overlap, anchor_id)]
+
+```
+
+## 8.5 Fit k-prototypes Across k = 2:8
+
+```{r fit kproto, echo = FALSE, warning = FALSE}
+
+## 8.5 k-prototypes benchmark ##
+
+run_kproto_grid <- function(X_df) {
+
+  lam_info <- lambda_safe(
+    X_df,
+    lambda_mode = params$lambda_mode,
+    lambda_fixed = params$lambda_fixed)
+
+  res_list <- list()
+  model_list <- list()
+  assign_list <- list()
+
+  for (k in params$k_grid) {
+
+    set.seed(1000 + k)
+
+    fit <- clustMixType::kproto(
+      x = X_df,
+      k = as.integer(k),
+      lambda = lam_info$lambda,
+      nstart = as.integer(params$nstart),
+      verbose = FALSE)
+
+    lbl <- as.integer(fit$cluster)
+
+    idx_overlap <- match(subj_overlap, pid_cc)
+    ari_anchor <- mclust::adjustedRandIndex(lbl[idx_overlap], anchor_lbl_overlap)
+
+    res_list[[as.character(k)]] <- tibble::tibble(
+      algorithm = "kproto",
+      k = as.integer(k),
+      objective = kproto_objective(fit),
+      bic = NA_real_,
+      gower_silhouette = gower_silhouette_mean(X_df, lbl),
+      ari_vs_anchor_k2 = ari_anchor,
+      min_cluster_n = min(tabulate(lbl)),
+      max_cluster_n = max(tabulate(lbl)),
+      lambda = as.numeric(lam_info$lambda),
+      lambda_reason = lam_info$reason)
+
+    assign_list[[as.character(k)]] <- tibble::tibble(
+      participant_id = pid_cc,
+      algorithm = "kproto",
+      k = as.integer(k),
+      cluster = lbl)
+
+    if (!isTRUE(params$keep_model_data)) fit$data <- NULL
+    model_list[[as.character(k)]] <- fit
+  }
+
+  list(
+    metrics = bind_rows(res_list),
+    assignments = bind_rows(assign_list),
+    models = model_list)
+}
+
+kproto_res <- run_kproto_grid(X_cc)
+
+write_csv2(kproto_res$metrics, file.path(paths$tab_dir, "kproto_grid_metrics.csv"))
+write_csv2(kproto_res$assignments, file.path(paths$tab_dir, "kproto_grid_assignments.csv"))
+save_rds2(kproto_res$models, file.path(paths$rds_dir, "kproto_grid_models.rds"))
+
+```
+
+## 8.6 Fit KAMILA Across k = 2:8
+
+```{r fit kamila, echo = FALSE, warning = FALSE}
+
+## 8.6 KAMILA benchmark ##
+
+run_kamila_grid <- function(X_df) {
+
+  kam_in <- prep_kamila(X_df)
+
+  if (ncol(kam_in$x_con) < 1 || ncol(kam_in$x_cat) < 1) {
+    stop("KAMILA requires both continuous and categorical variables.")
+  }
+
+  res_list <- list()
+  model_list <- list()
+  assign_list <- list()
+
+  for (k in params$k_grid) {
+
+    set.seed(2000 + k)
+
+    kam_args <- build_kamila_args(
+      x_con = kam_in$x_con,
+      x_cat = kam_in$x_cat,
+      k = k,
+      calc_mode = "none",
+      num_init = params$kamila_num_init,
+      num_pred_strt = params$kamila_num_pred_strt,
+      max_iter = params$kamila_max_iter,
+      ps_threshold = params$kamila_ps_threshold,
+      ps_cv_runs = params$kamila_ps_cv_runs,
+      verbose = FALSE)
+    
+    fit <- do.call(kamila::kamila, kam_args)
+    
+    lbl <- extract_kamila_labels(fit)
+
+    idx_overlap <- match(subj_overlap, pid_cc)
+    ari_anchor <- mclust::adjustedRandIndex(lbl[idx_overlap], anchor_lbl_overlap)
+
+    res_list[[as.character(k)]] <- tibble::tibble(
+      algorithm = "kamila",
+      k = as.integer(k),
+      objective = kamila_objective(fit),
+      bic = NA_real_,
+      gower_silhouette = gower_silhouette_mean(X_df, lbl),
+      ari_vs_anchor_k2 = ari_anchor,
+      min_cluster_n = min(tabulate(lbl)),
+      max_cluster_n = max(tabulate(lbl)),
+      lambda = NA_real_,
+      lambda_reason = NA_character_)
+
+    assign_list[[as.character(k)]] <- tibble::tibble(
+      participant_id = pid_cc,
+      algorithm = "kamila",
+      k = as.integer(k),
+      cluster = lbl)
+
+    model_list[[as.character(k)]] <- fit
+  }
+
+  list(
+    metrics = bind_rows(res_list),
+    assignments = bind_rows(assign_list),
+    models = model_list)
+}
+
+kamila_res <- run_kamila_grid(X_cc)
+
+write_csv2(kamila_res$metrics, file.path(paths$tab_dir, "kamila_grid_metrics.csv"))
+write_csv2(kamila_res$assignments, file.path(paths$tab_dir, "kamila_grid_assignments.csv"))
+save_rds2(kamila_res$models, file.path(paths$rds_dir, "kamila_grid_models.rds"))
+
+```
+
+## 8.7 KAMILA Algorithm-Native k Selection via Prediction Strength
+
+```{r kamila prediction strength, echo = FALSE, warning = FALSE}
+
+## 8.7 KAMILA calcNumClust = 'ps' ##
+
+kamila_ps_tbl <- NULL
+kamila_ps_fit <- NULL
+
+if (isTRUE(params$run_kamila_ps)) {
+
+  kam_in <- prep_kamila(X_cc)
+
+  set.seed(params$seed + 5000)
+
+  kam_ps_args <- build_kamila_args(
+  x_con = kam_in$x_con,
+  x_cat = kam_in$x_cat,
+  k = max(params$k_grid),
+  calc_mode = "ps",
+  num_init = params$kamila_num_init,
+  num_pred_strt = params$kamila_num_pred_strt,
+  max_iter = params$kamila_max_iter,
+  ps_threshold = params$kamila_ps_threshold,
+  ps_cv_runs = params$kamila_ps_cv_runs,
+  verbose = FALSE)
+
+  kamila_ps_fit <- do.call(kamila::kamila, kam_ps_args)
+
+  save_rds2(kamila_ps_fit, file.path(paths$rds_dir, "kamila_prediction_strength_object.rds"))
+
+  if (!is.null(kamila_ps_fit$nClust)) {
+    kamila_ps_tbl <- as.data.frame(kamila_ps_fit$nClust)
+    write_csv2(kamila_ps_tbl, file.path(paths$tab_dir, "kamila_prediction_strength_results.csv"))
+  }
+}
+
+if (!is.null(kamila_ps_tbl)) {
+  knitr::kable(
+    kamila_ps_tbl,
+    digits = 3,
+    caption = "KAMILA algorithm-native cluster-number results (prediction strength)") %>%
+    kableExtra::kable_styling(full_width = FALSE)
+}
+
+```
+
+## 8.8 Fit clustMD Across k = 2:8
+
+```{r fit clustmd, echo = FALSE, warning = FALSE}
+
+## 8.8 clustMD benchmark ##
+
+clustmd_res <- NULL
+
+if (isTRUE(params$run_clustMD)) {
+
+  run_clustMD_grid <- function(X_df) {
+
+    clmd_in <- prep_clustMD(X_df)
+
+    res_list <- list()
+    model_list <- list()
+    assign_list <- list()
+
+    for (k in params$k_grid) {
+
+      set.seed(3000 + k)
+
+      fit <- clustMD::clustMD(
+        X = clmd_in$X,
+        G = as.integer(k),
+        CnsIndx = clmd_in$CnsIndx,
+        OrdIndx = clmd_in$OrdIndx,
+        Nnorms = as.integer(params$clustmd_nnorms),
+        MaxIter = as.integer(params$clustmd_max_iter),
+        model = params$clustmd_model,
+        store.params = FALSE,
+        scale = FALSE,
+        startCL = "hc_mclust",
+        autoStop = FALSE)
+
+      lbl <- extract_clustMD_labels(fit)
+
+      idx_overlap <- match(subj_overlap, pid_cc)
+      ari_anchor <- mclust::adjustedRandIndex(lbl[idx_overlap], anchor_lbl_overlap)
+
+      res_list[[as.character(k)]] <- tibble::tibble(
+        algorithm = "clustMD",
+        k = as.integer(k),
+        objective = NA_real_,
+        bic = clustMD_bic(fit),
+        gower_silhouette = gower_silhouette_mean(X_df, lbl),
+        ari_vs_anchor_k2 = ari_anchor,
+        min_cluster_n = min(tabulate(lbl)),
+        max_cluster_n = max(tabulate(lbl)),
+        lambda = NA_real_,
+        lambda_reason = NA_character_)
+
+      assign_list[[as.character(k)]] <- tibble::tibble(
+        participant_id = pid_cc,
+        algorithm = "clustMD",
+        k = as.integer(k),
+        cluster = lbl)
+
+      model_list[[as.character(k)]] <- fit
+    }
+
+    list(
+      metrics = bind_rows(res_list),
+      assignments = bind_rows(assign_list),
+      models = model_list)
+  }
+
+  clustmd_res <- run_clustMD_grid(X_cc)
+
+  write_csv2(clustmd_res$metrics, file.path(paths$tab_dir, "clustMD_grid_metrics.csv"))
+  write_csv2(clustmd_res$assignments, file.path(paths$tab_dir, "clustMD_grid_assignments.csv"))
+  save_rds2(clustmd_res$models, file.path(paths$rds_dir, "clustMD_grid_models.rds"))
+}
+
+```
+
+## 8.9 Summarize Benchmark Results
+
+```{r summarize, echo = FALSE, warning = FALSE}
+
+## 8.9 Summary of algorithm benchmark ##
+
+metric_list <- list(
+  kproto_res$metrics,
+  kamila_res$metrics)
+
+if (!is.null(clustmd_res)) {
+  metric_list <- c(metric_list, list(clustmd_res$metrics))
+}
+
+bench_metrics <- bind_rows(metric_list) %>%
+  arrange(algorithm, k)
+
+write_csv2(bench_metrics, file.path(paths$tab_dir, "algorithm_benchmark_metrics_all.csv"))
+
+#8.9.1 Primary recommendation rule:
+# maximize common Gower silhouette; tie-break by smaller k
+best_df <- bench_metrics %>%
+  filter(is.finite(gower_silhouette)) %>%
+  group_by(algorithm) %>%
+  arrange(desc(gower_silhouette), k) %>%
+  slice(1) %>%
+  ungroup()
+
+write_csv2(best_df, file.path(paths$tab_dir, "algorithm_benchmark_recommendation.csv"))
+
+knitr::kable(
+  best_df,
+  digits = 3,
+  caption = "Recommended k per algorithm (primary benchmark = max Gower silhouette; smaller k breaks ties)") %>%
+  kableExtra::kable_styling(full_width = FALSE)
+
+```
+
+## 8.10 Plots
+
+```{r plots, echo = FALSE, warning = FALSE}
+
+## 8.10 Visualization of benchmark results ##
+
+p_sil <- ggplot(bench_metrics, aes(x = k, y = gower_silhouette, color = algorithm)) +
+  geom_line(linewidth = 0.7) +
+  geom_point(size = 1.9) +
+  theme_classic(base_size = 12) +
+  labs(
+    title = "Common internal validation across algorithms",
+    subtitle = "Primary benchmark metric = average silhouette on Gower distance",
+    x = "k",
+    y = "Gower silhouette")
+
+ggsave(file.path(paths$fig_dir, "benchmark_gower_silhouette_by_k.png"), p_sil, width = 7.6, height = 4.6, dpi = 600, bg = "white")
+
+p_ari <- ggplot(bench_metrics, aes(x = k, y = ari_vs_anchor_k2, color = algorithm)) +
+  geom_line(linewidth = 0.7) +
+  geom_point(size = 1.9) +
+  theme_classic(base_size = 12) +
+  labs(
+    title = "Agreement with original k-prototypes k=2 anchor",
+    subtitle = "Descriptive comparability metric only; not the optimization target",
+    x = "k",
+    y = "ARI vs anchor")
+
+ggsave(file.path(paths$fig_dir, "benchmark_ari_vs_anchor_by_k.png"), p_ari, width = 7.6, height = 4.6, dpi = 600, bg = "white")
+
+p_size <- ggplot(bench_metrics, aes(x = k, y = min_cluster_n, color = algorithm)) +
+  geom_line(linewidth = 0.7) +
+  geom_point(size = 1.9) +
+  theme_classic(base_size = 12) +
+  labs(
+    title = "Minimum cluster size across algorithms",
+    x = "k",
+    y = "Minimum cluster size")
+
+ggsave(file.path(paths$fig_dir, "benchmark_min_cluster_size_by_k.png"), p_size, width = 7.6, height = 4.6, dpi = 600, bg = "white")
+
+if ("clustMD" %in% bench_metrics$algorithm) {
+  p_bic <- bench_metrics %>%
+    filter(algorithm == "clustMD", is.finite(bic)) %>%
+    ggplot(aes(x = k, y = bic)) +
+    geom_line(linewidth = 0.7) +
+    geom_point(size = 1.9) +
+    theme_classic(base_size = 12) +
+    labs(
+      title = "clustMD model-based fit",
+      subtitle = "BIC shown descriptively for the model-based comparator",
+      x = "k",
+      y = "BIC")
+
+  ggsave(file.path(paths$fig_dir, "benchmark_clustMD_bic_by_k.png"), p_bic, width = 7.6, height = 4.6, dpi = 600, bg = "white")
+}
+
+```
+
+## 8.11 UMAP Visualization of Each Algorithm's Preferred Solution
+
+```{r umap, echo = FALSE, warning = FALSE}
+
+## 8.11 UMAP of preferred solutions ##
+
+best_by_alg <- best_df %>%
+  select(algorithm, k)
+
+mm <- make_umap_matrix(X_cc)
+
+set.seed(params$umap_seed)
+emb <- uwot::umap(
+  mm,
+  n_neighbors = params$umap_neighbors,
+  min_dist = params$umap_min_dist,
+  metric = "euclidean",
+  verbose = TRUE)
+
+get_labels_for_best <- function(alg, k_best) {
+  if (alg == "kproto") {
+    return(as.integer(kproto_res$models[[as.character(k_best)]]$cluster))
+  }
+  if (alg == "kamila") {
+  return(extract_kamila_labels(kamila_res$models[[as.character(k_best)]]))
+  }
+  if (alg == "clustMD") {
+    return(extract_clustMD_labels(clustmd_res$models[[as.character(k_best)]]))
+  }
+  stop("Unknown algorithm.")
+}
+
+umap_plots <- lapply(seq_len(nrow(best_by_alg)), function(i) {
+  alg <- best_by_alg$algorithm[i]
+  k_best <- best_by_alg$k[i]
+  lbl <- get_labels_for_best(alg, k_best)
+
+  umap_df <- tibble::tibble(
+    UMAP1 = emb[, 1],
+    UMAP2 = emb[, 2],
+    cluster = factor(lbl))
+
+  write_csv2(
+    umap_df %>% mutate(algorithm = alg, k = k_best),
+    file.path(paths$tab_dir, glue("umap_{alg}_k{k_best}.csv")))
+
+  ggplot(umap_df, aes(x = UMAP1, y = UMAP2, color = cluster)) +
+    geom_point(alpha = 0.6, size = 0.8) +
+    theme_classic(base_size = 12) +
+    labs(
+      title = glue("UMAP: {alg} preferred solution"),
+      subtitle = glue("k = {k_best}"),
+      x = "UMAP1",
+      y = "UMAP2",
+      color = "Cluster")
+})
+
+for (i in seq_along(umap_plots)) print(umap_plots[[i]])
+
+```
+
+## 8.12 Reproducibility Log
+
+```{r reproducibility, echo = FALSE, warning = FALSE}
+
+## 8.12 Reproducibility Log ##
+
+log <- list(
+  timestamp = as.character(Sys.time()),
+  REPO = REPO,
+  risk_data_path = risk_path,
+  kproto_anchor_rds = params$kproto_anchor_rds,
+  out_dir = paths$out_dir,
+  k_grid = params$k_grid,
+  nstart = params$nstart,
+  lambda_mode = params$lambda_mode,
+  lambda_fixed = params$lambda_fixed,
+  kamila = list(
+    num_init = params$kamila_num_init,
+    num_pred_strt = params$kamila_num_pred_strt,
+    max_iter = params$kamila_max_iter,
+    run_ps = params$run_kamila_ps,
+    ps_threshold = params$kamila_ps_threshold,
+    ps_cv_runs = params$kamila_ps_cv_runs),
+  clustMD = list(
+    run = params$run_clustMD,
+    model = params$clustmd_model,
+    max_iter = params$clustmd_max_iter,
+    nnorms = params$clustmd_nnorms),
+  umap = list(
+    n_neighbors = params$umap_neighbors,
+    min_dist = params$umap_min_dist,
+    seed = params$umap_seed))
+
+writeLines(
+  jsonlite::toJSON(log, pretty = TRUE),
+  con = file.path(paths$out_dir, "run_log.json"))
+
+```
