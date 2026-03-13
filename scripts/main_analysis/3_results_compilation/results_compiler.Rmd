@@ -17,7 +17,7 @@ params:
 ```{r global, include = FALSE}
 
 # Set global env variables
-knitr::opts_chunk$set(fig.width = 8, fig.height = 5, dpi = 300,fig.align = "center", echo = TRUE, cache = FALSE, message = TRUE, warning = TRUE, results = "markup", verbose = TRUE, comment = "")
+knitr::opts_chunk$set(fig.width = 8, fig.height = 5, dpi = 300, fig.align = "center", echo = TRUE, cache = FALSE, message = TRUE, warning = TRUE, results = "markup", verbose = TRUE, comment = "")
 
 ```
 
@@ -83,8 +83,6 @@ results_root <- here::here("results")
 results_main <- here::here("results", "main_analysis")
 res_bd_surv <- here::here("results", "main_analysis", "1_bd_survival")
 res_bd_mixed <- here::here("results", "main_analysis", "2_bd_mixed_logit")
-res_nested_dth <- here::here("results", "main_analysis", "3_nested_suic_dth")
-res_nested_mixed <- here::here("results", "main_analysis", "4_nested_suicidality_mixed_logit")
 
 #1.3.5 Assets (for Figure 0 schematic, etc.)
 assets_dir <- here::here("assets")
@@ -180,8 +178,6 @@ p_res <- function(...) file.path(results_root, ...)
 p_main <- function(...) file.path(results_main, ...)
 p_bd_surv <- function(...) file.path(res_bd_surv, ...)
 p_bd_mix <- function(...) file.path(res_bd_mixed, ...)
-p_ns_dth <- function(...) file.path(res_nested_dth, ...)
-p_ns_mix <- function(...) file.path(res_nested_mixed, ...)
 
 #1.6.13 Normalize BD outcome names to {BDI, BDII, BSD, BDNOS} (if present)
 norm_bd_outcome <- function(x) {
@@ -263,7 +259,7 @@ This document compiles all manuscript-ready figures and tables for the ABCD MDS 
 
 - Purpose: Load all downstream inputs for figures and tables with robust TK fallbacks so the document always knits
 - Inputs: CSV/RDS files under `data/data_processed/**/*` and `results/main_analysis/**/*` produced by earlier scripts
-- Outputs: In-memory frames/objects (e.g., `risk_vars`, `outcome_vars`, `bd_pp`, `nested_pp`, `val_sil_*`); TK frames if files are missing
+- Outputs: In-memory frames/objects (e.g., `risk_vars`, `outcome_vars`, `bd_pp`, `val_sil_*`); TK frames if files are missing
 - Notes: `read_or_tk()` seeds placeholders with expected columns; stats frames are standardized for consistent downstream use
 
 ```{r input-config}
@@ -283,7 +279,7 @@ outcome_vars <- read_or_tk(
   first_existing(
     p_proc("outcome_variable_data.csv"),
     p_proc("outcome_variable_data.rds")),
-  tk_cols = c("participant_id","age","sex","site","wave","bd_any","si_passive","si_active","sa","nssi")) %>% 
+  tk_cols = c("participant_id","age","sex","site","wave","bd_any")) %>% 
   ensure_participant_id()
 
 #2.1.3 Read in cluster labels
@@ -306,20 +302,6 @@ bd_pp <- read_or_tk(first_existing(
   p_analysis("bd_person_period_k2_z_score.csv"),
   p_analysis("bd_person_period_k2_z_score.rds")), 
   tk_cols = c("participant_id","wave","age","interval_id","cluster","event_any_bsd","event_bipolar_I","event_bipolar_II","event_bd_nos")) %>% ensure_participant_id()
-
-#2.1.6 Read in nested suicidality panel data
-nested_panel <- read_or_tk(first_existing(
-  p_analysis("nested_suic_panel_k2_z_score.csv"),
-  p_analysis("nested_suic_panel_k2_z_score.rds")), 
-  tk_cols = c("participant_id","wave","age","cluster","ever_bd","si_passive","si_active","sa","nssi")) %>% 
-  ensure_participant_id()
-
-#2.1.7 Read in nested suicidality person-period data
-nested_pp <- read_or_tk(first_existing(
-  p_analysis("nested_suic_person_period_k2_z_score.csv"),
-  p_analysis("nested_suic_person_period_k2_z_score.rds")), 
-  tk_cols = c("participant_id","wave","age","interval_id","cluster","ever_bd","event_si_passive","event_si_active","event_sa","event_nssi")) %>%
-  ensure_participant_id()
 
 #2.2 Map C1/C2 cluster labels to manuscript labels (C1 = Lower; C2 = Higher)
 #2.2.1 Create a coercion function
@@ -360,51 +342,60 @@ cluster_stability_raw <- read_or_tk(
   first_existing(
     p_stab("stability_z_score_k2_nb1000.csv"),
     p_stab("stability_z_score_k2_nb1000.rds")),
-  tk_cols = c("metric","value","percentile","notes")
-)
+  tk_cols = c("metric","value","percentile","notes"))
 
 #2.3.5 Read in UMAP embeddings
 umap_embed <- read_or_tk(
   first_existing(
     p_valid("umap_embedding_k2.csv"),
     p_valid("umap_embedding_k2.rds")),
-  tk_cols = c("x","y","cluster")
-)
+  tk_cols = c("x","y","cluster"))
 
 #2.4 Read in BD onset results
-#2.4.1 Read in all relevant BD survival analysis results with TK fallbacks
+#2.4.1 Read in all relevant BD survival analysis results with finalized glm-based filenames
 bd_hazard_by_wave <- read_or_tk(
-  p_bd_surv("bd_dth_abs_hazard_by_wave.csv"),
-  tk_cols = c("outcome","wave","cluster","hazard","conf.low","conf.high")
-)
+  p_bd_surv("bd_dth_hazard_by_wave.csv"),
+  tk_cols = c("outcome","model","end_wave","cluster","hazard","lo","hi"))
 
-#2.4.2 Read in cumulative risk by wave
 bd_cumrisk_by_wave <- read_or_tk(
   p_bd_surv("bd_dth_cumrisk_by_wave.csv"),
-  tk_cols = c("outcome","wave","cluster","cumrisk","conf.low","conf.high")
-)
+  tk_cols = c("outcome","model","end_wave","cluster","cumrisk","cumrisk_lo","cumrisk_hi"))
 
-#2.4.3 Read in age-based predictions
-bd_preds_by_age <- read_or_tk(
-  first_existing(
-    p_bd_surv("bd_dth_preds_by_age_aligned.csv"),
-    p_bd_surv("bd_dth_preds_by_age_fixed_wave.csv")),
-  tk_cols = c("age","cluster","outcome","fit","conf.low","conf.high")
-)
+#2.4.2 Read in predicted hazards (kept available for supplement / alternate plotting if needed)
+bd_preds_wave_aligned <- read_or_tk(
+  p_bd_surv("bd_dth_preds_wave_aligned.csv"),
+  tk_cols = c("outcome","model","pred_mode","cluster","end_wave","age_years","pred","lower","upper"))
 
-#2.4.4 Read in BD survival model summaries
-bd_dth_wald <- read_or_tk(p_bd_surv("bd_dth_wald.csv"),
-  tk_cols = c("outcome","term","estimate","conf.low","conf.high","p.value"))
-bd_dth_wald_full <- read_or_tk(p_bd_surv("bd_dth_wald_full.csv"),
-  tk_cols = c("outcome","term","estimate","conf.low","conf.high","p.value"))
-bd_dth_cr2 <- read_or_tk(p_bd_surv("bd_dth_cr2.csv"),
-  tk_cols = c("outcome","term","estimate","conf.low","conf.high","p.value","se_method"))
+bd_preds_fixedwave <- read_or_tk(
+  p_bd_surv("bd_dth_preds_fixedwave.csv"),
+  tk_cols = c("outcome","model","pred_mode","cluster","age_years","end_wave","pred","lower","upper"))
+
+#2.4.3 Read in survival model summaries
+bd_dth_wald <- read_or_tk(
+  p_bd_surv("bd_dth_wald_reference.csv"),
+  tk_cols = c("outcome","model","term","estimate","se","or","ci_lo","ci_hi","p_value"))
+
+bd_dth_cr2 <- read_or_tk(
+  p_bd_surv("bd_dth_inference_CR2.csv"),
+  tk_cols = c("outcome","model","se_type","term","estimate","se","df","or","ci_lo","ci_hi","p_value"))
+
+bd_dth_hc1 <- read_or_tk(
+  p_bd_surv("bd_dth_inference_HC1_participant.csv"),
+  tk_cols = c("outcome","model","term","estimate","se","df","or","ci_lo","ci_hi","p_value"))
+
+#2.4.4 Read in emmeans contrasts
+bd_dth_emm_age <- read_or_tk(
+  p_bd_surv("bd_dth_emmeans_contrasts_by_age.csv"),
+  tk_cols = c("outcome","model","age_years","contrast","or","ci_lo","ci_hi","p_value"))
+
+bd_dth_emm_wave <- read_or_tk(
+  p_bd_surv("bd_dth_emmeans_contrasts_by_wave.csv"),
+  tk_cols = c("outcome","model","end_wave","contrast","or","ci_lo","ci_hi","p_value"))
 
 #2.4.5 Read in wave age medians
 bd_wave_age_medians <- read_or_tk(
   p_bd_surv("wave_age_medians.csv"),
-  tk_cols = c("wave","age_median")
-)
+  tk_cols = c("end_wave","age_med"))
 
 #2.5 Read in BD prevalence results
 #2.5.1 GEE by wave, fixed effects, GLMM (where available), and TMB fixed effects results (where available)
@@ -472,206 +463,64 @@ bd_gamm_preds <- stack_dir(
   }
 )
 
-#2.6 Read in nested suicidality onset results
-#2.6.1 Read in nested suicidality hazard by wave
-su_hazard_by_wave <- read_or_tk(
-  p_ns_dth("su_dth_hazard_by_wave_by_bd.csv"),
-  tk_cols = c("outcome","wave","cluster","ever_bd","hazard","conf.low","conf.high")
-)
-
-#2.6.2 Read in nested suicidality cumulative risk by wave
-su_preds_by_age <- read_or_tk(
-  p_ns_dth("su_dth_preds_by_age_by_bd.csv"),
-  tk_cols = c("age","outcome","cluster","ever_bd","fit","conf.low","conf.high")
-)
-
-#2.6.3 Read in nested suicidality survival model summaries
-su_dth_wald <- read_or_tk(
-  p_ns_dth("su_dth_wald.csv"),
-  tk_cols = c("outcome","term","estimate","conf.low","conf.high","p.value")
-)
-su_dth_cr2 <- read_or_tk(
-  p_ns_dth("su_dth_cr2.csv"),
-  tk_cols = c("outcome","term","estimate","conf.low","conf.high","p.value","se_method")
-)
-
-#2.6.4 Read in wave age medians
-su_wave_age_medians <- read_or_tk(
-  p_ns_dth("wave_age_medians.csv"),
-  tk_cols = c("wave","age_median")
-)
-
-#2.7 Read in nested suicidality prevalence results
-#2.7.1 GEE by wave, fixed effects, GLMM (where available), and TMB fixed effects results (where available)
-gee_by_wave_su <- stack_dir(
-  p_ns_mix("csv"),
-  pattern = "GEE_(AR1|EXC)(_INT)?_cluster_OR_by_wave\\.csv$",
-  mutate_f = function(df) df %>% janitor::clean_names() %>% dplyr::select(-file)
-)
-
-#2.7.2 GEE fixed effects
-gee_fixed_su <- stack_dir(
-  p_ns_mix("csv"),
-  pattern = "GEE_(AR1|EXC)(_INT)?_fixed\\.csv$",
-  mutate_f = function(df) df %>% janitor::clean_names() %>% dplyr::select(-file)
-)
-
-#2.7.3 GLMM fixed effects (where available)
-glmm_fixed_su <- stack_dir(
-  p_ns_mix("csv"),
-  pattern = "GLMM.*fixed_ORs\\.csv$",
-  mutate_f = function(df) df %>% janitor::clean_names() %>% dplyr::select(-file)
-)
-
-#2.7.4 glmmTMB fixed effects (where available)
-tmb_fixed_su <- stack_dir(
-  p_ns_mix("csv"),
-  pattern = "glmmTMB.*fixed_ORs\\.csv$",
-  mutate_f = function(df) df %>% janitor::clean_names() %>% dplyr::select(-file)
-)
-
-#2.7.5 GAMM age-based predictions (where available)
-su_gamm_preds <- stack_dir(
-  p_ns_mix("pred_csv"),
-  pattern = "_GAMM_age_predictions\\.csv$",
-  mutate_f = function(df) df %>% janitor::clean_names() %>% dplyr::select(-file)
-)
-
-#2.8 Transform risk variable data to long format for downstream use
-risk_long <- if (!is_tk(risk_vars) && all(c("participant_id","variable","value") %in% names(risk_vars))) {
-  rv <- risk_vars
-  if (!"cluster" %in% names(rv) && !is_tk(cluster_labels)) {
-    rv <- rv %>% dplyr::left_join(cluster_labels, by = "participant_id")
-  }
-  rv %>% dplyr::select(subject = participant_id, variable, value, cluster)
-} else {
-  read_or_tk("", tk_cols = c("subject","variable","value","cluster"), tk_n = 100)
-}
-
-#2.8 CONSORT counts if they exist, else are derived later during construction of CONSORT diagram
+#2.6 CONSORT counts if they exist, else are derived later during construction of CONSORT diagram
 consort_counts <- read_or_tk(
   first_existing(
     p_res("consort_counts.csv"),
     p_res("main_analysis","consort_counts.csv")),
-  tk_cols = c("stage","label","n","wave","cluster")
-)
+  tk_cols = c("stage","label","n","wave","cluster"))
 
-#2.9 Standardize stats data frames
-#2.9.1 Function to standardize stats DF columns
+#2.7 Standardize stats data frames
+#2.7.1 Function to standardize finalized DTH stats objects
 standardize_stats_df <- function(df) {
-  if (is.null(df) || is_tk(df)) return(df)
+  if (is.null(df) || is_tk(df)) return(NULL)
+
   df <- janitor::clean_names(df)
 
-  #2.9.1.1 Ensure presence of expected columns (create as NA if missing)
-  need <- c("outcome","term","estimate","conf_low","conf_high","p_value","se_method","link")
+  #2.7.1.1 Harmonize naming
+  if ("se_type" %in% names(df) && !"se_method" %in% names(df)) df$se_method <- df$se_type
+  if ("p_value" %in% names(df) && !"p.value" %in% names(df)) df$p.value <- df$p_value
+  if ("or" %in% names(df) && !"OR" %in% names(df)) df$OR <- df$or
+  if ("ci_lo" %in% names(df) && !"conf.low" %in% names(df)) df$conf.low <- df$ci_lo
+  if ("ci_hi" %in% names(df) && !"conf.high" %in% names(df)) df$conf.high <- df$ci_hi
+
+  #2.7.1.2 Backfill OR / CI if needed
+  if (!"OR" %in% names(df) && "estimate" %in% names(df)) df$OR <- exp(df$estimate)
+
+  #2.7.1.3 Ensure required columns exist
+  need <- c("outcome","model","term","estimate","OR","conf.low","conf.high","p.value","se_method","link")
   for (nm in need) if (!nm %in% names(df)) df[[nm]] <- NA
 
-  #2.9.1.2 Rename to dot-style for consistency with downstream code
-  df <- dplyr::rename(
-    df,
-    conf.low = dplyr::any_of("conf_low"),
-    conf.high = dplyr::any_of("conf_high"),
-    p.value = dplyr::any_of("p_value"))
   df
 }
 
-#2.9.2 Standardize BD DTH results
-#2.9.2.1 Standardize BD DTH CR2 (cluster robust) results if they exist
-bd_dth_cr2_std <- if (!is_tk(bd_dth_cr2)) standardize_stats_df(bd_dth_cr2) else NULL
+#2.7.2 Standardize BD DTH results
+bd_dth_cr2_std  <- standardize_stats_df(bd_dth_cr2)
+bd_dth_wald_std <- standardize_stats_df(bd_dth_wald)
 
-#2.9.2.2 Standardize BD DTH Wald results if they exist
-bd_dth_wald_std <- if (!is_tk(bd_dth_wald)) standardize_stats_df(bd_dth_wald) else NULL
+#2.7.3 Combine and annotate DTH results
+bd_dth_sum <- dplyr::bind_rows(
+  bd_dth_cr2_std,
+  bd_dth_wald_std) %>%
+  dplyr::mutate(
+    outcome = norm_bd_outcome(dplyr::coalesce(.data$outcome, "")),
+    se_method = dplyr::coalesce(se_method, "model-based"),
+    link = dplyr::case_when(
+      model == "cloglog_offset" ~ "cloglog",
+      TRUE ~ "logit"))
 
-#2.9.2.3 Summarize all available BD DTH results
-bd_dth_sum <- if (!is.null(bd_dth_cr2_std)) {
-  bd_dth_cr2_std %>%
-    dplyr::mutate(
-      se_method = dplyr::coalesce(se_method, "CR2"),
+#2.7.4 Main-text DTH source = participant-clustered CR2 from primary pooled-logit model
+bd_dth_main <- bd_dth_sum %>%
+  dplyr::filter(model == "logit_primary", se_method == "CR2")
 
-      #2.9.2.3.1 Infer family/link if not provided
-      link = dplyr::coalesce(
-        link,
-        dplyr::if_else(stringr::str_detect(term, stringr::regex("cloglog|hazard", ignore_case = TRUE)), "cloglog", "logit")),
-      outcome = norm_bd_outcome(dplyr::coalesce(.data$outcome, "")))
-} else if (!is.null(bd_dth_wald_std)) {
-  bd_dth_wald_std %>%
-    dplyr::mutate(
-      se_method = dplyr::coalesce(se_method, "model-based"),
-      link = dplyr::coalesce(
-        link,
-        dplyr::if_else(stringr::str_detect(term, stringr::regex("cloglog|hazard", ignore_case = TRUE)), "cloglog", "logit")),
-      outcome = norm_bd_outcome(dplyr::coalesce(.data$outcome, ""))
-    )
-} else {
+#2.7.5 Sensitivity DTH source
+bd_dth_sens <- bd_dth_sum %>%
+  dplyr::filter(!(model == "logit_primary" & se_method == "CR2"))
 
-  #2.9.2.3.2 TK placeholder if neither file is available
-  read_or_tk("",
-    tk_cols = c("outcome","term","estimate","conf.low","conf.high","p.value","model","se_method","link"))
-}
-
-#2.9.3 Standardize BD fixed effects results
-#2.9.3.1 GEE - primary 
-bd_gee <- gee_fixed_bd %||% read_or_tk("", tk_cols = c("outcome","term","estimate","conf.low","conf.high","p.value","converged"))
-
-#2.9.3.2 GLMM (if exists)
-bd_glmm <- glmm_fixed_bd %||% read_or_tk("", tk_cols = c("outcome","term","estimate","conf.low","conf.high","p.value","converged"))
-
-#2.9.3.3 glmmTMB (if exists)
-bd_tmb <- tmb_fixed_bd  %||% read_or_tk("", tk_cols = c("outcome","term","estimate","conf.low","conf.high","p.value","converged"))
-
-#2.9.3.4 GAMM (if exists)
-bd_gam <- bd_gamm_preds %||% read_or_tk("", tk_cols = c("age","cluster","fit","se_fit","outcome"))
-
-#2.9.4 Standardize nested suicidality DTH results
-#2.9.4.1 Standardize nested suicidality CR2 results if they exist
-su_dth_cr2_std  <- if (!is_tk(su_dth_cr2)) standardize_stats_df(su_dth_cr2) else NULL
-
-#2.9.4.2 Standardize nested suicidality Wald results if they exist
-su_dth_wald_std <- if (!is_tk(su_dth_wald)) standardize_stats_df(su_dth_wald) else NULL
-
-#2.9.4.3 Summarize all available nested suicidality DTH results
-nested_dth_sum <- if (!is.null(su_dth_cr2_std)) {
-  su_dth_cr2_std %>%
-    dplyr::mutate(
-      se_method = dplyr::coalesce(se_method, "CR2"),
-      link = dplyr::coalesce(
-        link,
-        dplyr::if_else(stringr::str_detect(term, stringr::regex("cloglog|hazard", ignore_case = TRUE)), "cloglog", "logit")))
-} else if (!is.null(su_dth_wald_std)) {
-  su_dth_wald_std %>%
-    dplyr::mutate(
-      se_method = dplyr::coalesce(se_method, "model-based"),
-      link = dplyr::coalesce(
-        link,
-        dplyr::if_else(stringr::str_detect(term, stringr::regex("cloglog|hazard", ignore_case = TRUE)), "cloglog", "logit")))
-} else {
-  read_or_tk("", tk_cols = c("outcome","term","estimate","conf.low","conf.high","p.value","model","se_method","link"))
-}
-
-#2.9.5 Standardize nested suicidality fixed effects results
-#2.9.5.1 GEE - primary
-nested_gee <- gee_fixed_su %||% read_or_tk("", tk_cols = c("outcome","term","estimate","conf.low","conf.high","p.value","converged"))
-
-#2.9.5.2 GLMM (if exists)
-nested_glmm <- glmm_fixed_su %||% read_or_tk("", tk_cols = c("outcome","term","estimate","conf.low","conf.high","p.value","converged"))
-
-#2.9.5.3 glmmTMB (if exists)
-nested_tmb <- tmb_fixed_su  %||% read_or_tk("", tk_cols = c("outcome","term","estimate","conf.low","conf.high","p.value","converged"))
-
-#2.9.5.4 GAMM (if exists)
-nested_gam <- su_gamm_preds %||% read_or_tk("", tk_cols = c("age","cluster","fit","se_fit","outcome"))
-
-#2.9.6 Standardize age-based predictions
-#2.9.6.1 BD DTH age-based predictions
-bd_dth_preds <- if (!is_tk(bd_preds_by_age)) bd_preds_by_age else read_or_tk("", tk_cols = c("age","cluster","outcome","fit","conf.low","conf.high"), tk_n = 60)
-
-#2.9.6.2 Nested suicidality DTH age-based predictions
-nested_dth_preds <- if (!is_tk(su_preds_by_age)) su_preds_by_age else read_or_tk("", tk_cols = c("age","cluster","outcome","fit","conf.low","conf.high"), tk_n = 60)
-
-#2.10 Seed TK data if needed for later use
+#2.8 Seed TK data if needed for later use
 seed_if_needed <- function() {
 
-  #2.10.1 k_sil: simple TK curve or from val_sil_perk (silhouette by k and scaling)
+  #2.8.1 k_sil: simple TK curve or from val_sil_perk (silhouette by k and scaling)
   if (is.null(val_sil_all) && (is.null(val_sil_perk) || !is.data.frame(val_sil_perk) || nrow(val_sil_perk) == 0)) {
     k_sil_df <- tidyr::expand_grid(k = 2:8, scaling = c("robust_iqr","z_score","none")) %>%
       dplyr::mutate(silhouette = dplyr::case_when(
@@ -682,13 +531,13 @@ seed_if_needed <- function() {
     k_sil_df <- val_sil_perk
   } else {
 
-    #2.10.2 Fallback TK if val_sil_all is present but not tidy
+    #2.8.2 Fallback TK if val_sil_all is present but not tidy
     k_sil_df <- tidyr::expand_grid(k = 2:8, scaling = c("robust_iqr","zscore","none")) %>%
       dplyr::mutate(silhouette = 0.4 - 0.01*(k-2))
   }
   assign("k_sil", k_sil_df, envir = .GlobalEnv)
 
-  #2.10.3 k_wss: simple TK curve
+  #2.8.3 k_wss: simple TK curve
   k_wss_df <- tidyr::expand_grid(k = 2:8, scaling = c("robust_iqr","zscore","none")) %>%
     dplyr::group_by(scaling) %>%
     dplyr::mutate(
@@ -699,7 +548,7 @@ seed_if_needed <- function() {
     dplyr::ungroup()
   assign("k_wss", k_wss_df, envir = .GlobalEnv)
 
-  #2.10.4 UMAP: TK cloud if needed
+  #2.8.4 UMAP: TK cloud if needed
   if (is.null(umap_embed) || is_tk(umap_embed) || !all(c("x","y","cluster") %in% names(umap_embed))) {
     set.seed(123)
     assign("umap_embed",
@@ -710,7 +559,7 @@ seed_if_needed <- function() {
       envir = .GlobalEnv)
   }
 
-  #2.10.5 CONSORT counts: TK counts if needed
+  #2.8.5 CONSORT counts: TK counts if needed
   if (is.null(consort_counts) || is_tk(consort_counts)) {
     assign("consort_counts",
       tibble::tribble(
@@ -725,19 +574,19 @@ seed_if_needed <- function() {
   }
 }
 
-#2.11 Seed TK data if needed
+#2.9 Seed TK data if needed
 seed_if_needed()
 
 ```
 
 ## 1. CONSORT / Analytic Flow (Figure 1)
 
-In this chunk, we construct a CONSORT-style flow using the consort package. Boxes summarize attrition for the clustered sample and each analysis set (BD DTH; BD prevalence GEE/GLMM/glmmTMB; nested suicidality DTH; nested suicidality prevalence). If required inputs are unavailable, TK text is shown so the document still knits.
+In this chunk, we construct a CONSORT-style flow using the consort package. Boxes summarize attrition for the clustered sample and each analysis set (BD DTH; BD prevalence GEE/GLMM/glmmTMB). If required inputs are unavailable, TK text is shown so the document still knits.
 
 ### Figure 1 - CONSORT / Analytic Flow
 
 - Purpose: Build CONSORT-style flow summarizing inclusion/exclusion by analysis branch and wave
-- Inputs: `bd_pp`, `bd_panel`, `nested_pp`, `nested_panel`, `cluster_labels` (plus optional `consort_counts`)
+- Inputs: `bd_pp`, `bd_panel`, `cluster_labels` (plus optional `consort_counts`)
 - Outputs: Saves `Figure_01_CONSORT.{pdf,png}` to `results/figures`; returns a grid object (or TK bar chart if `consort` unavailable)
 - Notes: Robust to missing inputs; computes counts directly from available data and flags TK placeholders in captions
 
@@ -804,8 +653,6 @@ ensure_ids <- function(df) {
 #F1.1.7.2 Ensure IDs in all analysis data frames
 bd_pp <- ensure_ids(bd_pp)
 bd_panel <- ensure_ids(bd_panel)
-nested_pp <- ensure_ids(nested_pp)
-nested_panel <- ensure_ids(nested_panel)
 cluster_labels <- ensure_ids(cluster_labels)
 
 #F1.1.8 Always coalesce cluster from labels using participant_id only
@@ -965,7 +812,7 @@ summarize_flow <- function(df,
     elig_df <- base %>%
       dplyr::transmute(.key, .elig = !.data$no_cluster & !.data$miss_cov)
 
-    #F1.1.10.16 Included-by-outcome counts (now join by the single key)
+    #F1.1.10.16 Included-by-outcome counts
     included_by_outcome <- present_long %>%
       dplyr::left_join(elig_df, by = ".key") %>%
       dplyr::filter(.data$.elig & .data$has_outcome) %>%
@@ -1163,15 +1010,8 @@ summarize_flow <- function(df,
   )
 }
 
-#F1.2 Per-analysis summaries
-#F1.2.1 Subset expressions (if ever_bd present, limit nested suicidality to those with BD history)
-nested_dth_subset <- if ("ever_bd" %in% names(nested_pp)) "ever_bd == TRUE" else NULL
-
-#F1.2.2 Subset expression for nested suicidality prevalence (Y2/Y4 only plus ever_bd if present)
-nested_prev_subset <- if ("ever_bd" %in% names(nested_panel)) "ever_bd == TRUE" else NULL
-
-#F1.2.3 Summarize flows
-#F1.2.3.1 BD DTH
+#F1.2.2 Summarize flows
+#F1.2.2.1 BD DTH
 bd_dth_summary <- summarize_flow(
   df = bd_pp,
   outcome_cols = c("any_bsd","bipolar_I","bipolar_II","bd_nos"),
@@ -1180,39 +1020,14 @@ bd_dth_summary <- summarize_flow(
   completeness = "union",
   censor_after_first = TRUE)
 
-#F1.2.3.2 Nested suicidality DTH
-su_dth_summary <- summarize_flow(
-  df = nested_pp,
-  outcome_cols = c("si_passive","si_active","sa","nssi"),
-  covar_candidates = c("age_end","sex"),
-  subset_expr = nested_dth_subset,
-  wave_col = "end_wave",
-  completeness = "union",
-  censor_after_first = TRUE)
-
-#F1.2.3.3 BD prevalence
+#F1.2.2.2 BD prevalence
 bd_prev_summary <- summarize_flow(
   df = bd_panel,
   outcome_cols = c("any_bsd","bipolar_I","bipolar_II","bd_nos"),
   covar_candidates = c("age_wave","sex"),
   completeness = "union")
 
-#F1.2.3.4 Nested suicidality prevalence
-#F1.2.4.1 keep only Y2/Y4 for nested suicidality prevalence (no Y6)
-.su_prev_keep_waves <- c("ses-02A","ses-04A")
-.su_prev_subset_expr <- paste0(
-  "(", pick_wave_col(nested_panel), " %in% c('", paste(.su_prev_keep_waves, collapse="','"), "'))",
-  if (!is.null(nested_prev_subset)) paste0(" & (", nested_prev_subset, ")") else "")
-
-#F1.2.4.2 summarize nested suicidality prevalence
-su_prev_summary <- summarize_flow(
-  df = nested_panel,
-  outcome_cols = c("si_passive","si_active","sa","nssi"),
-  covar_candidates = c("age_wave","sex"),
-  subset_expr = .su_prev_subset_expr,
-  completeness = "union")
-
-#F1.2.5 Baseline N (prefer any available roster-like table; else max over known frames)
+#F1.2.3 Baseline N (prefer any available roster-like table; else max over known frames)
 if (!exists("baseline_n", inherits = FALSE) || !is.finite(suppressWarnings(baseline_n))) {
   distinct_n <- function(df) if (!is.null(df) && "participant_id" %in% names(df)) dplyr::n_distinct(df$participant_id) else NA_integer_
   baseline_n <- suppressWarnings(max(c(
@@ -1220,14 +1035,12 @@ if (!exists("baseline_n", inherits = FALSE) || !is.finite(suppressWarnings(basel
     distinct_n(outcome_vars),
     distinct_n(cluster_labels),
     distinct_n(bd_panel),
-    distinct_n(bd_pp),
-    distinct_n(nested_panel),
-    distinct_n(nested_pp)
+    distinct_n(bd_pp)
   ), na.rm = TRUE))
   if (!is.finite(baseline_n)) baseline_n <- 11878L  # ABCD baseline consented N (ceiling)
 }
 
-#F1.2.6 Clustered counts (distinct IDs; accept multiple label conventions)
+#F1.2.4 Clustered counts (distinct IDs; accept multiple label conventions)
 norm_cluster <- function(x) {
   x <- tolower(as.character(x))
   dplyr::case_when(
@@ -1240,7 +1053,7 @@ norm_cluster <- function(x) {
 #F1.3 Get clustered counts across all data frames
 #F1.3.1 function to get clustered counts
 get_cluster_counts <- function() {
-  cand <- list(cluster_labels, bd_panel, bd_pp, nested_panel, nested_pp)
+  cand <- list(cluster_labels, bd_panel, bd_pp)
   cl_raw <- purrr::compact(purrr::map(cand, \(d) {
     if (is.null(d)) return(NULL)
     if (!all(c("participant_id","cluster") %in% names(d))) return(NULL)
@@ -1271,10 +1084,6 @@ pretty_outcome_label <- function(x) dplyr::recode(
   "bipolar_I" = "BD I",
   "bipolar_II" = "BD II",
   "bd_nos" = "BD NOS",
-  "si_passive" = "Passive SI",
-  "si_active" = "Active SI",
-  "sa" = "SA",
-  "nssi" = "NSSI",
   .default = x)
 
 #F1.5 Helper function to get body-only strings per outcome, one line per wave, with hanging indent
@@ -1344,38 +1153,30 @@ if (requireNamespace("consort", quietly = TRUE)) {
         text_width = .w(CONSORT_KNOBS$side_width), txt_gp = tiny_gp)
   g <- consort::add_box(g, txt = clus_txt, text_width = .w(CONSORT_KNOBS$cluster_width), txt_gp = tiny_gp)
   
-  #F1.6.2.6 Four main analyses
+  #F1.6.2.6 main analyses
   split_titles <- c(
     "BD First-Onset (DTH)",
-    "BD Prevalence (GEE)",
-    "Suicidality First-Onset (Ever-BD; DTH)",
-    "Suicidality Prevalence (Ever-BD; GEE)")
+    "BD Prevalence (GEE)")
   g <- consort::add_split(g, txt = split_titles,
         text_width = .w(CONSORT_KNOBS$split_width), txt_gp = tiny_gp)
   
   #F1.6.2.7 "Available for analysis" row
   avail_vec <- c(
     bd_dth_summary$text_available,
-    bd_prev_summary$text_available,
-    su_dth_summary$text_available,
-    su_prev_summary$text_available)
+    bd_prev_summary$text_available)
   g <- consort::add_box(g, txt = avail_vec,
         text_width = .w(CONSORT_KNOBS$avail_width), txt_gp = tiny_gp)
   
   #F1.6.2.8 Outcomes (fixed order)
   bd_outcomes <- c("any_bsd","bipolar_I","bipolar_II","bd_nos")
-  su_outcomes <- c("si_passive","si_active","sa","nssi")
 
   #F1.6.2.9 Build body-only blocks per outcome (reuses your helpers)
   bd_dth_blocks <- build_ex_inc_blocks(bd_dth_summary, bd_outcomes)
   bd_prev_blocks <- build_ex_inc_blocks(bd_prev_summary, bd_outcomes)
-  su_dth_blocks <- build_ex_inc_blocks(su_dth_summary, su_outcomes)
-  su_prev_blocks <- build_ex_inc_blocks(su_prev_summary, su_outcomes)
   
   #F1.6.2.10 Pretty labels helper
   pretty_outcome_label <- function(x) dplyr::recode(
-    x, any_bsd="Any BSD", bipolar_I="BD-I", bipolar_II="BD-II", bd_nos="BD-NOS",
-    si_passive="Passive SI", si_active="Active SI", sa="SA", nssi="NSSI", .default=x)
+    x, any_bsd="Any BSD", bipolar_I="BD-I", bipolar_II="BD-II", bd_nos="BD-NOS", .default=x)
   
   #F1.6.2.11 Build bullets per branch
   branch_bullets <- function(wanted, ex_vec, inc_vec) {
@@ -1391,20 +1192,18 @@ if (requireNamespace("consort", quietly = TRUE)) {
   #F1.6.2.12 Get bullets per branch
   bd_dth_p <- branch_bullets(bd_outcomes, bd_dth_blocks$ex, bd_dth_blocks$inc)
   bd_prev_p <- branch_bullets(bd_outcomes, bd_prev_blocks$ex, bd_prev_blocks$inc)
-  su_dth_p <- branch_bullets(su_outcomes, su_dth_blocks$ex, su_dth_blocks$inc)
-  su_prev_p <- branch_bullets(su_outcomes, su_prev_blocks$ex, su_prev_blocks$inc)
   
   #F1.6.2.13 Row: EXCLUDED per branch
   g <- consort::add_box(
     g,
-    txt = c(bd_dth_p$ex, bd_prev_p$ex, su_dth_p$ex, su_prev_p$ex),
+    txt = c(bd_dth_p$ex, bd_prev_p$ex),
     text_width = .w(CONSORT_KNOBS$branch_width),
     txt_gp = tiny_gp)
 
   #F1.6.2.14 Row: INCLUDED per branch
   g <- consort::add_box(
     g,
-    txt = c(bd_dth_p$inc, bd_prev_p$inc, su_dth_p$inc, su_prev_p$inc),
+    txt = c(bd_dth_p$inc, bd_prev_p$inc),
     text_width = .w(CONSORT_KNOBS$branch_width),
     txt_gp = tiny_gp)
   
@@ -1432,18 +1231,18 @@ if (requireNamespace("consort", quietly = TRUE)) {
 
 ```
 
-## Table 2 - Baseline Characteristics of the Clustered Sample
+## Table 1 - Baseline Characteristics of the Clustered Sample
 
-- Purpose: Produce Table 2 aligned to manuscript display.
+- Purpose: Produce Table 1 aligned to manuscript display.
 - Inputs: `data_raw/dataset.csv` for demographics; `outcome_vars` for baseline diagnoses; `cluster_labels` for cluster membership.
-- Outputs: Saves `Table_02_Baseline_Characteristics` as HTML/PNG/RTF in `results/tables`; returns a gt object (fallback mini table if `gtsummary` missing).
+- Outputs: Saves `Table_01_Baseline_Characteristics` as HTML/PNG/RTF in `results/tables`; returns a gt object (fallback mini table if `gtsummary` missing).
 - Notes: Requires strict raw column names (see `DEM_COLS`) and outcome variables (`DIAG_COLS`); earliest session per participant.
 
-```{r table 2}
+```{r table 1}
 
-## Table 2: Baseline characteristics of the clustered sample ##
+## Table 1: Baseline characteristics of the clustered sample ##
 
-#T2.1 Define required raw column mappings
+#T1.1 Define required raw column mappings
 DEM_COLS <- list(
   id = "participant_id",
   session = "session_id",
@@ -1451,7 +1250,7 @@ DEM_COLS <- list(
   sex = "ab_g_stc__cohort_sex"  # 1=Male, 2=Female
 )
 
-#T2.2 Function to read demographics strictly
+#T1.2 Function to read demographics strictly
 read_demographics_strict <- function() {
   dem_path <- first_existing(
     p_data("data_raw", "dataset.csv"),
@@ -1461,7 +1260,7 @@ read_demographics_strict <- function() {
   miss <- setdiff(need, names(dem))
   if (length(miss)) stop("Missing required columns in raw dataset: ", paste(miss, collapse=", "))
 
-  #T2.2.1 process demographics to get earliest session per participant
+  #T1.2.1 process demographics to get earliest session per participant
   dem %>%
     dplyr::select(
       participant_id = !!DEM_COLS$id,
@@ -1480,16 +1279,16 @@ read_demographics_strict <- function() {
     dplyr::select(participant_id, age, sex)
 }
 
-#T2.3 List diagnosis columns of interest
-DIAG_COLS <- c("any_bsd","bipolar_I","bipolar_II","bd_nos","si_passive","si_active","sa","nssi")
+#T1.3 List diagnosis columns of interest
+DIAG_COLS <- c("any_bsd","bipolar_I","bipolar_II","bd_nos")
 
-#T2.4 Function to get baseline outcomes from outcome_vars
+#T1.4 Function to get baseline outcomes from outcome_vars
 baseline_outcomes <- function(ov) {
   need <- c("participant_id","session_id", DIAG_COLS)
   miss <- setdiff(need, names(ov))
   if (length(miss)) stop("Missing required columns in outcome_vars: ", paste(miss, collapse=", "))
 
-  #T2.4.1 get baseline session data of interest per participant
+  #T1.4.1 get baseline session data of interest per participant
   ov %>%
     dplyr::select(dplyr::all_of(need)) %>%
     dplyr::group_by(participant_id) %>%
@@ -1498,37 +1297,33 @@ baseline_outcomes <- function(ov) {
     dplyr::ungroup()
 }
 
-#T2.5 Build Table 2 dataset restricted to clustered sample
-#T2.5.1 Read demographics
+#T1.5 Build Table 2 dataset restricted to clustered sample
+#T1.5.1 Read demographics
 demographics_df <- read_demographics_strict()
 ov_base <- baseline_outcomes(outcome_vars)
 
-#T2.5.2 Merge cluster labels, demographics, and baseline outcomes
+#T1.5.2 Merge cluster labels, demographics, and baseline outcomes
 tbl2_df <- cluster_labels %>%
   dplyr::select(participant_id, cluster) %>%
   dplyr::left_join(demographics_df, by = "participant_id") %>%
   dplyr::left_join(ov_base, by = "participant_id") %>%
   dplyr::mutate(cluster = factor(cluster, levels = c("Higher-Risk","Lower-Risk")))
 
-#T2.5.3 Create readable labels for display
+#T1.5.3 Create readable labels for display
 label_list <- list(
   age ~ "Age (years)",
   sex ~ "Sex at birth",
   any_bsd ~ "Any BSD diagnosis",
   bipolar_I ~ "BD I diagnosis",
   bipolar_II ~ "BD II diagnosis",
-  bd_nos ~ "BD NOS diagnosis",
-  si_passive ~ "Passive suicidal ideation",
-  si_active ~ "Active suicidal ideation",
-  sa ~ "Suicide attempt",
-  nssi ~ "NSSI")
+  bd_nos ~ "BD NOS diagnosis")
 
-#T2.5.4 Create table caption
+#T1.5.4 Create table caption
 tbl2_caption <- glue::glue(
-  "**Table 2. Baseline characteristics of the clustered sample**  \n",
+  "**Table 1. Baseline characteristics of the clustered sample**  \n",
   "Participants included in clustering (n={scales::comma(dplyr::n_distinct(tbl2_df$participant_id))}).")
 
-#T2.5.5 Function to convert binary variables to yes/no factors
+#T1.5.5 Function to convert binary variables to yes/no factors
 to_yesno <- function(x) {
   if (is.numeric(x) || is.logical(x)) {
     factor(dplyr::case_when(
@@ -1539,15 +1334,15 @@ to_yesno <- function(x) {
   } else x
 }
 
-#T2.5.6 Prepare display dataset
+#T1.5.6 Prepare display dataset
 tbl2_disp <- tbl2_df %>%
   dplyr::mutate(dplyr::across(dplyr::all_of(DIAG_COLS), to_yesno),
     sex = factor(sex, levels = c("Male","Female")))
 
-#T2.6 Create gtsummary table for table 2
+#T1.6 Create gtsummary table for table 1
 if (requireNamespace("gtsummary", quietly = TRUE)) {
 
-  #T2.6.1 Build the base table with Overall column
+  #T1.6.1 Build the base table with Overall column
   tbl2_gts <-
     gtsummary::tbl_summary(
       data = tbl2_disp %>% dplyr::select(cluster, age, sex, dplyr::all_of(DIAG_COLS)),
@@ -1560,14 +1355,14 @@ if (requireNamespace("gtsummary", quietly = TRUE)) {
       label = label_list) %>%
     gtsummary::add_overall() %>%
 
-    #T2.6.2 Clean headers to show only the level names (no N in headers)
+    #T1.6.2 Clean headers to show only the level names (no N in headers)
     gtsummary::modify_header(all_stat_cols() ~ "**{level}**") %>%
 
-    #T2.6.3 Insert a top "N" row with counts per column (Overall + each cluster)
+    #T1.6.3 Insert a top "N" row with counts per column (Overall + each cluster)
     gtsummary::modify_table_body(~{
       tb <- .
 
-      #T2.6.3.1 counts in the same column order as the stats columns: stat_0 = Overall, stat_1 = Higher-Risk, stat_2 = Lower-Risk (given factor levels)
+      #T1.6.3.1 counts in the same column order as the stats columns: stat_0 = Overall, stat_1 = Higher-Risk, stat_2 = Lower-Risk (given factor levels)
       n_overall <- dplyr::n_distinct(tbl2_df$participant_id)
       n_by <- tbl2_df %>%
         dplyr::count(cluster, name = "n") %>%
@@ -1575,7 +1370,7 @@ if (requireNamespace("gtsummary", quietly = TRUE)) {
         dplyr::pull(n)
       n_by <- c(n_by, rep(NA_integer_, max(0, 2 - length(n_by))))  # safety pad
 
-      #T2.6.3.2 create N row
+      #T1.6.3.2 create N row
       n_row <- tibble::tibble(
         variable = ".N_row",
         var_type = NA_character_,
@@ -1590,12 +1385,12 @@ if (requireNamespace("gtsummary", quietly = TRUE)) {
     gtsummary::modify_caption(tbl2_caption) %>%
     gtsummary::as_gt()
 
-  #T2.6.4 Save the gtsummary table in multiple formats
+  #T1.6.4 Save the gtsummary table in multiple formats
   save_gt(tbl2_gts, "Table_02_Baseline_Characteristics")
   tbl2_gts
 } else {
 
-  #T2.6.5 fallback unchanged
+  #T1.6.5 fallback unchanged
   mini <- tbl2_df %>%
     dplyr::count(cluster, name = "n") %>%
     dplyr::mutate(pct = 100 * n / sum(n)) %>%
@@ -1605,196 +1400,26 @@ if (requireNamespace("gtsummary", quietly = TRUE)) {
     gt::cols_label(cluster = "Cluster", n = "n", pct = "Percent") %>%
     gt::tab_caption(paste0(tbl2_caption, "  (limited: gtsummary not available)."))
 
-  #T2.6.6 Save the fallback mini gt table if necessaruy
-  save_gt(mini_gt, "Table_02_Baseline_Characteristics_minimal")
+  #T1.6.6 Save the fallback mini gt table if necessaruy
+  save_gt(mini_gt, "Table_01_Baseline_Characteristics_minimal")
   mini_gt
 }
 
 ```
 
-## Figure 3 - Internal Validation of Optimal k (silhouette, UMAP, elbow)
-
-- Purpose: Validate clustering via (A) silhouette vs k, (B) UMAP embeddings for k=2-4, and (C) elbow (WSS) with knee detection
-- Inputs: `val_z_score_silhouette*` RDS/CSV (or per-k partials), UMAP embeddings (`umap_embedding_k{2,3,4}.{csv,rds}`), and optional precomputed `k_wss`
-- Outputs: Saves `Figure_03_Internal_Validation.{pdf,png}`; returns a patchwork-composed figure
-- Notes: Falls back to TK curves/points when inputs are absent; uses consistent axes-only theme; palette adapts to present cluster levels
-
-```{r fig3-umap-profiles}
-
-## 3. FIGURE 3: Internal validation (silhouette • UMAP • elbow) ##
-
-#F3.1 Define axes-only theme for ggplot2
-axes_only_theme <- function(base_size = 11, axis_text_size = 9, axis_title_size = 10) {
-  theme_minimal(base_size = base_size) +
-    theme(
-      panel.grid.major = element_blank(),
-      panel.grid.minor = element_blank(),
-      axis.line = element_blank(),
-      axis.line.x.bottom = element_line(color = "black"),
-      axis.line.y.left = element_line(color = "black"),
-      axis.ticks = element_line(color = "black"),
-      axis.ticks.x.top = element_blank(),
-      axis.ticks.y.right = element_blank(),
-      axis.text = element_text(size = axis_text_size),
-      axis.title.x = element_text(size = axis_title_size),
-      axis.title.y = element_text(size = axis_title_size))
-}
-
-#F3.2 Cluster label mapping (C1/1/high/higher/Higher-Risk -> "1"; C2/2/low/lower/Lower-Risk -> "2")
-coerce_cluster_digits <- function(x) {
-  x_chr <- as.character(x)
-  out <- dplyr::case_when(
-    x_chr %in% c("C1","1","high","higher","Higher-Risk") ~ "1",
-    x_chr %in% c("C2","2","low","lower","Lower-Risk")    ~ "2",
-    TRUE ~ x_chr)
-
-  #F3.2.1 Normalize things like "C3" -> "3", "C4" -> "4" for alternative clustering solutions
-  out <- sub("^\\s*(?:[Cc]|[Cc]luster)\\s*([0-9]+)\\s*$", "\\1", out, perl = TRUE)
-  out
-}
-
-#F3.3 Silhouette plot (mean silhouette vs k)
-#F3.3.1 Read silhouette data (precomputed or per-k)
-sil_df <- if (exists("k_sil")) k_sil else val_sil_perk
-sil_df <- sil_df %||% read_or_tk("", tk_cols = c("k","scaling","silhouette"))
-sil_df <- sil_df %>% dplyr::mutate(scaling = dplyr::coalesce(scaling, "z_score"))
-
-#F3.3.2 Select main scaling methods (robust_iqr preferred; else any available)
-sil_main <- sil_df %>% dplyr::filter(tolower(scaling) %in% c("z_score","iqr","median_iqr"))
-if (!nrow(sil_main)) sil_main <- sil_df
-
-#F3.3.3 Extract the best k (highest silhouette)
-best_row <- sil_main %>% dplyr::arrange(dplyr::desc(silhouette)) %>% dplyr::slice(1)
-best_k <- best_row$k %||% 2L
-
-#F3.3.4 Build silhouette plot
-p_sil <- ggplot(sil_main, aes(k, silhouette)) +
-  geom_line(size = 1) +
-  geom_point(size = 2) +
-  geom_vline(xintercept = best_k, linetype = "dashed") +
-  labs(
-    x = "Number of clusters (k)",
-    y = "Mean silhouette score",
-    title = "A) Mean Silhouette Score by k Solution") +
-  axes_only_theme() +
-  theme(legend.position = "none")
-
-#F3.4 UMAP plot for k = 2, 3, 4 (if available)
-#F3.4.1 Craeate a function to read base UMAP embedding (k=2)
-load_umap_k <- function(k) {
-  p <- first_existing(
-    p_valid(glue::glue("umap_embedding_k{k}.csv")),
-    p_valid(glue::glue("umap_embedding_k{k}.rds")))
-  df <- safe_read(p)
-  if (is.null(df)) return(NULL)
-
-  #F3.4.1.1 Accept CSV with UMAP1/UMAP2/Cluster OR tidy x/y/cluster OR umap object (RDS)
-  if (all(c("UMAP1","UMAP2") %in% names(df))) {
-    df <- dplyr::rename(df, x = UMAP1, y = UMAP2)
-  } else if (all(c("UMAP_1","UMAP_2") %in% names(df))) {
-    df <- dplyr::rename(df, x = UMAP_1, y = UMAP_2)
-  } else if (!all(c("x","y") %in% names(df))) {
-    if (is.list(df) && !is.null(df$layout)) {
-      df <- tibble::tibble(x = df$layout[,1], y = df$layout[,2])
-    } else {
-      return(NULL)
-    }
-  }
-  
-  #F3.4.1.2 Ensure cluster column exists
-  if ("Cluster" %in% names(df) && !"cluster" %in% names(df)) {
-    df <- dplyr::rename(df, cluster = Cluster)
-  }
-  if (!"cluster" %in% names(df)) return(NULL)
-  
-  #F3.4.1.3 Coerce cluster labels to digits and add k column
-  df$cluster <- coerce_cluster_digits(df$cluster)
-  df$k <- k
-  df
-}
-
-#F3.4.2 Load UMAP embeddings for k = 2, 3, 4 (if available); else fall back to k=2 only
-umaps <- purrr::compact(list(load_umap_k(2), load_umap_k(3), load_umap_k(4)))
-if (!length(umaps)) {
-  umaps <- list(umap_embed %>% dplyr::mutate(k = 2, cluster = coerce_cluster_digits(cluster)))
-}
-
-#F3.4.3 Combine UMAP embeddings into one data frame
-umap_df <- dplyr::bind_rows(umaps) %>%
-  dplyr::mutate(k = factor(k, levels = sort(unique(k))))
-
-#F3.4.4 Build UMAP plot colored by cluster labels
-#F3.4.4.1 Build UMAP palette (after umap_df) for digit labels
-present_levels <- sort(unique(umap_df$cluster))
-pal_all <- c("1"="#7F3C8D", "2"="#11A579", "3"="#3969AC", "4"="#F2B701", "5"="#E66100")
-pal <- pal_all[present_levels]
-
-#F3.4.4.2 Apply theme + palette (small axis text) and give facets breathing room
-p_sil <- p_sil + axes_only_theme() + theme(legend.position = "none")
-
-#F3.4.4.3 Build UMAP plot
-p_umap <- ggplot(umap_df, aes(x, y, color = cluster)) +
-  geom_point(alpha = 0.6, size = 0.8) +
-  facet_wrap(~k, ncol = 2, labeller = labeller(k = function(x) paste0("k = ", x))) +
-  coord_equal() +
-  scale_color_manual(values = pal, breaks = present_levels) +
-  labs(title = "B) UMAP Embeddings by k Solution", x = "UMAP Dimension 1", y = "UMAP Dimension 2") +
-  axes_only_theme(axis_text_size = 8) +
-  theme(
-    legend.position = "bottom",
-    panel.spacing = grid::unit(1.2, "lines")) +
-  guides(color = guide_legend(override.aes = list(alpha = 1, size = 3)))
-
-#F3.5 Build elbow plot with Kneedle (max distance to end-line), no text
-#F3.5.1 Function to ascribe knee point in WSS vs k data frame (given issues with inflection package)
-knee_detect <- function(df) {
-  df <- df %>% dplyr::arrange(k)
-  x <- df$k; y <- df$wss
-  p1 <- c(x[1], y[1]); p2 <- c(x[length(x)], y[length(x)])
-  denom <- sqrt((p2[2]-p1[2])^2 + (p2[1]-p1[1])^2)
-  d <- abs((p2[2]-p1[2])*x - (p2[1]-p1[1])*y + p2[1]*p1[2] - p2[2]*p1[1]) / denom
-  x[which.max(d)]
-}
-
-#F3.5.2 Read WSS data (precomputed or from TK)
-wss_df <- if (exists("k_wss")) k_wss else read_or_tk("", tk_cols = c("k","scaling","wss"))
-wss_main <- wss_df %>% dplyr::filter(tolower(scaling) %in% c("z_score","iqr","median_iqr"))
-if (!nrow(wss_main)) wss_main <- wss_df
-knee_k <- if (nrow(wss_main)) knee_detect(wss_main) else NA_integer_
-
-#F3.5.3 Build elbow plot
-p_elbow <- ggplot(wss_main, aes(k, wss)) +
-  geom_line(size = 1) +
-  geom_point(size = 2) +
-  geom_vline(xintercept = knee_k, linetype = "dashed", color = "black") +
-  labs(
-    x = "Number of clusters (k)",
-    y = "Total WSS",
-    title = "C) Elbow Plot (WSS) by k Solution") +
-  axes_only_theme() +
-  theme(legend.position = "none")
-p_elbow <- p_elbow + axes_only_theme() + theme(legend.position = "none")
-
-#F3.6 Combine silhouette, UMAP, and elbow plots into one figure and save
-fig3 <- ((p_sil / p_elbow) | p_umap) + patchwork::plot_layout(widths = c(1, 1.25))
-save_fig(fig3, "Figure_03_Internal_Validation", width = 12.5, height = 6.5)
-fig3
-
-```
-
-## Table 3 - Baseline Risk Variable Descriptives by Cluster (+ effect sizes)
+## Table 2 - Baseline Risk Variable Descriptives by Cluster (+ effect sizes)
 
 - Purpose: Summarize baseline risk-variable descriptives by cluster with effect sizes
 - Inputs: `risk_vars` (wide or long) and `cluster_labels`; optional pretty labels from `data/data_processed/risk_variable_labels.csv`
-- Outputs: Saves `Table_03_Risk_Variables_by_Cluster` as HTML/PNG/RTF; returns a gt table
+- Outputs: Saves `Table_02_Risk_Variables_by_Cluster` as HTML/PNG/RTF; returns a gt table
 - Notes: Automatically pivots wide `risk_vars` to long; detects variable types (binary vs continuous); uses `effectsize` and `glm`
 
-```{r table 3}
+```{r table 2}
 
-## TABLE 3: Risk-variable descriptive statistics by cluster (+ effect sizes) ##
+## Table 2: Risk-variable descriptive statistics by cluster (+ effect sizes) ##
 
-#T3.1 Prepare risk variable data (long format with variable + value)
-#T3.1.1 If risk_vars is wide, pivot to long; else use as-is
+#T2.1 Prepare risk variable data (long format with variable + value)
+#T2.1.1 If risk_vars is wide, pivot to long; else use as-is
 rv0 <- risk_vars
 if (!is.null(rv0) && nrow(rv0)) {
   if (!"cluster" %in% names(rv0) && !is_tk(cluster_labels)) {
@@ -1803,7 +1428,7 @@ if (!is.null(rv0) && nrow(rv0)) {
   rv0 <- rv0 %>%
     dplyr::filter(cluster %in% c("Lower-Risk","Higher-Risk"))
 
-  #T3.1.1.1 Pivot wide -> long (make `variable` + `value`)
+  #T2.1.1.1 Pivot wide -> long (make `variable` + `value`)
   id_cols <- c("participant_id","session_id","site","age","race_ethnicity","sex","family_id","cluster")
   risk_cols <- setdiff(names(rv0), id_cols)
   rv0 <- rv0 %>%
@@ -1816,7 +1441,7 @@ if (!is.null(rv0) && nrow(rv0)) {
   rv0 <- read_or_tk("", tk_cols = c("participant_id","variable","value","cluster"))
 }
 
-#T3.1.2 Identify variable types (binary vs continuous vs other) and mutate to correct types if not already present as such
+#T2.1.2 Identify variable types (binary vs continuous vs other) and mutate to correct types if not already present as such
 var_types <- rv0 %>%
   dplyr::group_by(variable) %>%
   dplyr::summarise(
@@ -1831,51 +1456,51 @@ var_types <- rv0 %>%
       is_numeric & uniq_nonNA > 2 ~ "Continuous",
       TRUE ~ "Other"))
 
-#T3.1.3 Filter to only binary and continuous variables with sufficient non-missing data
+#T2.1.3 Filter to only binary and continuous variables with sufficient non-missing data
 cont_vars <- var_types %>% dplyr::filter(type == "Continuous", n_nonmiss > 1) %>% dplyr::pull(variable)
 bin_vars <- var_types %>% dplyr::filter(type == "Binary", n_nonmiss > 0) %>% dplyr::pull(variable)
 
-#T3.2 Create helper formatting functions
+#T2.2 Create helper formatting functions
 fmt_m_sd <- function(x) sprintf("%.2f (%.2f)", mean(x, na.rm = TRUE), stats::sd(x, na.rm = TRUE))
 fmt_n_pct <- function(n1, den) sprintf("%d (%.1f%%)", n1, 100 * n1 / den)
 fmt_ci <- function(lo, hi, digits = 2) sprintf("[%.2f, %.2f]", round(lo, digits), round(hi, digits))
 fmt_p <- function(p) ifelse(is.na(p), "-", ifelse(p < .001, "<.001", sprintf("%.3f", p)))
 
-#T3.3 Create pretty labels for the table
+#T2.3 Create pretty labels for the table
 label_map <- tryCatch({
   lb <- safe_read(p_proc("risk_variable_labels.csv"))
   if (is.data.frame(lb) && all(c("variable","label") %in% names(lb)))
     setNames(lb$label, lb$variable) else NULL
 }, error = function(e) NULL)
 
-#T3.4 Analyze continuous risk variables: Cohen's d (HR vs LR) with 95% CI via effectsize; p from Welch t-test
+#T2.4 Analyze continuous risk variables: Cohen's d (HR vs LR) with 95% CI via effectsize; p from Welch t-test
 analyze_cont <- function(v) {
   df <- rv0 %>% dplyr::filter(variable == v, !is.na(value)) %>%
     dplyr::mutate(cluster = factor(cluster, levels = c("Higher-Risk","Lower-Risk")))
 
-  #T3.4.1 Require both clusters present
+  #T2.4.1 Require both clusters present
   if (length(unique(df$cluster)) < 2) return(NULL)
 
-  #T3.4.2 Generate grouped descriptive stats
+  #T2.4.2 Generate grouped descriptive stats
   gstats <- df %>%
     dplyr::group_by(cluster) %>%
     dplyr::summarise(m = mean(value, na.rm = TRUE), s = stats::sd(value, na.rm = TRUE), n = dplyr::n(), .groups="drop")
   m_hr <- gstats$m[gstats$cluster=="Higher-Risk"]; s_hr <- gstats$s[gstats$cluster=="Higher-Risk"]
   m_lr <- gstats$m[gstats$cluster=="Lower-Risk"];  s_lr <- gstats$s[gstats$cluster=="Lower-Risk"]
 
-  #T3.4.3 Effect size: Cohen's d with Hedges' correction + 95% CI
+  #T2.4.3 Effect size: Cohen's d with Hedges' correction + 95% CI
   d_obj <- effectsize::cohens_d(value ~ cluster, data = df, pooled_sd = TRUE,
             hedges.correction = TRUE, ci = 0.95)
   d_val <- as.numeric(d_obj$Cohens_d)
   d_lo <- as.numeric(d_obj$CI_low)
   d_hi <- as.numeric(d_obj$CI_high)
 
-  #T3.4.4 Calculate p-values from Welch t-test
+  #T2.4.4 Calculate p-values from Welch t-test
   p_val <- tryCatch({
     broom::tidy(stats::t.test(value ~ cluster, data = df))$p.value[1]
   }, error = function(e) NA_real_)
 
-  #T3.4.5 Build output row
+  #T2.4.5 Build output row
   tibble::tibble(
     Type = "Continuous",
     Variable = if (!is.null(label_map)) dplyr::recode(v, !!!label_map) else v,
@@ -1885,47 +1510,47 @@ analyze_cont <- function(v) {
     `p` = fmt_p(p_val))
 }
 
-#T3.5 Analyze binary risk variables; create a function to calculate OR (Higher vs Lower) with 95% CI via effectsize on glm, p from glm
+#T2.5 Analyze binary risk variables; create a function to calculate OR (Higher vs Lower) with 95% CI via effectsize on glm, p from glm
 analyze_bin <- function(v) {
   df <- rv0 %>% dplyr::filter(variable == v, !is.na(value)) %>%
     dplyr::mutate(
       value = as.integer(value),
       cluster = factor(cluster, levels = c("Lower-Risk","Higher-Risk"))) # LR = ref
 
-  #T3.5.1 Require both clusters present
+  #T2.5.1 Require both clusters present
   if (length(unique(df$cluster)) < 2) return(NULL)
 
-  #T3.5.2 Generate grouped counts
+  #T2.5.2 Generate grouped counts
   tab <- df %>%
     dplyr::count(cluster, value) %>%
     tidyr::complete(cluster = c("Lower-Risk","Higher-Risk"), value = c(0,1), fill = list(n = 0)) %>%
     tidyr::pivot_wider(names_from = value, values_from = n, names_prefix = "v") %>%
     dplyr::arrange(cluster)
 
-  #T3.5.3 Extract counts for display
+  #T2.5.3 Extract counts for display
   lr_yes <- tab$v1[tab$cluster=="Lower-Risk"];  lr_den <- rowSums(tab[tab$cluster=="Lower-Risk", c("v0","v1")])
   hr_yes <- tab$v1[tab$cluster=="Higher-Risk"]; hr_den <- rowSums(tab[tab$cluster=="Higher-Risk", c("v0","v1")])
 
-  #T3.5.4 Fit logistic regression model to get OR + CI + p-value
+  #T2.5.4 Fit logistic regression model to get OR + CI + p-value
   fit <- stats::glm(value ~ cluster, data = df, family = stats::binomial())
 
-  #T3.5.5 OR + CI from effectsize
+  #T2.5.5 OR + CI from effectsize
   or_es <- tryCatch(effectsize::oddsratio(fit, ci = 0.95), error = function(e) NULL)
   if (!is.null(or_es)) {
 
-    #T3.5.5.1 Extract OR + CI
+    #T2.5.5.1 Extract OR + CI
     row <- which(grepl("clusterHigher-Risk", or_es$Parameter))
     or_val <- as.numeric(or_es$OR[row]); or_lo <- as.numeric(or_es$CI_low[row]); or_hi <- as.numeric(or_es$CI_high[row])
   } else {
-    #T3.5.5.2 Extract OR + CI with broom if necessary
+    #T2.5.5.2 Extract OR + CI with broom if necessary
     tr <- broom::tidy(fit, conf.int = TRUE, exponentiate = TRUE)
     or_row <- tr[tr$term=="clusterHigher-Risk",]
     or_val <- or_row$estimate; or_lo <- or_row$conf.low; or_hi <- or_row$conf.high
   }
-  #T3.5.6 Get p-value from model (Wald)
+  #T2.5.6 Get p-value from model (Wald)
   p_val <- broom::tidy(fit)$p.value[broom::tidy(fit)$term=="clusterHigher-Risk"]
 
-  #T3.5.7 Build output row
+  #T2.5.7 Build output row
   tibble::tibble(
     Type = "Binary",
     Variable = if (!is.null(label_map)) dplyr::recode(v, !!!label_map) else v,
@@ -1935,27 +1560,27 @@ analyze_bin <- function(v) {
     `p` = fmt_p(p_val))
 }
 
-#T3.6 Apply analysis functions to continuous and binary variables; combine results
+#T2.6 Apply analysis functions to continuous and binary variables; combine results
 cont_rows <- purrr::map(cont_vars, analyze_cont) |> purrr::compact()
 bin_rows <- purrr::map(bin_vars, analyze_bin) |> purrr::compact()
-t3 <- dplyr::bind_rows(cont_rows, bin_rows) |>
+t2 <- dplyr::bind_rows(cont_rows, bin_rows) |>
   dplyr::arrange(factor(Type, levels = c("Continuous","Binary")), Variable)
 
-#T3.7 Create table caption and build gt table
-t3_caption <- paste0(
-  "**Table 3. Baseline risk-variable descriptive statistics by cluster**  \n",
+#T2.7 Create table caption and build gt table
+t2_caption <- paste0(
+  "**Table 2. Baseline risk-variable descriptive statistics by cluster**  \n",
   "Continuous: mean (SD); effect size is Cohen's *d* with Hedges' correction and 95% CI (Higher-Lower). ",
   "Binary: n (% “Yes”); effect size is odds ratio (Higher vs Lower) with 95% CI. ",
   "p-values from Welch *t*-test (continuous) and logistic regression Wald test (binary).")
 
-#T3.8 Build gt table with formatting
-t3_gt <- gt::gt(t3, groupname_col = "Type") |>
-  gt::tab_caption(t3_caption) |>
+#T2.8 Build gt table with formatting
+t2_gt <- gt::gt(t2, groupname_col = "Type") |>
+  gt::tab_caption(t2_caption) |>
   gt::cols_align(align = "center", columns = c(`Lower-risk`,`Higher-risk`,`Effect (95% CI)`,`p`))
 
-#T3.9 Save the gt table
-save_gt(t3_gt, "Table_03_Risk_Variables_by_Cluster")
-t3_gt
+#T2.9 Save the gt table
+save_gt(t2_gt, "Table_02_Risk_Variables_by_Cluster")
+t2_gt
 
 ```
 
@@ -1963,17 +1588,17 @@ t3_gt
 
 - Purpose: Visualize distributions of continuous (violins/boxplots) and binary (stacked bars) risk variables by cluster.
 - Inputs: `rv0` and `var_types` built in Table 3; optional `label_map` for display names; significance stars derived from Table 3 p-values.
-- Outputs: Saves `Figure_04_Risk_Distributions_by_Cluster.{pdf,png}`; returns a patchwork figure (continuous above, binary below).
+- Outputs: Saves `Figure_03_Risk_Distributions_by_Cluster.{pdf,png}`; returns a patchwork figure (continuous above, binary below).
 - Notes: Facets alphabetized by display label; minimal axes theme; star annotations added where p < .05 if `ggsignif` is available.
 
-```{r figure 4}
+```{r figure 3}
 
-## Figure 4: Baseline risk-variable distributions by cluster ##
+## Figure 3: Baseline risk-variable distributions by cluster ##
 
-#F4.1 Define colors for clusters
+#F3.1 Define colors for clusters
 cluster_cols <- c("Lower-Risk" = "#11A579", "Higher-Risk" = "#7F3C8D")
 
-#F4.2 Create a small theme helper (left Y + bottom X; no grids) for figure 4
+#F3.2 Create a small theme helper (left Y + bottom X; no grids) for figure 4
 axes_only_theme <- function(base_size = 9, axis_text_size = 7) {
   theme_minimal(base_size = base_size) +
     theme(
@@ -1989,13 +1614,13 @@ axes_only_theme <- function(base_size = 9, axis_text_size = 7) {
       legend.title = element_blank())
 }
 
-#F4.3 Identify continuous and binary variables from earlier prep
+#F3.3 Identify continuous and binary variables from earlier prep
 stopifnot(exists("rv0"), exists("var_types"))
 cont_vars <- var_types %>% dplyr::filter(type == "Continuous", n_nonmiss > 1) %>% dplyr::pull(variable)
 bin_vars <- var_types %>% dplyr::filter(type == "Binary", n_nonmiss > 0) %>% dplyr::pull(variable)
 
-#F4.4 Create pretty labels for continuous and binary variables (fallback to hardcoded if no CSV)
-#F4.4.1 Hardcoded labels for numeric vars (in case CSV not available)
+#F3.4 Create pretty labels for continuous and binary variables (fallback to hardcoded if no CSV)
+#F3.4.1 Hardcoded labels for numeric vars (in case CSV not available)
 labels_numeric <- c(
   "ACE_index_sum_score" = "ACE Index Sum Score",
   "mh_p_cbcl__synd__aggr_tscore" = "CBCL Aggression Problems T",
@@ -2012,28 +1637,28 @@ labels_numeric <- c(
   "mh_y_upps__nurg_sum" = "UPPS-P Negative Urgency Score",
   "mh_y_upps__purg_sum" = "UPPS-P Positive Urgency Score")
 
-#F4.4.2 Hardcoded labels for binary vars (in case CSV not available)
+#F3.4.2 Hardcoded labels for binary vars (in case CSV not available)
 labels_binary <- c(
   "bullying" = "Bullying Victimization",
   "family_history_depression" = "Family History of Depression",
   "family_history_mania" = "Family History of Mania")
 
-#F4.4.3 Attempt to read CSV label map (overrides hardcoded if present)
+#F3.4.3 Attempt to read CSV label map (overrides hardcoded if present)
 label_map <- tryCatch({
   lb <- safe_read(p_proc("risk_variable_labels.csv"))
   if (is.data.frame(lb) && all(c("variable","label") %in% names(lb)))
     setNames(lb$label, lb$variable) else NULL
 }, error = function(e) NULL)
 
-#F4.4.4 Combine hardcoded + CSV label maps (CSV takes precedence)
+#F3.4.4 Combine hardcoded + CSV label maps (CSV takes precedence)
 labeller_vars <- if (!is.null(label_map)) as_labeller(label_map) else label_value
 
-#F4.5 Extract significance stars from Table 3 p-values (if available)
-stars_from_t3 <- NULL
-if (exists("t3") && is.data.frame(t3) && all(c("Variable","p") %in% names(t3))) {
+#F3.5 Extract significance stars from Table 2 p-values (if available)
+stars_from_t2 <- NULL
+if (exists("t2") && is.data.frame(t2) && all(c("Variable","p") %in% names(t2))) {
   
-  #F4.5.1 Parse "p" which was formatted (e.g., "<.001", "0.023", "-")
-  stars_from_t3 <- t3 %>%
+  #F3.5.1 Parse "p" which was formatted (e.g., "<.001", "0.023", "-")
+  stars_from_t2 <- t2 %>%
     dplyr::transmute(
       Variable,
       p_num = dplyr::case_when(
@@ -2048,26 +1673,26 @@ if (exists("t3") && is.data.frame(t3) && all(c("Variable","p") %in% names(t3))) 
         TRUE ~ "")
 )
   
-  #F4.5.2 If we have a label_map, make a lookup on label; otherwise join by raw var id
+  #F3.5.2 If we have a label_map, make a lookup on label; otherwise join by raw var id
   if (!is.null(label_map)) {
 
-    #F4.5.2.1 Turn raw var -> label, then join on label text in t3$Variable
-    stars_from_t3 <- tibble::tibble(
+    #F3.5.2.1 Turn raw var -> label, then join on label text in t2$Variable
+    stars_from_t2 <- tibble::tibble(
       variable = names(label_map),
       Variable = unname(label_map)) %>%
-      dplyr::right_join(stars_from_t3, by = "Variable") %>%
+      dplyr::right_join(stars_from_t2, by = "Variable") %>%
       dplyr::select(variable, stars)
   } else {
     
-    #F4.5.2.2 Assume t3$Variable equals the raw var names
-    stars_from_t3 <- stars_from_t3 %>%
+    #F3.5.2.2 Assume t2$Variable equals the raw var names
+    stars_from_t2 <- stars_from_t2 %>%
       dplyr::rename(variable = Variable) %>%
       dplyr::select(variable, stars)
   }
 }
 
-#F4.6 Create continuous variable plot (violins + boxplots) with facets alphabetized by label
-#F4.6.1 Helper to get display label for a variable
+#F3.6 Create continuous variable plot (violins + boxplots) with facets alphabetized by label
+#F3.6.1 Helper to get display label for a variable
 label_for <- function(v) {
   base <- if (!is.null(label_map)) label_map else labels_numeric
   out  <- unname(base[v])
@@ -2075,15 +1700,15 @@ label_for <- function(v) {
   out
 }
 
-#F4.6.2 Build a key: which vars are present + their display labels
+#F3.6.2 Build a key: which vars are present + their display labels
 cont_key <- tibble::tibble(
   variable  = cont_vars,
   facet_lab = label_for(cont_vars))
 
-#F4.6.3 Alphabetize by label (case-insensitive), use as the facet level order
+#F3.6.3 Alphabetize by label (case-insensitive), use as the facet level order
 cont_levels_alpha <- cont_key$facet_lab[order(tolower(cont_key$facet_lab), cont_key$facet_lab)]
 
-#F4.6.4 Data for plotting (add the facet label column)
+#F3.6.4 Data for plotting (add the facet label column)
 cont_df <- rv0 %>%
   dplyr::filter(variable %in% cont_vars,
     !is.na(value),
@@ -2093,7 +1718,7 @@ cont_df <- rv0 %>%
     cluster = factor(cluster, levels = c("Lower-Risk","Higher-Risk")),
     facet_lab = factor(facet_lab, levels = cont_levels_alpha))
 
-#F4.6.5 Ranges + star positions, computed by facet label
+#F3.6.5 Ranges + star positions, computed by facet label
 cont_span <- cont_df %>%
   dplyr::group_by(facet_lab) %>%
   dplyr::summarise(
@@ -2102,24 +1727,24 @@ cont_span <- cont_df %>%
     .groups = "drop") %>%
   dplyr::mutate(y_lab = y_max + 0.21 * (y_max - y_min))
 
-#F4.6.6 Bring in stars from Table 3 (still keyed by raw variable), then to facet label
-cont_star_map <- if (!is.null(stars_from_t3)) {
-  cont_key %>% dplyr::left_join(stars_from_t3, by = "variable") %>%
+#F3.6.6 Bring in stars from Table 2 (still keyed by raw variable), then to facet label
+cont_star_map <- if (!is.null(stars_from_t2)) {
+  cont_key %>% dplyr::left_join(stars_from_t2, by = "variable") %>%
     dplyr::select(facet_lab, stars)
 } else {
   tibble::tibble(facet_lab = cont_levels_alpha, stars = "")
 }
 
-#F4.6.7 Combine span + star info for annotations
+#F3.6.7 Combine span + star info for annotations
 cont_ann <- cont_span %>%
   dplyr::left_join(cont_star_map, by = "facet_lab")
 
-#F4.6.8 Invisible points to grow facet headroom (needs facet_lab present in data)
+#F3.6.8 Invisible points to grow facet headroom (needs facet_lab present in data)
 cont_headroom <- tidyr::crossing(
   cont_ann[, c("facet_lab","y_lab")],
   cluster = factor(c("Lower-Risk","Higher-Risk"), levels = c("Lower-Risk","Higher-Risk")))
 
-#F4.6.9 Plot facet by the label column; row-wise fill via dir = "h"
+#F3.6.9 Plot facet by the label column; row-wise fill via dir = "h"
 p_cont <- ggplot(cont_df, aes(x = cluster, y = value, fill = cluster)) +
   geom_violin(trim = FALSE, alpha = 0.5, scale = "width") +
   geom_boxplot(width = 0.18, outlier.size = 0.4) +
@@ -2141,7 +1766,7 @@ p_cont <- ggplot(cont_df, aes(x = cluster, y = value, fill = cluster)) +
     strip.text = element_text(size = 10)) +
   guides(fill = guide_legend(nrow = 1, byrow = TRUE, override.aes = list(alpha = 0.6)))
 
-#F4.6.10 Add significance stars if ggsignif is available and any stars are present
+#F3.6.10 Add significance stars if ggsignif is available and any stars are present
 if (requireNamespace("ggsignif", quietly = TRUE) &&
     any(nchar(cont_ann$stars %||% "") > 0)) {
   p_cont <- p_cont +
@@ -2153,11 +1778,11 @@ if (requireNamespace("ggsignif", quietly = TRUE) &&
     )
 }
 
-#F4.7 Create binary variable plot (stacked bars) with facets alphabetized by label
-#F4.7.1 Alphabetize binary variable labels
+#F3.7 Create binary variable plot (stacked bars) with facets alphabetized by label
+#F3.7.1 Alphabetize binary variable labels
 bin_levels_alpha <- names(sort(labels_binary[names(labels_binary) %in% bin_vars]))
 
-#F4.7.2 Create data for plotting
+#F3.7.2 Create data for plotting
 bin_df <- rv0 %>%
   dplyr::filter(variable %in% bin_vars,
     !is.na(value),
@@ -2167,18 +1792,18 @@ bin_df <- rv0 %>%
     value = ifelse(value == 1, "Yes", "No"),
     variable = factor(variable, levels = bin_levels_alpha))
 
-#F4.7.3 Summarize data for plotting (counts + percentages)
+#F3.7.3 Summarize data for plotting (counts + percentages)
 bin_plot_df <- bin_df %>%
   dplyr::count(variable, cluster, value) %>%
   dplyr::group_by(variable, cluster) %>%
   dplyr::mutate(pct = 100*n/sum(n)) %>%
   dplyr::ungroup()
 
-#F4.7.4 Prepare star annotations from Table 3 (if available)
+#F3.7.4 Prepare star annotations from Table 3 (if available)
 bin_ann <- bin_plot_df %>% dplyr::distinct(variable) %>% dplyr::mutate(x = 1.5, y = 103)
-if (!is.null(stars_from_t3)) bin_ann <- bin_ann %>% dplyr::left_join(stars_from_t3, by = "variable") else bin_ann$stars <- ""
+if (!is.null(stars_from_t2)) bin_ann <- bin_ann %>% dplyr::left_join(stars_from_t2, by = "variable") else bin_ann$stars <- ""
 
-#F4.7.5 Build binary variable stacked bar plot with facets by variable
+#F3.7.5 Build binary variable stacked bar plot with facets by variable
 p_bin <- ggplot(bin_plot_df, aes(cluster, pct, fill = value)) +
   geom_col() +
   geom_text(aes(label = n), position = position_stack(vjust = 0.5), size = 2.8) +
@@ -2201,10 +1826,10 @@ p_bin <- ggplot(bin_plot_df, aes(cluster, pct, fill = value)) +
     aes(x = x, y = y, label = stars),
     inherit.aes = FALSE, size = 2.8)
 
-#F4.8 Combine continuous + binary plots into figure 4 and save
-fig4 <- p_cont / p_bin + patchwork::plot_layout(heights = c(2, 1))
-save_fig(fig4, "Figure_04_Risk_Distributions_by_Cluster", width = 14, height = 11.75)
-fig4
+#F3.8 Combine continuous + binary plots into figure 3 and save
+fig3 <- p_cont / p_bin + patchwork::plot_layout(heights = c(2, 1))
+save_fig(fig3, "Figure_03_Risk_Distributions_by_Cluster", width = 14, height = 11.75)
+fig3
 
 ```
 
@@ -2507,140 +2132,182 @@ ts1
 
 ```
 
-## Figure 5 and Related Stats: Interval and Cumulative Discrete Time Hazard Model Onset by Risk Cluster Incidence Curves for Bipolar Disorders 
+## Figure 4 and Related Stats: Interval and Cumulative Discrete Time Hazard Model Onset by Risk Cluster Incidence Curves for Bipolar Disorders 
 
 - Purpose: Plot discrete-time hazards and cumulative incidence by wave and cluster with CIs; emit inline stats for Results text
-- Inputs: Saved `lme4` fits (`fit_primary_<outcome>.rds`), `bd_pp_model` (risk set), and `bd_dth_preds` (aligned hazards) when present
-- Outputs: Saves `Figure_05_DTH_Hazards_and_Cumulative_by_Cluster.{pdf,png}`; prints Year-6 RD/RR lines and age-term summaries
+- Inputs: Saved `glm` fits (`glm_primary_<outcome>.rds`), `bd_pp_model` (risk set), and `bd_dth_preds` (aligned hazards) when present
+- Outputs: Saves `Figure_04_DTH_Hazards_and_Cumulative_by_Cluster.{pdf,png}`; prints Year-6 RD/RR lines and age-term summaries
 - Notes: Computes cumulative risk CIs via MVN draws of fixed effects (or boot fallback); overlays observed empirical hazards/cumulative
 
-```{r figure 5 stats}
+```{r figure 4 stats}
 
-## Figure 5: Discrete-time hazards and cumulative incidence by cluster ##
+## Figure 4: Discrete-time hazards and cumulative incidence by cluster ##
 
-#F5.1 Load necessary model fits if not already in memory
-#F5.1.1 Define outcomes to plot and fit directory
+#F4.1 Load necessary model fits if not already in memory
+#F4.1.1 Define outcomes to plot and fit directory
 OUT_FIG <- c("bipolar_I","bipolar_II","bd_nos","any_bsd")
 
-#F5.1.2 Directory where model fits are stored
-fit_dir <- "/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk/results/main_analysis/1_bd_survival"
+#F4.1.2 Directory where model fits are stored
+fit_dir <- res_bd_surv
 
-#F5.1.3 Safe read helper (returns NULL on error)
-safe_read <- function(path) tryCatch(readRDS(path), error = function(e) NULL)
+#F4.1.3 Safe read helper (returns NULL on error)
+safe_read_rds <- function(path) tryCatch(readRDS(path), error = function(e) NULL)
 
-#F5.1.4 Load fits into fits_primary list if not already present
+#F4.1.4 Load finalized primary glm fits if not already in memory
 if (!exists("fits_primary") || !is.list(fits_primary)) fits_primary <- list()
 needed <- setdiff(OUT_FIG, names(fits_primary))
 
-#F5.1.5 Load missing fits
+#F4.1.5 Load missing fits
 if (length(needed)) {
   add <- setNames(
-    lapply(needed, function(o) safe_read(file.path(fit_dir, paste0("fit_primary_", o, ".rds")))),
-    needed)
+    lapply(needed, function(o) safe_read_rds(file.path(fit_dir, paste0("glm_primary_", o, ".rds")))),
+    needed
+  )
   fits_primary[names(add)] <- add
 }
 
-#F5.1.6 Report loaded fits and warn if any missing
+#F4.1.6 Report loaded fits and warn if any missing
 loaded_ok <- names(Filter(Negate(is.null), fits_primary))
-message("Loaded fits: ", paste(loaded_ok, collapse = ", "))
+message("Loaded primary glm fits: ", paste(loaded_ok, collapse = ", "))
 if (!all(OUT_FIG %in% loaded_ok)) {
-  warning("Missing fits for: ", paste(setdiff(OUT_FIG, loaded_ok), collapse = ", "),
-    "\nI can only compute CIs for the ones that loaded.")
+  warning("Missing primary glm fits for: ", paste(setdiff(OUT_FIG, loaded_ok), collapse = ", "))
 }
 
-#F5.1.7 Prepare person-period data for predictions
-make_ref_frame <- function(fit, dat) {
-  frm <- fit@frame
-  levs <- lapply(frm[, vapply(frm, is.factor, TRUE), drop = FALSE], levels)
+#F4.1.7 Prepare reference frame and model matrix for glm predictions
+make_ref_frame_glm <- function(fit, dat) {
+  frm <- model.frame(fit)
+  mm0 <- model.matrix(fit)
+  contr_all <- attr(mm0, "contrasts")
+
+  get_levs <- function(var) {
+    if (var %in% names(frm) && is.factor(frm[[var]])) levels(frm[[var]]) else NULL
+  }
+
+  waves_lev <- get_levs("end_wave") %||% levels(dat$end_wave)
+  cluster_lev <- get_levs("cluster") %||% levels(dat$cluster)
+  sex_lev <- get_levs("sex")
+  site_lev <- get_levs("site_factor")
+  base_lev <- get_levs("baseline_status")
+
   ref <- expand.grid(
-    end_wave = levels(dat$end_wave),
-    cluster = levels(dat$cluster),
+    end_wave = waves_lev,
+    cluster = cluster_lev,
     age_mid_between = 0,
-    age_mid_cwc = 0,
-    baseline_status = 0,
-    sex = levels(dat$sex)[1],
-    site_factor = levels(dat$site_factor)[1],
     stringsAsFactors = FALSE)
 
-  #F5.1.7.1.1 Coerce factor levels to match the fitted model
-  for (v in intersect(names(levs), names(ref))) {
-    ref[[v]] <- factor(ref[[v]], levels = levs[[v]])
+  if ("age_mid_cwc" %in% names(frm)) ref$age_mid_cwc <- 0
+  if ("age_mid_cwc_orth" %in% names(frm)) ref$age_mid_cwc_orth <- 0
+  if ("wave_num" %in% names(frm)) ref$wave_num <- match(ref$end_wave, waves_lev) - 1L
+  if ("sex" %in% names(frm) && !is.null(sex_lev)) ref$sex <- sex_lev[1]
+  if ("site_factor" %in% names(frm) && !is.null(site_lev)) ref$site_factor <- site_lev[1]
+  if ("baseline_status" %in% names(frm)) {
+    ref$baseline_status <- if (!is.null(base_lev)) base_lev[1] else 0
   }
-  dplyr::arrange(ref, cluster, end_wave)
-}
+  if ("log_dt" %in% names(frm) && "log_dt" %in% names(dat)) {
+    log_dt_ref <- dat %>%
+      dplyr::group_by(end_wave) %>%
+      dplyr::summarise(log_dt = median(log_dt, na.rm = TRUE), .groups = "drop")
+    ref <- ref %>% dplyr::left_join(log_dt_ref, by = "end_wave")
+  }
 
-#F5.1.8 Function to compute cumulative risk CIs via MVN draws of fixed effects
-cumrisk_by_wave_ci_mvn <- function(fit, dat, B = 4000, probs = c(0.025, 0.975)) {
-  stopifnot(requireNamespace("lme4", quietly = TRUE))
-  ref <- make_ref_frame(fit, dat)
-  
-  #F5.1.8.1 Fixed-only RHS with no random effects and no response
-  ff_all <- stats::formula(fit)
-  ff_fix <- lme4::nobars(ff_all)
-  tt <- stats::delete.response(stats::terms(ff_fix))
+  #F4.1.7.1 Coerce factor levels to match fitted model
+  for (nm in intersect(names(ref), names(frm))) {
+    if (is.factor(frm[[nm]])) ref[[nm]] <- factor(ref[[nm]], levels = levels(frm[[nm]]))
+  }
 
-  #F5.1.8.2 Use the model's contrasts so columns line up
-  contr <- attr(fit@frame, "contrasts")
-  X <- stats::model.matrix(tt, ref, contrasts.arg = contr)
+  tt <- stats::delete.response(stats::terms(fit))
+  X <- stats::model.matrix(tt, ref, contrasts.arg = contr_all)
 
-  #F5.1.8.3 Extract fixed effects and their variance-covariance matrix
-  beta <- lme4::fixef(fit)
+  beta <- stats::coef(fit)
   V <- as.matrix(stats::vcov(fit))
 
-  #F5.1.8.4 align columns; add any missing columns (rare) as zeros
   miss <- setdiff(names(beta), colnames(X))
-  if (length(miss)) X <- cbind(X, matrix(0, nrow(X), length(miss), dimnames = list(NULL, miss)))
+  if (length(miss) > 0) {
+    X <- cbind(X, matrix(0, nrow(X), length(miss), dimnames = list(NULL, miss)))
+  }
   X <- X[, names(beta), drop = FALSE]
 
-  #F5.1.8.5 MVN draws of fixed effects
+  list(ref = ref, X = X, beta = beta, V = V, waves = waves_lev, clus = cluster_lev)
+}
+
+#F4.1.8 Function to compute cumulative risk CIs from glm fixed-effect uncertainty
+cumrisk_by_wave_ci_mvn_glm <- function(fit, dat, B = 4000, probs = c(0.025, 0.975)) {
+  obj <- make_ref_frame_glm(fit, dat)
+  ref <- obj$ref
+  X <- obj$X
+  beta <- obj$beta
+  V <- obj$V
+
   if (requireNamespace("MASS", quietly = TRUE)) {
     beta_draws <- MASS::mvrnorm(n = B, mu = beta, Sigma = V)
   } else {
-    L <- chol(V); Z <- matrix(stats::rnorm(B * length(beta)), nrow = B)
+    L <- chol(V)
+    Z <- matrix(stats::rnorm(B * length(beta)), nrow = B)
     beta_draws <- sweep(Z %*% t(L), 2, beta, `+`)
   }
 
-  #F5.1.8.6 Compute predicted hazards and cumulative risks
   eta_draws <- X %*% t(beta_draws)
   p_draws <- plogis(eta_draws)
-  
-  #F5.1.8.7 Split by cluster and compute cumulative risks + CIs
-  ref$end_wave <- factor(ref$end_wave, levels = levels(dat$end_wave))
-  ref$cluster <- factor(ref$cluster,  levels = levels(dat$cluster))
+
+  ref$end_wave <- factor(ref$end_wave, levels = unique(as.character(ref$end_wave)))
+  ref$cluster <- factor(ref$cluster, levels = unique(as.character(ref$cluster)))
   idx_by_clu <- split(seq_len(nrow(ref)), ref$cluster)
-  
-  #F5.1.8.8 Compute cumulative risks and CIs per cluster
+
   out <- lapply(names(idx_by_clu), function(cl) {
     R <- idx_by_clu[[cl]]
     H <- p_draws[R, , drop = FALSE]
-    CR <- apply(H, 2, function(col) 1 - cumprod(1 - col))  # waves x B
+    CR <- apply(H, 2, function(col) 1 - cumprod(1 - col))
     if (is.null(dim(CR))) CR <- matrix(CR, nrow = length(R), ncol = 1)
-    
-    #F5.1.8.8.1 Compute phat cumulative risk estimates
-    cr_hat <- {
-      p_hat <- plogis(as.numeric(X[R, , drop = FALSE] %*% beta))
-      1 - cumprod(1 - p_hat)
-    }
 
-    #F5.1.8.8.2 Compute CIs
+    p_hat <- plogis(as.numeric(X[R, , drop = FALSE] %*% beta))
+    cr_hat <- 1 - cumprod(1 - p_hat)
+
     lo <- apply(CR, 1, stats::quantile, probs = probs[1], na.rm = TRUE)
     hi <- apply(CR, 1, stats::quantile, probs = probs[2], na.rm = TRUE)
 
-    #F5.1.8.8.3 Return data frame for this cluster
     tibble::tibble(
       end_wave = ref$end_wave[R],
       cluster = as.character(ref$cluster[R]),
       cumrisk = cr_hat,
       cumrisk_lo = lo,
       cumrisk_hi = hi)
-  }) |> dplyr::bind_rows()
-  
-  #F5.1.8.9 Return cumulative risk CIs
+  }) %>% 
+    dplyr::bind_rows()
+
   out
 }
 
-#F5.1.9 Plotting helpers
-#F5.1.9.1 Outcome order + pretty labels
+#F4.1.8b Function to compute per-wave hazard CIs from glm fixed-effect uncertainty
+hazard_by_wave_ci_mvn_glm <- function(fit, dat, B = 4000, probs = c(0.025, 0.975)) {
+    obj <- make_ref_frame_glm(fit, dat)
+    ref <- obj$ref
+    X <- obj$X
+    beta <- obj$beta
+    V <- obj$V
+
+    if (requireNamespace("MASS", quietly = TRUE)) {
+        beta_draws <- MASS::mvrnorm(n = B, mu = beta, Sigma = V)
+    } else {
+        L <- chol(V)
+        Z <- matrix(stats::rnorm(B * length(beta)), nrow = B)
+        beta_draws <- sweep(Z %*% t(L), 2, beta, `+`)
+    }
+
+    eta_draws <- X %*% t(beta_draws)
+    p_draws <- plogis(eta_draws)
+    p_hat <- plogis(as.numeric(X %*% beta))
+
+    tibble::tibble(
+        end_wave = factor(ref$end_wave, levels = levels(dat$end_wave)),
+        cluster = as.character(ref$cluster),
+        hazard = p_hat,
+        lo = apply(p_draws, 1, stats::quantile, probs = probs[1], na.rm = TRUE),
+        hi = apply(p_draws, 1, stats::quantile, probs = probs[2], na.rm = TRUE)
+    )
+}
+
+#F4.1.9 Plotting helpers
+#F4.1.9.1 Outcome order + pretty labels
 OUT_FIG <- c("bipolar_I","bipolar_II","bd_nos","any_bsd")
 OUT_LABS <- c(
   bipolar_I = "BD-I",
@@ -2648,15 +2315,15 @@ OUT_LABS <- c(
   bd_nos = "BD-NOS",
   any_bsd = "Any BSD")
 
-#F5.1.9.2 Set the order of levels for waves
+#F4.1.9.2 Set the order of levels for waves
 wave_levels  <- c("ses-02A","ses-04A","ses-06A")
 
-#F5.1.9.3 Pretty wave labels + median ages for tick labels
+#F4.1.9.3 Pretty wave labels + median ages for tick labels
 wave_pretty <- c("ses-02A" = "Year-2",
                  "ses-04A" = "Year-4",
                  "ses-06A" = "Year-6")
 
-#F5.1.9.4 Axis theme with only axes, no gridlines
+#F4.1.9.4 Axis theme with only axes, no gridlines
 axes_only_theme <- function(base_size = 8, axis_text = 6.5) {
   theme_minimal(base_size = base_size) +
     theme(
@@ -2672,7 +2339,7 @@ axes_only_theme <- function(base_size = 8, axis_text = 6.5) {
       legend.box = "horizontal")
 }
 
-#F5.1.9.5 Helpers to blank axes on interior panels (use at composition time)
+#F4.1.9.5 Helpers to blank axes on interior panels (use at composition time)
 strip_x <- theme(axis.title.x = element_blank(),
             axis.text.x = element_blank(),
             axis.ticks.x = element_blank())
@@ -2680,173 +2347,230 @@ strip_y <- theme(axis.title.y = element_blank(),
             axis.text.y = element_blank(),
             axis.ticks.y = element_blank())
 
-#F5.1.10 List the controls used previously for glmer fitting (used here in cumrisk CI fn)
-ctrl <- glmerControl(optimizer = "bobyqa",
-          optCtrl = list(maxfun = 2e5),
-          check.conv.singular = "ignore")
+#F4.1.9.6 Robust cluster display helper
+to_cluster_disp <- function(x) {
+  x_chr <- as.character(x)
 
-#F5.1.11 Create a function to compute cumulative incidence CIs by wave and cluster for each outcome
-cum_ci_list <- lapply(OUT_FIG, function(out) {
-  fit <- fits_primary[[out]]; if (is.null(fit)) return(NULL)
-  dat <- bd_pp_model |>
-    dplyr::filter(outcome == out) |>
-    droplevels() |>
+  out <- tryCatch(coerce_cluster(x_chr), error = function(e) rep(NA_character_, length(x_chr)))
+
+  out[is.na(out) & x_chr %in% c("C1", "1")] <- "Lower-Risk"
+  out[is.na(out) & x_chr %in% c("C2", "2")] <- "Higher-Risk"
+
+  factor(out, levels = c("Lower-Risk", "Higher-Risk"))
+}
+
+#F4.2 Build hazard-by-wave directly from saved primary glm fits
+haz_by_wave <- purrr::map_dfr(OUT_FIG, function(out) {
+  fit <- fits_primary[[out]]
+  if (is.null(fit)) return(tibble::tibble())
+
+  dat <- bd_pp_model %>%
+    dplyr::filter(outcome == out) %>%
+    droplevels() %>%
     dplyr::mutate(
       end_wave = factor(end_wave, levels = wave_levels),
-      cluster = factor(cluster))
-  if (!nrow(dat)) return(NULL)
-  
-  #F5.1.11.1 Compute cumulative risk CIs via MVN draws of fixed effects
-  cr <- cumrisk_by_wave_ci_mvn(fit, dat, B = 2000)
-  
-  #F5.1.11.2 Format output
-  cr |>
+      cluster = factor(cluster)
+    )
+
+  if (!nrow(dat)) return(tibble::tibble())
+
+  hazard_by_wave_ci_mvn_glm(fit, dat, B = 2000) %>%
     dplyr::mutate(
       outcome = out,
       model = "logit",
-      end_wave = factor(end_wave, levels = wave_levels),
-      cluster_disp = factor(coerce_cluster(cluster), levels = c("Lower-Risk","Higher-Risk"))) |>
-    dplyr::select(outcome, model, end_wave, cluster, cluster_disp, cumrisk, cumrisk_lo, cumrisk_hi)
+      end_wave = factor(as.character(end_wave), levels = wave_levels),
+      cluster = as.character(cluster),
+      cluster_disp = to_cluster_disp(cluster),
+      hazard = as.numeric(hazard),
+      lo = as.numeric(lo),
+      hi = as.numeric(hi)
+    ) %>%
+    dplyr::filter(
+      !is.na(cluster_disp),
+      is.finite(hazard)
+    ) %>%
+    dplyr::select(outcome, model, end_wave, cluster, cluster_disp, hazard, lo, hi)
 })
 
-#F5.2 Cumulative risk estimates by wave and cluster (with CIs)
-#F5.2.1 Combine cumulative incidence CIs into one data frame (temp to check)
-tmp <- dplyr::bind_rows(purrr::compact(cum_ci_list))
+message("haz_by_wave rows: ", nrow(haz_by_wave))
+print(haz_by_wave %>% dplyr::count(outcome, cluster_disp))
 
-#F5.2.2 Guard: ensure something computed in tmp
-stopifnot(is.data.frame(tmp), nrow(tmp) > 0)
+cum_by_wave <- if (!is_tk(bd_cumrisk_by_wave)) {
+  bd_cumrisk_by_wave %>%
+    janitor::clean_names() %>%
+    dplyr::mutate(
+      outcome = norm_bd_outcome(outcome),
+      model = dplyr::coalesce(model, "logit"),
+      end_wave = factor(end_wave, levels = wave_levels),
+      cluster = as.character(cluster),
+      cluster_disp = factor(coerce_cluster(cluster), levels = c("Lower-Risk","Higher-Risk")))
+} else {
+  tibble::tibble(
+    outcome = character(),
+    model = character(),
+    end_wave = factor(character(), levels = wave_levels),
+    cluster = character(),
+    cluster_disp = factor(character(), levels = c("Lower-Risk","Higher-Risk")),
+    cumrisk = double(),
+    cumrisk_lo = double(),
+    cumrisk_hi = double())
+}
 
-#F5.2.3 Assign to cum_by_wave for plotting
-cum_by_wave <- tmp
+#F4.2.1 If cumulative-risk CIs are absent in the exported table, backfill from saved glm fits
+need_cum_ci <- (
+  nrow(cum_by_wave) == 0 ||
+  !"cumrisk_lo" %in% names(cum_by_wave) ||
+  all(is.na(cum_by_wave$cumrisk_lo)))
 
-#F5.3 Prepare age median labels
-#F5.3.1 Compute median ages per wave in the model data
+if (need_cum_ci) {
+  cum_ci_list <- lapply(OUT_FIG, function(out) {
+    fit <- fits_primary[[out]]
+    if (is.null(fit)) return(NULL)
+
+    dat <- bd_pp_model %>%
+      dplyr::filter(outcome == out) %>%
+      droplevels() %>%
+      dplyr::mutate(
+        end_wave = factor(end_wave, levels = wave_levels),
+        cluster = factor(cluster))
+
+    if (!nrow(dat)) return(NULL)
+
+    cumrisk_by_wave_ci_mvn_glm(fit, dat, B = 2000) %>%
+      dplyr::mutate(
+        outcome = out,
+        model = "logit",
+        end_wave = factor(end_wave, levels = wave_levels),
+        cluster_disp = factor(coerce_cluster(cluster), levels = c("Lower-Risk","Higher-Risk"))) %>%
+      dplyr::select(outcome, model, end_wave, cluster, cluster_disp, cumrisk, cumrisk_lo, cumrisk_hi)
+  })
+
+  cum_by_wave <- dplyr::bind_rows(purrr::compact(cum_ci_list))
+}
+
+#F4.3 Prepare age median labels
+#F4.3.1 Compute median ages per wave in the model data
 age_meds_tbl <- bd_pp_model %>%
   dplyr::group_by(end_wave) %>%
   dplyr::summarise(age_med = median(age_mid, na.rm = TRUE), .groups = "drop") %>%
   dplyr::mutate(end_wave = as.character(end_wave))
 
-#F5.3.2 Create named vector of median ages
+#F4.3.2 Create named vector of median ages
 age_meds_vec <- setNames(age_meds_tbl$age_med, age_meds_tbl$end_wave)
 
-#F5.3.3 Create x-axis labels with median ages
+#F4.3.3 Create x-axis labels with median ages
 x_lab_vec <- setNames(
   ifelse(is.finite(age_meds_vec[wave_levels]),
     sprintf("%s\nMedian Mid-Interval Age=%.1f", wave_pretty[wave_levels], age_meds_vec[wave_levels]),
     sprintf("%s\nMedian Mid-Interval Age=-", wave_pretty[wave_levels])),
   wave_levels)
 
-#F5.4 Compute empirical hazards and cumulative incidence by wave and cluster
-#F5.4.1 Empirical hazards by wave and cluster
+#F4.4 Compute empirical hazards and cumulative incidence by wave and cluster
+#F4.4.1 Empirical hazards by wave and cluster
 emp_cum_by_wave <- bd_pp_model %>%
   dplyr::filter(outcome %in% OUT_FIG) %>%
   dplyr::mutate(
     cluster_disp = factor(coerce_cluster(cluster), levels = c("Lower-Risk","Higher-Risk")),
     end_wave = factor(end_wave, levels = wave_levels)) %>%
   
-  #F5.4.1.1 Per-interval empirical hazard among those at risk
+  #F4.4.1.1 Per-interval empirical hazard among those at risk
   dplyr::group_by(outcome, cluster_disp, end_wave) %>%
   dplyr::summarise(h = mean(event == 1L, na.rm = TRUE), .groups = "drop") %>%
 
-  #F5.4.1.2 Roll up to cumulative incidence: 1 - Π(1 - h_j)
+  #F4.4.1.2 Roll up to cumulative incidence: 1 - Π(1 - h_j)
   dplyr::group_by(outcome, cluster_disp) %>%
   dplyr::arrange(end_wave, .by_group = TRUE) %>%
   dplyr::mutate(cumrisk_obs = 1 - cumprod(1 - pmin(pmax(h, 0), 1))) %>%
   dplyr::ungroup()
 
-#F5.5 Prepare predicted hazards and cumulative incidence data
-#F5.5.1 Guard: make empty frames if needed later on
-empty_pred <- tibble(
-  outcome=character(), model=character(), pred_mode=character(),
-  end_wave=factor(character(), levels = wave_levels),
-  cluster=character(), age_years=double(), pred=double(),
-  lower=double(), upper=double())
-empty_cum <- tibble(
-  outcome=character(), model=character(), end_wave=factor(character(), levels=wave_levels),
-  cluster=character(), cumrisk=double(), cumrisk_lo=double(), cumrisk_hi=double())
+#F4.5 Plot predicted and observed hazard by wave and cluster
+plot_haz_wave <- function(df, out_key, panel_letter = NULL) {
 
-#F5.5.2 Pull predictions (primary link only; wave-aligned for hazards)
-pred_aligned <- if (exists("bd_dth_preds")) bd_dth_preds else empty_pred
-pred_aligned <- pred_aligned %>%
-  dplyr::filter(model == params$link_primary, pred_mode == "aligned",
-    outcome %in% OUT_FIG) %>%
-  dplyr::mutate(
-    end_wave = factor(end_wave, levels = wave_levels),
-    cluster_disp = factor(coerce_cluster(cluster), levels = c("Lower-Risk","Higher-Risk")))
+  d <- df %>%
+    dplyr::filter(outcome == out_key, model == "logit") %>%
+    dplyr::mutate(
+      end_wave = factor(as.character(end_wave), levels = wave_levels),
+      cluster_disp = factor(cluster_disp, levels = c("Lower-Risk", "Higher-Risk"))
+    ) %>%
+    dplyr::arrange(cluster_disp, end_wave) %>%
+    dplyr::filter(!is.na(cluster_disp), is.finite(hazard))
 
-#F5.5.3 Check whether CI is missing for cumulative incidence; if so, recompute
-#F5.5.3.1 Determine if recomputation is needed
-need_cum_ci <- (nrow(cum_by_wave) == 0) ||
-  all(is.na(cum_by_wave$cumrisk_lo) & is.na(cum_by_wave$cumrisk_hi))
+  if (is.null(panel_letter)) {
+    i <- match(out_key, OUT_FIG)
+    panel_letter <- LETTERS[i]
+  }
 
-#F5.5.3.2 Recompute cumulative incidence CIs if needed
-if (need_cum_ci) {
-  cum_ci_list <- lapply(OUT_FIG, function(out) {
-    fit <- try(fits_primary[[out]], silent = TRUE)
-    if (inherits(fit, "try-error") || is.null(fit)) return(NULL)
-    dat <- bd_pp_model |> dplyr::filter(outcome == out) |> droplevels()
-    
-    #F5.5.3.2.1 Use existing helper if it actually returns CIs; else fall back to bootMer
-    cr <- if (exists("cumrisk_by_wave_ci")) {
-      tmp <- try(cumrisk_by_wave_ci(fit, dat, B = 500), silent = TRUE)
-      if (inherits(tmp, "try-error") || !"cumrisk_lo" %in% names(tmp) ||
-        all(is.na(tmp$cumrisk_lo))) cumrisk_by_wave_ci_boot(fit, dat, B = 500) else tmp
-    } else {
-      cumrisk_by_wave_ci_boot(fit, dat, B = 500)
-    }
-    
-    #F5.5.3.2.2 Format output
-    cr |>
-      dplyr::mutate(
-        outcome = out,
-        model = params$link_primary,
-        end_wave = factor(end_wave, levels = wave_levels),
-        cluster_disp = factor(coerce_cluster(cluster), levels = c("Lower-Risk","Higher-Risk")),
-        cumrisk_lo = as.numeric(cumrisk_lo),
-        cumrisk_hi = as.numeric(cumrisk_hi))
-  })
+  has_ci <- nrow(d) > 0 &&
+    all(c("lo", "hi") %in% names(d)) &&
+    any(is.finite(d$lo) & is.finite(d$hi), na.rm = TRUE)
 
-  #F5.5.3.3 Combine cumulative incidence CIs into one data frame
-  cum_by_wave <- dplyr::bind_rows(purrr::compact(cum_ci_list))
-}
-
-#F5.6 Plot predicted and observed hazard by wave and cluster
-plot_haz_wave <- function(df, out_key) {
-  d <- df %>% dplyr::filter(.data$outcome == out_key)
-  has_ci <- all(c("lower","upper") %in% names(d)) &&
-    any(is.finite(d$lower) & is.finite(d$upper), na.rm = TRUE)
-  
-  #F5.6.1 Observed empirical hazards for each outcome
-  emp <- bd_pp_model %>%
+  emp <- emp_cum_by_wave %>%
     dplyr::filter(outcome == out_key) %>%
     dplyr::mutate(
-      cluster_disp = factor(coerce_cluster(cluster), levels = c("Lower-Risk","Higher-Risk")),
-      end_wave = factor(end_wave, levels = wave_levels)) %>%
-    dplyr::group_by(end_wave, cluster_disp) %>%
-    dplyr::summarise(emp = mean(event == 1L, na.rm = TRUE), .groups = "drop")
-  
-  #F5.6.2 Plot predicted hazards by wave and cluster
-  ggplot(d, aes(x = end_wave, y = pred, color = cluster_disp, group = cluster_disp)) +
-    { if (has_ci) geom_ribbon(aes(ymin = lower, ymax = upper, fill = cluster_disp),
-      alpha = 0.18, color = NA) } +   # << ribbon CI
-      geom_line(size = 0.9) +
-      geom_point(size = 1.8) +
-      geom_point(data = emp, aes(x = end_wave, y = emp, color = cluster_disp),
-        shape = 1, size = 1.8, inherit.aes = FALSE) +
-      scale_y_continuous(labels = scales::percent_format(accuracy = 0.01), limits = c(0, NA)) +
-      scale_x_discrete(drop = FALSE, labels = x_lab_vec) +
-      scale_color_manual(
-        values = cluster_cols,
-        breaks = names(cluster_cols),
-        labels = names(cluster_cols)) +
-      scale_fill_manual(values = cluster_cols, guide = "none") +
-      guides(color = guide_legend(nrow = 1, byrow = TRUE)) +
-      labs(title = paste0("(", LETTERS[match(out_key, OUT_FIG)], ")  ", OUT_LABS[[out_key]], " Interval Hazard"),
-        x = "Wave (Interval End)", y = "Predicted Hazard (Per Interval)", color = "Cluster") +
-      axes_only_theme()
+      end_wave = factor(as.character(end_wave), levels = wave_levels),
+      cluster_disp = factor(cluster_disp, levels = c("Lower-Risk", "Higher-Risk"))
+    )
+
+  ggplot() +
+    
+    #F4.5.1 Add hazard CI ribbon behind the model-estimated lines
+    { if (has_ci) geom_ribbon(
+      data = d,
+      aes(
+        x = end_wave,
+        ymin = lo,
+        ymax = hi,
+        fill = cluster_disp,
+        group = cluster_disp
+      ),
+      inherit.aes = FALSE,
+      alpha = 0.15,
+      color = NA
+    ) } +
+    geom_line(
+      data = d,
+      aes(x = end_wave, y = hazard, color = cluster_disp, group = cluster_disp),
+      linewidth = 0.7,
+      na.rm = TRUE
+    ) +
+    geom_point(
+      data = d,
+      aes(x = end_wave, y = hazard, color = cluster_disp),
+      size = 1.4,
+      na.rm = TRUE
+    ) +
+    geom_point(
+      data = emp,
+      aes(x = end_wave, y = h, color = cluster_disp),
+      inherit.aes = FALSE,
+      shape = 1,
+      size = 1.6
+    ) +
+    scale_x_discrete(labels = x_lab_vec, drop = FALSE) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 0.1)) +
+    scale_color_manual(
+      values = cluster_cols,
+      breaks = names(cluster_cols),
+      labels = names(cluster_cols),
+      drop = FALSE
+    ) +
+    scale_fill_manual(
+      values = cluster_cols,
+      breaks = names(cluster_cols),
+      labels = names(cluster_cols),
+      guide = "none",
+      drop = FALSE
+    ) +
+    labs(
+      title = paste0("(", panel_letter, ")  ", OUT_LABS[[out_key]], " Interval Hazard"),
+      x = "Wave (Interval End)",
+      y = "First-Onset Hazard",
+      color = "Cluster"
+    ) +
+    axes_only_theme()
 }
 
-#F5.7 Plot cumulative incidence by wave and cluster
+#F4.6 Plot cumulative incidence by wave and cluster
 plot_cum_wave <- function(df, out_key) {
   d <- df %>% dplyr::filter(.data$outcome == out_key)
   has_ci <- all(c("cumrisk_lo","cumrisk_hi") %in% names(d)) &&
@@ -2854,22 +2578,22 @@ plot_cum_wave <- function(df, out_key) {
   i <- match(out_key, OUT_FIG)
   panel_letter <- LETTERS[i + 4]
   
-  #F5.7.1 Observed cumulative for each outcome
+  #F4.6.1 Observed cumulative for each outcome
   emp <- emp_cum_by_wave %>% dplyr::filter(outcome == out_key)
   
-  #F5.7.2 Plot cumulative incidence by wave and cluster
+  #F4.6.2 Plot cumulative incidence by wave and cluster
   ggplot(d, aes(x = end_wave, y = cumrisk, color = cluster_disp, group = cluster_disp)) +
     { if (has_ci) geom_ribbon(aes(ymin = cumrisk_lo, ymax = cumrisk_hi, fill = cluster_disp),
       alpha = 0.15, color = NA) } +
       geom_line(size = 0.9) +
       geom_point(size = 1.8) +
       
-      #F5.7.3 Overlay observed empirical cumulative incidence
+      #F4.6.3 Overlay observed empirical cumulative incidence
       geom_point(data = emp,
                 aes(x = end_wave, y = cumrisk_obs, color = cluster_disp),
                 shape = 1, size = 1.8, inherit.aes = FALSE) +
 
-    #F5.7.4 Scales and labels
+    #F4.6.4 Scales and labels
     scale_y_continuous(labels = scales::percent_format(accuracy = 0.1), limits = c(0, 0.30)) +
       scale_x_discrete(drop = FALSE, labels = x_lab_vec) +
       scale_color_manual(values = cluster_cols, breaks = names(cluster_cols), labels = names(cluster_cols)) +
@@ -2879,111 +2603,56 @@ plot_cum_wave <- function(df, out_key) {
       axes_only_theme()
 }
 
-#F5.8 Build combined by wave and cumulative plot panels
-#F5.8.1 Generate hazard and cumulative panels for each outcome
-haz_panels <- lapply(OUT_FIG, function(o) plot_haz_wave(pred_aligned, o))
+#F4.7 Build combined by wave and cumulative plot panels
+#F4.7.1 Generate hazard and cumulative panels for each outcome
+haz_panels <- lapply(seq_along(OUT_FIG), function(i) {
+    plot_haz_wave(haz_by_wave, OUT_FIG[i], panel_letter = LETTERS[i])
+  })
 cum_panels <- lapply(OUT_FIG, function(o) plot_cum_wave(cum_by_wave, o))
 
-#F5.8.2 Keep legend only on the first hazard panel
+#F4.7.2 Keep legend only on the first hazard panel
 haz_panels[2:4] <- lapply(haz_panels[2:4], function(p) p + theme(legend.position = "none"))
 
-#F5.8.3 Hide all legends on cumulative panels
+#F4.7.3 Hide all legends on cumulative panels
 cum_panels <- lapply(cum_panels, function(p) p + theme(legend.position = "none"))
 
-#F5.8.4 Strip interior axes (2x2 grids for hazards and cumulative)
+#F4.7.4 Strip interior axes (2x2 grids for hazards and cumulative)
 haz_grid <- (haz_panels[[1]] + strip_x) + (haz_panels[[2]] + strip_x) +
   (haz_panels[[3]]) + (haz_panels[[4]]) +
   patchwork::plot_layout(ncol = 2)
 
-#F5.8.5 Hide legends on cumulative grid interior panels
+#F4.7.5 Hide legends on cumulative grid interior panels
 cum_grid <- (cum_panels[[1]] + strip_x) + (cum_panels[[2]] + strip_x) +
   (cum_panels[[3]]) + (cum_panels[[4]]) +
   patchwork::plot_layout(ncol = 2)
 cum_grid <- cum_grid & theme(legend.position = "none")
 
-#F5.9 Combine hazard and cumulative grids into final figure 5, print, and save
-fig5 <- haz_grid / cum_grid +
+#F4.8 Combine hazard and cumulative grids into final figure 5, print, and save
+fig4 <- haz_grid / cum_grid +
   patchwork::plot_layout(heights = c(1, 1), guides = "collect") &
   theme(legend.position = "bottom", legend.justification = "center")
-print(fig5)
-save_fig(fig5, "Figure_05_DTH_Hazards_and_Cumulative_by_Cluster", width = 9.5, height = 11)
+print(fig4)
+save_fig(fig4, "Figure_04_DTH_Hazards_and_Cumulative_by_Cluster", width = 9.5, height = 11)
 
 
-## In Line Stats Related to BD DTH Analyses (Figure 5) ##
-#F5.10 Helper functions for in-line stats
-#F5.10.1 Create reference frame for predictions from fitted model
+## In Line Stats Related to BD DTH Analyses (Figure 4) ##
+
+#F4.9 Helper functions for in-line stats
+#F4.9.1 Create reference frame for predictions from fitted primary glm model
 make_ref_frame <- function(fit, dat) {
-  frm <- fit@frame
-
-  #F5.10.1.1 pull levels from the fitted model frame (not the subset 'dat')
-  get_levs <- function(var) if (var %in% names(frm) && is.factor(frm[[var]])) levels(frm[[var]]) else NULL
-  waves_lev <- get_levs("end_wave")
-  cluster_lev<- get_levs("cluster")
-  sex_lev <- get_levs("sex")
-  site_lev <- get_levs("site_factor")
-  base_lev <- get_levs("baseline_status")
-
-  #F5.10.1.2 Guards
-  if (is.null(waves_lev))  stop("Fitted model lacks factor levels for end_wave.")
-  if (is.null(cluster_lev)) stop("Fitted model lacks factor levels for cluster.")
-
-  #F5.10.1.3 Reference grid: all wave x all cluster, other covariates held at reference
-  ref <- expand.grid(
-    end_wave = waves_lev,
-    cluster = cluster_lev,
-    age_mid_between = 0,
-    age_mid_cwc = 0,
-    baseline_status = if (is.null(base_lev)) 0 else base_lev[1],
-    sex = if (is.null(sex_lev)) NA else sex_lev[1],
-    site_factor = if (is.null(site_lev)) NA else site_lev[1],
-    stringsAsFactors = FALSE)
-
-  #F5.10.1.4 Coerce to factors with the models full levels (so each has >=2 where applicable)
-  if (!is.null(sex_lev)) ref$sex <- factor(ref$sex, levels = sex_lev)
-  if (!is.null(site_lev)) ref$site_factor <- factor(ref$site_factor, levels = site_lev)
-  if (!is.null(base_lev)) ref$baseline_status <- factor(ref$baseline_status, levels = base_lev)
-
-  #F5.10.1.5 Ensure wave and cluster are factors with correct levels
-  ref$end_wave <- factor(ref$end_wave, levels = waves_lev)
-  ref$cluster <- factor(ref$cluster, levels = cluster_lev)
-
-  #F5.10.1.6 Model terms/contrasts (drop contrasts for any 1-level factors to avoid the error)
-  ff_fix <- lme4::nobars(stats::formula(fit))
-  tt <- stats::delete.response(stats::terms(ff_fix))
-
-  #F5.10.1.7 Use the model's contrasts so columns line up
-  contr_all <- attr(frm, "contrasts")
-  if (!is.null(contr_all)) {
-    multi_lvl <- names(frm)[sapply(frm, function(x) is.factor(x) && nlevels(x) > 1)]
-    contr_all <- contr_all[names(contr_all) %in% multi_lvl]
-  }
-
-  #F5.10.1.8 Model matrix for the reference frame
-  X <- stats::model.matrix(tt, ref, contrasts.arg = contr_all)
-
-  #F5.10.1.9 Extract fixed effects and their variance-covariance matrix
-  beta <- lme4::fixef(fit)
-  V <- as.matrix(stats::vcov(fit))
-
-  #F5.10.1.10 Align columns to the order of beta (pad zeros for any columns not in X)
-  miss <- setdiff(names(beta), colnames(X))
-  if (length(miss)) {
-    X <- cbind(X, matrix(0, nrow(X), length(miss), dimnames = list(NULL, miss)))
-  }
-  X <- X[, names(beta), drop = FALSE]
-  list(ref = ref, X = X, beta = beta, V = V, waves = waves_lev, clus = cluster_lev)
+    make_ref_frame_glm(fit = fit, dat = dat)
 }
 
-#F5.10.2 Cumulative risk from hazards helper
+#F4.9.2 Cumulative risk from hazards helper
 cumrisk_from_haz <- function(h, k) {
   h <- pmin(pmax(h, 1e-8), 1 - 1e-8)
   1 - exp(sum(log1p(-h[seq_len(k)])))
 }
 
-#F5.10.3 Wald CI helper
+#F4.9.3 Wald CI helper
 wald_ci <- function(theta_hat, grad, V, level = 0.95, log_scale = FALSE) {
   
-  #F5.10.3.1 Small ridge in case of near-singular V
+  #F4.9.3.1 Small ridge in case of near-singular V
   if (any(!is.finite(V))) V[!is.finite(V)] <- 0
   V <- V + diag(1e-10, nrow(V))
   se <- sqrt(drop(t(grad) %*% V %*% grad))
@@ -2998,7 +2667,7 @@ wald_ci <- function(theta_hat, grad, V, level = 0.95, log_scale = FALSE) {
   list(se = se, lo = lo, hi = hi, z = theta_hat / se, p = 2 * pnorm(-abs(theta_hat / se)))
 }
 
-#F5.10.4 Cumulative risk from hazards helper
+#F4.9.4 Year-6 cumulative risk difference and ratio from primary glm hazards
 year6_rd_rr_delta <- function(fit, dat, wave_key = "ses-06A") {
   obj <- make_ref_frame(fit, dat)
   ref <- obj$ref; X <- obj$X; beta <- obj$beta; V <- obj$V
@@ -3007,7 +2676,7 @@ year6_rd_rr_delta <- function(fit, dat, wave_key = "ses-06A") {
   if (!wave_key %in% waves) wave_key <- tail(waves, 1)
   k_idx <- match(wave_key, waves)
 
-  #F5.10.4.1 Map C1/C2 -> Higher/Lower using coerce_cluster()
+  #F4.9.4.1 Map C1/C2 -> Higher/Lower using coerce_cluster()
   cl_levels <- levels(ref$cluster)
   disp <- coerce_cluster(cl_levels)
   role <- setNames(rep(NA_character_, length(cl_levels)), cl_levels)
@@ -3015,7 +2684,7 @@ year6_rd_rr_delta <- function(fit, dat, wave_key = "ses-06A") {
   role[disp == "Lower-Risk"] <- "LR"
   if (anyNA(role)) {
     
-    #F5.10.4.2 Fallback: choose HR as the one with larger point CR
+    #F4.9.4.2 Fallback: choose HR as the one with larger point CR
     point_cr <- sapply(cl_levels, function(cl) {
       rows <- which(ref$cluster == cl)
       h <- plogis(as.numeric(X[rows, , drop = FALSE] %*% beta))
@@ -3024,7 +2693,7 @@ year6_rd_rr_delta <- function(fit, dat, wave_key = "ses-06A") {
     role[] <- "LR"; role[names(which.max(point_cr))] <- "HR"
   }
 
-  #F5.10.4.3 Functions to compute cumulative risk by cluster
+  #F4.9.4.3 Functions to compute cumulative risk by cluster
   make_f <- function(cl) {
     rows <- which(ref$cluster == cl)
     function(b) {
@@ -3033,7 +2702,7 @@ year6_rd_rr_delta <- function(fit, dat, wave_key = "ses-06A") {
     }
   }
 
-  #F5.10.4.4 Cumulative risks, RD, RR, and their CIs
+  #F4.9.4.4 Cumulative risks, RD, RR, and their CIs
   f_HR <- make_f(names(role)[role == "HR"])
   f_LR <- make_f(names(role)[role == "LR"])
   CR_HR <- f_HR(beta); CR_LR <- f_LR(beta)
@@ -3046,7 +2715,7 @@ year6_rd_rr_delta <- function(fit, dat, wave_key = "ses-06A") {
   g_RD  <- g_HR - g_LR
   ci_RD <- wald_ci(RD, g_RD, V, level = 0.95, log_scale = FALSE)
 
-  #F5.10.4.5 Log-RR & CI
+  #F4.9.4.5 Log-RR & CI
   g_logRR  <- g_HR / CR_HR - g_LR / CR_LR
   se_logRR <- sqrt(drop(t(g_logRR) %*% V %*% g_logRR))
   z <- qnorm(0.975)
@@ -3054,7 +2723,7 @@ year6_rd_rr_delta <- function(fit, dat, wave_key = "ses-06A") {
   RR_hi <- RR * exp(+z * se_logRR)
   p_logRR <- 2 * pnorm(-abs(log(RR) / se_logRR))
 
-  #F5.10.4.6 Return results
+  #F4.9.4.6 Return results
   list(
     wave = wave_key,
     CR_HR = CR_HR, CR_LR = CR_LR,
@@ -3062,20 +2731,21 @@ year6_rd_rr_delta <- function(fit, dat, wave_key = "ses-06A") {
     RR = RR, RR_lo = RR_lo, RR_hi = RR_hi, RR_p = p_logRR)
 }
 
-#F5.11 Compute Year-6 cumulative risk differences and ratios by outcome and store in a table
+#F4.10 Compute Year-6 cumulative risk differences and ratios by outcome and store in a table
 cum6 <- lapply(OUT_FIG, function(out) {
   fit <- fits_primary[[out]]; if (is.null(fit)) return(NULL)
   dat <- bd_pp_model %>%
     dplyr::filter(outcome == out) %>%
+    droplevels() %>%
     dplyr::mutate(
-      
-      #F5.11.1 Ensure factors have correct levels
-      end_wave = factor(end_wave),
-      cluster = factor(cluster),
-      sex = factor(sex),
-      site_factor = factor(site_factor))
+        
+        #F4.10.1 Ensure factors have correct levels
+        end_wave = factor(end_wave, levels = wave_levels),
+        cluster = factor(cluster),
+        sex = factor(sex),
+        site_factor = factor(site_factor))
 
-  #F5.11.2 Compute Year-6 cumulative risk RD/RR
+  #F4.10.2 Compute Year-6 cumulative risk RD/RR
   res <- year6_rd_rr_delta(fit, dat, wave_key = "ses-06A")
   tibble::tibble(
     outcome = out,
@@ -3087,7 +2757,7 @@ cum6 <- lapply(OUT_FIG, function(out) {
     }) %>% 
     dplyr::bind_rows()
 
-#F5.12 Clean output table for in-line reporting
+#F4.11 Clean output table for in-line reporting
 cum6_lines <- cum6 %>%
   mutate(
     line = glue::glue(
@@ -3097,38 +2767,130 @@ cum6_lines <- cum6 %>%
       "RR = {sprintf('%.2f', RR)} [{sprintf('%.2f', RR_lo)}, {sprintf('%.2f', RR_hi)}], p = {sprintf('%.3f', RR_p)}")) %>% 
       pull(line)
 
-#F5.13 Print cumulative risk difference/ratio lines
+#F4.12 Print cumulative risk difference/ratio lines
 cat(paste("•", cum6_lines), sep = "\n")
 
-#F5.14 Extract age effects from bd_dth_sum & wald_all for in-line reporting
-#F5.14.1 Age effect terms
-age_terms <- c("age_mid_cwc","age_mid_between")
+#F4.13 Extract cluster and age effects for in-line reporting
+#F4.13.1 Create a robust outcome-key helper for DTH summary tables
+to_bd_outcome_key <- function(x) {
+  key <- gsub("[^a-z0-9]", "", tolower(as.character(x)))
 
-#F5.14.2 Source table: prefer wald_all if it exists
-source_tbl <- if (exists("wald_all") && is.data.frame(wald_all)) wald_all else bd_dth_sum
+  dplyr::case_when(
+    key %in% c("bdi", "bipolari") ~ "bipolar_I",
+    key %in% c("bdii", "bipolarii") ~ "bipolar_II",
+    key %in% c("bdnos", "bipolarnos") ~ "bd_nos",
+    key %in% c("bsd", "anybsd", "anybipolarspectrumdisorder") ~ "any_bsd",
+    TRUE ~ as.character(x))
+}
 
-#F5.14.3 Outcome label mapping
-out_map <- c(bipolar_I="BD I", bipolar_II="BD II", bd_nos="BD NOS", any_bsd="Any BSD",
-             BDI="BD I", BDII="BD II", BDNOS="BD NOS", BSD="Any BSD")
+#F4.13.2 Create a robust outcome-label helper for DTH summary tables
+to_bd_out_lab <- function(x) {
+  key <- to_bd_outcome_key(x)
 
-#F5.14.4 Extract age effects and format for reporting
-age_effects <- source_tbl %>%
-  filter(term %in% age_terms) %>%
-  mutate(
-    OR = if ("OR" %in% names(.)) OR else exp(estimate),
-    pv = dplyr::case_when(!is.na(p.value) ~ p.value,
-      is.finite(estimate) & is.finite(se) ~ 2*pnorm(-abs(estimate/se)),
-      TRUE ~ NA_real_),
-    out_lab = out_map[as.character(outcome)],
-    lbl = recode(term, age_mid_cwc="within-person age", age_mid_between="between-person age"))
+  dplyr::case_when(
+    key == "bipolar_I" ~ "BD-I",
+    key == "bipolar_II" ~ "BD-II",
+    key == "bd_nos" ~ "BD-NOS",
+    key == "any_bsd" ~ "Any BSD",
+    TRUE ~ as.character(x))
+}
 
-#F5.14.5 Format age effect lines for reporting
-age_lines <- age_effects %>%
-  transmute(line = glue::glue("{out_lab}: {lbl} OR = {sprintf('%.2f', OR)} (p = {ifelse(is.na(pv), '-', sprintf('%.3f', pv))}).")) %>%
-  pull(line)
+#F4.13.3 Create a helper to format p-values for inline text
+fmt_p_inline <- function(p) {
+  dplyr::case_when(
+    is.na(p) ~ "-",
+    p < .001 ~ "< .001",
+    TRUE ~ paste0("= ", sprintf("%.3f", p)))
+}
 
-#F5.14.6 Print age effect lines
-cat(paste("•", age_lines), sep = "\n")
+#F4.13.4 Determine whether the robust SE column is named se_method or se_type
+se_col <- if ("se_method" %in% names(bd_dth_sum)) {
+  "se_method"
+} else if ("se_type" %in% names(bd_dth_sum)) {
+  "se_type"
+} else {
+  stop("Could not find either 'se_method' or 'se_type' in bd_dth_sum.")
+}
+
+#F4.14 Primary cluster main effect = adjusted pooled interval-onset OR (Higher- vs Lower-Risk)
+cluster_effects_primary <- bd_dth_sum %>%
+  dplyr::filter(
+    model == "logit_primary",
+    .data[[se_col]] == "CR2",
+    grepl("^cluster", term),
+    !grepl(":", term)) %>%
+  dplyr::mutate(
+    outcome_key = to_bd_outcome_key(outcome),
+    out_lab = to_bd_out_lab(outcome),
+    OR = dplyr::coalesce(OR, exp(estimate)),
+    OR_lo = dplyr::coalesce(ci_lo, exp(estimate - 1.96 * se)),
+    OR_hi = dplyr::coalesce(ci_hi, exp(estimate + 1.96 * se)),
+    pv = p.value) %>%
+  dplyr::arrange(match(outcome_key, OUT_FIG))
+
+cluster_lines_primary <- cluster_effects_primary %>%
+  dplyr::transmute(
+    line = glue::glue(
+      "{out_lab}: primary adjusted Higher- vs Lower-Risk cluster OR = ",
+      "{sprintf('%.2f', OR)} [{sprintf('%.2f', OR_lo)}, {sprintf('%.2f', OR_hi)}], ",
+      "p {fmt_p_inline(pv)}.")) %>%
+  dplyr::pull(line)
+
+if (length(cluster_lines_primary) > 0) {
+  cat(paste("•", cluster_lines_primary), sep = "\n")
+  cat("\n")
+}
+
+#F4.15 Primary age term = between-person age only
+age_effects_primary <- bd_dth_sum %>%
+  dplyr::filter(
+    model == "logit_primary",
+    .data[[se_col]] == "CR2",
+    term == "age_mid_between") %>%
+  dplyr::mutate(
+    outcome_key = to_bd_outcome_key(outcome),
+    out_lab = to_bd_out_lab(outcome),
+    OR = dplyr::coalesce(OR, exp(estimate)),
+    pv = p.value,
+    lbl = "between-person age") %>%
+  dplyr::arrange(match(outcome_key, OUT_FIG))
+
+age_lines_primary <- age_effects_primary %>%
+  dplyr::transmute(
+    line = glue::glue(
+      "{out_lab}: primary {lbl} OR = {sprintf('%.2f', OR)} ",
+      "(p {fmt_p_inline(pv)}).")) %>%
+  dplyr::pull(line)
+
+if (length(age_lines_primary) > 0) {
+  cat(paste("•", age_lines_primary), sep = "\n")
+}
+
+#F4.15.1 Sensitivity note for within-person orthogonalized age
+age_effects_within <- bd_dth_sum %>%
+  dplyr::filter(
+    model == "logit_within_orth",
+    .data[[se_col]] == "CR2",
+    term == "age_mid_cwc_orth") %>%
+  dplyr::mutate(
+    outcome_key = to_bd_outcome_key(outcome),
+    out_lab = to_bd_out_lab(outcome),
+    OR = dplyr::coalesce(OR, exp(estimate)),
+    pv = p.value,
+    lbl = "within-person age (orthogonalized sensitivity)") %>%
+  dplyr::arrange(match(outcome_key, OUT_FIG))
+
+if (nrow(age_effects_within) > 0) {
+  age_lines_within <- age_effects_within %>%
+    dplyr::transmute(
+      line = glue::glue(
+        "{out_lab}: sensitivity {lbl} OR = {sprintf('%.2f', OR)} ",
+        "(p {fmt_p_inline(pv)}).")) %>%
+    dplyr::pull(line)
+
+  cat("\n")
+  cat(paste("•", age_lines_within), sep = "\n")
+}
 
 ```
 
@@ -3407,9 +3169,9 @@ tS2
 
 ## Figure 6: Bipolar Disorder Odds by Risk Cluster Over Time stats
 
-- Purpose: Produce per-wave Higher vs Lower cluster odds ratios (with 95% CI, p) from saved GEE interaction models and plot a forest plot
-- Inputs: *_GEE_EXC_INT.rds models for outcomes (BD I/II/NOS/Any BSD); bd_panel_model used only for wave median age labels.
-- Outputs: Saves Figure_06_GEE_OR_by_Cluster.{pdf,png}; prints inline lines for manuscript
+- Purpose: Produce per-wave Higher vs Lower cluster odds ratios (with 95% CI, p) from saved GEE interaction models
+- Inputs: *_GEE_EXC_INT.rds models for outcomes (BD I/II/NOS/Any BSD); bd_panel_model used only for wave median age labels
+- Outputs: Prints inline lines for manuscript
 - Notes: Uses emmeans contrasts on the link scale and robust vcov from geeglm; truncates long CIs with arrows to share a common x-axis
 
 ```{r figure 6 stats}
@@ -3496,1678 +3258,4 @@ inline_lines <- gee_pairs %>%
 cat("Figure 6 in-line stats (Higher- vs Lower-Risk, emmeans, per wave):\n",
     paste0(" • ", inline_lines, collapse = "\n"), "\n\n")
 
-#F6.5 Prepare plotting dataframe and visual parameters
-#F6.5.1 Define plotting order
-wave_order <- c("Year-2","Year-4","Year-6")
-out_order  <- unname(c("BD-I","BD-II","BD-NOS","Any BSD"))
-
-#F6.5.2 Factor levels for plotting
-gee_pairs_plot <- gee_pairs %>%
-  dplyr::mutate(
-    out_lab = factor(out_lab, levels = out_order),
-    wave_pretty = factor(wave_pretty, levels = wave_order))
-
-#F6.5.3 Compute median ages per wave for strip labels
-age_meds_num <- try({
-  bd_panel_model %>%
-    dplyr::group_by(wave) %>%
-    dplyr::summarise(age_med = median(age_wave, na.rm = TRUE), .groups = "drop") %>%
-    dplyr::mutate(wave_pretty = dplyr::recode(as.character(wave),
-      "ses-02A"="Year-2","ses-04A"="Year-4","ses-06A"="Year-6")) %>%
-    dplyr::select(wave_pretty, age_med)
-}, silent = TRUE)
-
-#F6.5.4 Fallback if age_meds_num computation fails
-if (inherits(age_meds_num, "try-error")) {
-  age_meds_num <- tibble::tibble(wave_pretty = wave_order, age_med = NA_real_)
-}
-
-#F6.5.5 Create wave strip label mapping with median ages
-wave_strip_map <- setNames(
-  sprintf("%s\n(median age %s)",
-    wave_order,
-  ifelse(is.na(age_meds_num$age_med), "\u2014", sprintf("%.1f", age_meds_num$age_med))),
-  wave_order)
-
-#F6.5.6 Define x-axis limits and breaks
-x_min <- 0; x_max <- 15; x_brk <- c(0, 5, 10, 15)
-
-#F6.5.7 Visual parameters tuneable for the forest plot
-ci_linewidth <- 0.3
-cap_linewidth <- 0.30
-cap_y <- 1e-7
-dot_size <- 1.5
-dot_color <- "#7F3C8D"
-arrow_len_mm <- 1
-col_spacing_pt <- 20
-tick_len_pt <- 3
-tick_color <- "grey35"
-row_spacing_pt <- 0.3
-
-#F6.5.8 Tuneable text sizes for the forest plot
-base_size <- 10
-title_size <- 10
-strip_size <- 9
-axis_title_x_size <- 9
-axis_text_x_size <- 7.5
-
-#F6.5.9 Prepare plotting dataframe with truncation flags
-plot_df <- gee_pairs_plot %>%
-  dplyr::mutate(
-    x_low_plot = pmax(CI_low,  x_min),
-    x_high_plot = pmin(CI_high, x_max),
-    trunc_right = CI_high > x_max + 1e-10,
-    trunc_left = CI_low  < x_min - 1e-10,
-    x_or_plot = pmin(pmax(OR, x_min), x_max))
-
-#F6.5.10 Segment dataframes for different truncation cases
-seg_ok <- dplyr::filter(plot_df, !trunc_right & !trunc_left)
-seg_right <- dplyr::filter(plot_df, trunc_right & !trunc_left)
-seg_left <- dplyr::filter(plot_df, trunc_left  & !trunc_right)
-
-#F6.5.11 Define a custom theme function for the forest plot (aligned with JAMA preferences)
-jamafy_linear <- function(base_size = 12,
-                          col_spacing_pt = 12,
-                          row_spacing_pt = 3,
-                          title_size = 13,
-                          strip_size = 11,
-                          axis_title_x_size = 11,
-                          axis_text_x_size  = 9,
-                          tick_len_pt = 3,
-                          tick_color  = "grey35") {
-  ggplot2::theme_minimal(base_size = base_size) +
-    ggplot2::theme(
-      panel.grid.major = ggplot2::element_blank(),
-      panel.grid.minor = ggplot2::element_blank(),
-      axis.text.x = ggplot2::element_text(size = axis_text_x_size),
-      axis.title.x = ggplot2::element_text(size = axis_title_x_size, margin = ggplot2::margin(t = 6)),
-      axis.ticks.x = ggplot2::element_line(color = tick_color, linewidth = 0.3),
-      axis.ticks.length = grid::unit(tick_len_pt, "pt"),
-      axis.line.x = ggplot2::element_blank(),
-      axis.title.y = ggplot2::element_blank(),
-      axis.text.y = ggplot2::element_blank(),
-      axis.ticks.y = ggplot2::element_blank(),
-      strip.placement = "outside",
-      strip.text.x = ggplot2::element_text(size = strip_size, face = "bold", lineheight = 1.05, margin = ggplot2::margin(b = 2)),
-      strip.text.y.left = ggplot2::element_text(size = strip_size, face = "bold", angle = 0, margin = ggplot2::margin(r = 6)),
-      strip.background = ggplot2::element_blank(),
-      panel.spacing.x = grid::unit(col_spacing_pt, "pt"),
-      panel.spacing.y = grid::unit(row_spacing_pt, "pt"),
-      plot.title = ggplot2::element_text(size = title_size, face = "bold", hjust = 0, margin = ggplot2::margin(b = 6)),
-      legend.position = "none")
-}
-
-#F6.6 Create the forest plot
-#F6.6.1 Build ggplot object
-g6 <- ggplot(plot_df, aes(y = 0)) +
-  geom_vline(xintercept = 1.0, linetype = 2, linewidth = 0.4, color = "grey40") +
-  geom_segment(data = seg_ok,
-               aes(x = x_low_plot, xend = x_high_plot, y = 0, yend = 0),
-               linewidth = ci_linewidth, color = "black") +
-  geom_segment(data = seg_right,
-               aes(x = x_low_plot, xend = x_high_plot, y = 0, yend = 0),
-               linewidth = ci_linewidth, color = "black",
-               arrow = grid::arrow(type = "closed", length = grid::unit(arrow_len_mm, "mm"))) +
-  geom_segment(data = seg_left,
-               aes(x = x_high_plot, xend = x_low_plot, y = 0, yend = 0),
-               linewidth = ci_linewidth, color = "black",
-               arrow = grid::arrow(type = "closed", length = grid::unit(arrow_len_mm, "mm"))) +
-  geom_segment(data = dplyr::filter(plot_df, !trunc_left),
-               aes(x = x_low_plot,  xend = x_low_plot,  y = -cap_y, yend =  cap_y),
-               linewidth = cap_linewidth, color = "black") +
-  geom_segment(data = dplyr::filter(plot_df, !trunc_right),
-               aes(x = x_high_plot, xend = x_high_plot, y = -cap_y, yend =  cap_y),
-               linewidth = cap_linewidth, color = "black") +
-  geom_point(aes(x = x_or_plot), size = dot_size, color = dot_color) +
-  scale_x_continuous(limits = c(x_min, x_max), breaks = x_brk,
-                     labels = scales::number_format(accuracy = 0.1, trim = TRUE)) +
-  scale_y_continuous(NULL, breaks = NULL, limits = c(-0.05, 0.05), expand = expansion(mult = 0)) +
-  facet_grid(rows = vars(out_lab),
-             cols = vars(wave_pretty),
-             switch = "y",
-             labeller = labeller(wave_pretty = wave_strip_map)) +
-  labs(x = "Odds Ratio") +
-  jamafy_linear(col_spacing_pt = col_spacing_pt)
-
-#F6.6.2 Apply JAMA-style theming to forest plot
-g6 <- g6 + jamafy_linear(
-  base_size = base_size,
-  col_spacing_pt = col_spacing_pt,
-  row_spacing_pt = row_spacing_pt,
-  title_size = title_size,
-  strip_size = strip_size,
-  axis_title_x_size = axis_title_x_size,
-  axis_text_x_size = axis_text_x_size,
-  tick_len_pt = tick_len_pt,
-  tick_color = tick_color)
-
-#F6.6.3 Print the forest plot
-print(g6)
-
-#F6.7 Save Figure 6 to PDF and PNG
-out_dir <- "/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk/results/figures"
-out_pdf <- file.path(out_dir, "Figure_06_GEE_OR_by_Cluster.pdf")
-out_png <- file.path(out_dir, "Figure_06_GEE_OR_by_Cluster.png")
-ggsave(out_pdf, g6, width = 4.5, height = 4, device = cairo_pdf)
-ggsave(out_png, g6, width = 4.5, height = 4, dpi = 720)
-
 ```
-
-## Table S3: Characteristics of Participants in the Nested Onset of Suicidality Within Ever-BD by Risk Cluster Analysis
-
-- Purpose: Describe the nested suicidality (ever-BD) onset analysis sample and interval onsets by wave and cluster
-- Inputs: nested_pp person-period dataset with suicidality outcomes; applies baseline-negative restriction per outcome and censoring at first onset
-- Outputs: Saves Table_S3_Nested_Suicidality_Onset_by_Cluster as HTML/PNG/RTF; returns a gt table.
-- Notes: Adds BD-at-start/end contextual rows for ever-BD set; mirrors survival modeling filters and reference levels for consistency
-
-```{r table s3}
-
-## Table S3 - Nested suicidality onset (ever-BD) characteristics ##
-
-#S3.1 Prepare nested suicidality person-period dataset for Table S3
-#S3.1.1 Ensure factor variables and filter to suicidality outcomes
-su_pp <- nested_pp %>%
-  mutate(
-    participant_id = factor(as.character(participant_id)),
-    family_id = factor(as.character(family_id)),
-    site_factor = factor(site_factor),
-    cluster = factor(cluster),
-    start_wave = factor(start_wave),
-    end_wave = factor(end_wave),
-    outcome = factor(outcome),
-    sex = factor(sex))
-
-#S3.1.2 Filter to suicidality outcomes only
-#S3.1.2.1 Define suicidality outcomes
-SUIC_OUTCOMES <- c("si_passive","si_active","sa","nssi")
-
-#S3.1.2.2 Filter to suicidality outcomes
-su_pp <- su_pp %>% filter(outcome %in% SUIC_OUTCOMES)
-
-#S3.1.3 Apply model-ready filters to the data used for analyses
-su_pp_model <- su_pp %>%
-  filter(event %in% c(0L,1L)) %>%
-  filter(!is.na(cluster), !is.na(sex), !is.na(site_factor), !is.na(family_id), !is.na(participant_id)) %>%
-  filter(!is.na(age_mid), !is.na(age_start), !is.na(age_end)) %>%
-  filter(!is.na(bd_any_start))
-
-#S3.1.4 Ensure factor reference levels match modeling
-su_pp_model <- su_pp_model %>%
-  mutate(
-    cluster = forcats::fct_relevel(cluster, "C2"),
-    end_wave = forcats::fct_relevel(end_wave, "ses-02A", "ses-04A", "ses-06A"),
-    sex = forcats::fct_relevel(sex, "Female"),
-    site_factor = forcats::fct_relevel(site_factor, levels(site_factor)[1]))
-
-#S3.1.5 Create a copy of the model ready dataset with baseline status per outcome (either all NA or 0/1)
-su_baseline_ids <- su_pp_model %>%
-  group_by(participant_id, outcome) %>%
-  summarise(
-    all_na = all(is.na(baseline_status)),
-    baseline_outcome = if_else(all_na, NA_integer_, as.integer(any(baseline_status == 1L, na.rm = TRUE))),
-    .groups = "drop")
-
-#S3.1.6 Join baseline status to the model dataset
-su_pp_model <- su_pp_model %>%
-  left_join(su_baseline_ids, by = c("participant_id","outcome"))
-
-#S3.1.7 Right‑censor the nested suicidality person‑period data at each participant’s first onset per outcome so Table S3 counts are computed on a proper first‑onset risk set
-su_pp_model <- su_pp_model %>%
-  arrange(
-    outcome, participant_id,
-    if ("interval_index" %in% names(.)) interval_index else as.integer(end_wave)) %>% 
-  group_by(outcome, participant_id) %>%
-  mutate(
-    first_onset_row = match(TRUE, event == 1L),
-    row_id = dplyr::row_number()) %>% 
-  filter(is.na(first_onset_row) | row_id <= first_onset_row) %>%
-  ungroup() %>%
-  dplyr::select(-first_onset_row, -row_id)
-
-#S3.2 If su_pp_model already exists in environment, skip to avoid recomputation; otherwise build it
-if (!exists("su_pp_model")) {
-  stopifnot(exists("nested_pp"))
-  su_pp_model <- nested_pp %>%
-    dplyr::mutate(
-      participant_id = factor(as.character(participant_id)),
-      family_id = factor(as.character(family_id)),
-      site_factor = factor(site_factor),
-      cluster = factor(cluster),
-      start_wave = factor(start_wave),
-      end_wave = factor(end_wave, levels = c("ses-02A","ses-04A","ses-06A")),
-      outcome = factor(outcome, levels = c("si_passive","si_active","sa","nssi")),
-      sex = factor(sex)) %>%
-      
-    #S3.2.1 Filter data to only contain model‑ready rows
-    dplyr::filter(event %in% c(0L,1L)) %>%
-    dplyr::filter(!is.na(cluster), !is.na(sex), !is.na(site_factor),
-                  !is.na(family_id), !is.na(participant_id)) %>%
-    dplyr::filter(!is.na(age_mid), !is.na(age_start), !is.na(age_end)) %>%
-
-    #S3.2.2 Keep only rows with BD at start info
-    dplyr::filter(!is.na(bd_any_start)) %>%
-
-    #S3.2.3 Keep only participants with ever-BD
-    dplyr::filter(isTRUE(ever_bd) | ever_bd) %>%
-    
-    #S3.2.4 Compute time variables
-    dplyr::mutate(
-      dt_years = pmax(age_end - age_start, 1/12),
-      log_dt = log(dt_years)) %>%
-    dplyr::filter(is.finite(dt_years), is.finite(log_dt)) %>%
-
-    #S3.2.5 Ensure factor reference levels match modeling
-    dplyr::mutate(
-      cluster = forcats::fct_relevel(cluster, "C2"),
-      end_wave = forcats::fct_relevel(end_wave, "ses-02A","ses-04A","ses-06A"),
-      sex = forcats::fct_relevel(sex, "Female"),
-      site_factor = forcats::fct_relevel(site_factor, levels(site_factor)[1])) %>%
-
-    #S3.2.6 Compute baseline outcome status per participant per outcome
-    dplyr::group_by(participant_id, outcome) %>%
-    dplyr::mutate(
-      baseline_outcome = {
-        all_na <- all(is.na(baseline_status))
-        if (all_na) NA_integer_ else as.integer(any(baseline_status == 1L, na.rm = TRUE))
-      }) %>% 
-      dplyr::ungroup() %>%
-    dplyr::filter(baseline_outcome == 0L) %>%
-    dplyr::arrange(outcome, participant_id,
-      dplyr::if_else("interval_index" %in% names(.), interval_index, as.numeric(end_wave))) %>%
-    dplyr::group_by(outcome, participant_id) %>%
-    dplyr::mutate(first_onset_row = match(TRUE, event == 1L),
-      row_id = dplyr::row_number()) %>%
-    dplyr::filter(is.na(first_onset_row) | row_id <= first_onset_row) %>%
-    dplyr::ungroup() %>%
-    dplyr::select(-first_onset_row, -row_id)
-}
-
-#S3.3 Helper functions for display options
-#S3.3.1 Make sure cluster values are listed as desired
-coerce_cluster <- function(x) dplyr::recode(as.character(x),
-  "C1"="Higher-Risk","1"="Higher-Risk","high"="Higher-Risk","higher"="Higher-Risk",
-  "C2"="Lower-Risk","2"="Lower-Risk","low"="Lower-Risk","lower"="Lower-Risk",
-  .default = as.character(x))
-
-#S3.3.2 Create vectors for the preferred assessment timepoint values and their temporal ordering
-time_map <- c("ses-02A"="2y","ses-04A"="4y","ses-06A"="6y")
-time_levels <- c("2y","4y","6y")
-
-#S3.3.3 Format how descriptive statistics should be displayed
-#S3.3.3.1 Mean +- SD
-fmt_mean_sd <- function(x) {
-  x <- x[is.finite(x)]
-  if (!length(x)) return("\u2014")
-  sprintf("%.2f \u00B1 %.2f", mean(x), stats::sd(x))
-}
-
-#S3.3.3.2 N and % distributions
-fmt_n <- function(n) ifelse(is.na(n), "\u2014", format(as.integer(n), big.mark = ","))
-fmt_n_pct <- function(n, den) {
-  out <- ifelse(is.na(den) | den == 0,
-                "0 (0.0%)",
-                sprintf("%s (%.1f%%)", fmt_n(n), 100 * n / den))
-  as.character(out)
-}
-
-#S3.4 Ensure the working person-period dataframe exists and is structured as desired
-stopifnot(exists("su_pp_model"))
-pp <- su_pp_model %>%
-  dplyr::mutate(
-    cluster_disp = coerce_cluster(cluster),
-    time = factor(dplyr::recode(as.character(end_wave), !!!time_map), levels = time_levels)) %>%
-  dplyr::filter(!is.na(time), cluster_disp %in% c("Lower-Risk","Higher-Risk"))
-
-#S3.5 Clean up demographics data in ever-BD set by cluster
-#S3.5.1 Collapse data to one row per person per wave to avoid duplicating across outcomes
-demo_base <- pp %>%
-  dplyr::distinct(participant_id, time, cluster_disp, sex, site_factor, age_mid)
-
-#S3.5.2 Compile base demographic descriptive stats for the ever-BD person-period set by cluster
-demo_counts <- demo_base %>%
-  dplyr::group_by(time, cluster_disp) %>%
-  dplyr::summarise(
-    n_pp = dplyr::n(),
-    n_part = dplyr::n_distinct(participant_id),
-    age_mean_sd = fmt_mean_sd(age_mid),
-    .groups = "drop")
-
-#S3.5.3 Create a formatted age in years descriptive stat row by cluster
-age_row <- demo_counts %>%
-  dplyr::transmute(time, cluster_disp, Row = "Age in years, Mean (SD)", val = age_mean_sd)
-
-#S3.5.4 List the N participants at each timepoint interval by cluster
-n_rows <- demo_counts %>%
-  tidyr::pivot_longer(c(n_pp, n_part), names_to = "what", values_to = "val_raw") %>%
-  dplyr::mutate(
-    Row = dplyr::case_when(
-      what == "n_part" ~ "N (participants)",
-      what == "n_pp" ~ "N (person-periods)"),
-    val = fmt_n(val_raw)) %>%
-  dplyr::select(time, cluster_disp, Row, val)
-
-#S3.5.5 List the sex distribution by cluster
-sex_tab <- demo_base %>%
-  dplyr::mutate(sex2 = dplyr::case_when(
-    !is.na(sex) & sex %in% c("Male","Female") ~ as.character(sex),
-    TRUE ~ "Other/Unknown")) %>%
-  dplyr::distinct(time, cluster_disp, participant_id, sex2) %>%
-  dplyr::count(time, cluster_disp, sex2, name = "n_sex") %>%
-  dplyr::left_join(demo_counts %>% dplyr::select(time, cluster_disp, n_part), by = c("time","cluster_disp")) %>%
-  dplyr::mutate(val = fmt_n_pct(n_sex, n_part)) %>%
-  dplyr::filter(sex2 %in% c("Male","Female")) %>%
-  dplyr::mutate(Row = paste0("Sex at birth - ", sex2)) %>%
-  dplyr::select(time, cluster_disp, Row, val)
-
-#S3.5.6 Bind all of the cluster grouped N, age, and sex descriptive stats into a single dataframe
-demo_rows_cs <- dplyr::bind_rows(n_rows, age_row, sex_tab) %>%
-  dplyr::mutate(Section = "Demographics")
-
-#S3.6 Create total descriptive stats across whole sample (both clusters) otherwise as above
-#S3.6.1 Collapse data to one row per person per wave to avoid duplicating across outcomes
-demo_counts_tot <- demo_base %>%
-  dplyr::group_by(time) %>%
-  dplyr::summarise(
-    n_pp = dplyr::n(),
-    n_part = dplyr::n_distinct(participant_id),
-    age_mean_sd = fmt_mean_sd(age_mid),
-    .groups = "drop")
-
-#S3.6.2 Compile base demographic descriptive stats for the ever-BD person-period set
-n_rows_total <- demo_counts_tot %>%
-  tidyr::pivot_longer(c(n_pp, n_part), names_to = "what", values_to = "val_raw") %>%
-  dplyr::mutate(
-    Row = dplyr::case_when(
-      what == "n_part" ~ "N (participants)",
-      what == "n_pp" ~ "N (person-periods)"),
-    val = fmt_n(val_raw),
-    cluster_disp = "Total") %>%
-  dplyr::select(time, cluster_disp, Row, val)
-
-#S3.6.3 Create a formatted age in years descriptive stat row
-age_row_total <- demo_counts_tot %>%
-  dplyr::transmute(time, cluster_disp = "Total", Row = "Age in years, Mean (SD)", val = age_mean_sd)
-
-#S3.6.4 List the sex distribution by cluster
-sex_tab_total <- demo_base %>%
-  dplyr::mutate(sex2 = dplyr::case_when(
-    !is.na(sex) & sex %in% c("Male","Female") ~ as.character(sex),
-    TRUE ~ "Other/Unknown")) %>%
-  dplyr::distinct(time, participant_id, sex2) %>%
-  dplyr::count(time, sex2, name = "n_sex") %>%
-  dplyr::left_join(demo_counts_tot %>% dplyr::select(time, n_part), by = "time") %>%
-  dplyr::mutate(val = fmt_n_pct(n_sex, n_part)) %>%
-  dplyr::filter(sex2 %in% c("Male","Female")) %>%
-  dplyr::mutate(cluster_disp = "Total", Row = paste0("Sex at birth - ", sex2)) %>%
-  dplyr::select(time, cluster_disp, Row, val)
-
-#S3.6.5 Bind all of the N, age, and sex descriptive stats into a single dataframe
-demo_rows_total <- dplyr::bind_rows(n_rows_total, age_row_total, sex_tab_total) %>%
-  dplyr::mutate(Section = "Demographics")
-
-# ---- BD status rows (ever-BD: participant x wave) -----------------------------
-collapse01 <- function(x) {
-  if (all(is.na(x))) NA_integer_ else as.integer(any(x == 1L, na.rm = TRUE))
-}
-
-bd_by_id_wave <- su_pp_model %>%
-  dplyr::mutate(
-    cluster_disp = coerce_cluster(cluster),
-    time = factor(dplyr::recode(as.character(end_wave), !!!time_map),
-                  levels = time_levels)
-  ) %>%
-  dplyr::filter(!is.na(time), cluster_disp %in% c("Lower-Risk","Higher-Risk")) %>%
-  dplyr::group_by(participant_id, time, cluster_disp) %>%
-  dplyr::summarise(
-    bd_start = collapse01(bd_any_start),
-    bd_end   = collapse01(bd_any_end),
-    .groups = "drop"
-  )
-
-# Cluster-specific n (%) per wave
-bd_rows_cs <- bd_by_id_wave %>%
-  dplyr::group_by(time, cluster_disp) %>%
-  dplyr::summarise(
-    n_start = sum(bd_start == 1L, na.rm = TRUE),
-    den_start = sum(!is.na(bd_start)),
-    n_end   = sum(bd_end == 1L,   na.rm = TRUE),
-    den_end = sum(!is.na(bd_end)),
-    .groups = "drop"
-  ) %>%
-  dplyr::bind_rows() %>%
-  dplyr::transmute(
-    time, cluster_disp,
-    Row = "BD present at interval start, n (%)",
-    val = fmt_n_pct(n_start, den_start)
-  ) %>%
-  dplyr::bind_rows(
-    bd_by_id_wave %>%
-      dplyr::group_by(time, cluster_disp) %>%
-      dplyr::summarise(
-        n_end = sum(bd_end == 1L, na.rm = TRUE),
-        den_end = sum(!is.na(bd_end)),
-        .groups = "drop"
-      ) %>%
-      dplyr::transmute(
-        time, cluster_disp,
-        Row = "BD present at interval end, n (%)",
-        val = fmt_n_pct(n_end, den_end)
-      )
-  ) %>%
-  dplyr::mutate(Section = "BD status (ever-BD)")
-
-# Totals across clusters
-bd_rows_total <- bd_by_id_wave %>%
-  dplyr::group_by(time) %>%
-  dplyr::summarise(
-    n_start = sum(bd_start == 1L, na.rm = TRUE),
-    den_start = sum(!is.na(bd_start)),
-    n_end   = sum(bd_end == 1L,   na.rm = TRUE),
-    den_end = sum(!is.na(bd_end)),
-    .groups = "drop"
-  ) %>%
-  dplyr::transmute(
-    time, cluster_disp = "Total",
-    Row = "BD present at interval start, n (%)",
-    val = fmt_n_pct(n_start, den_start)
-  ) %>%
-  dplyr::bind_rows(
-    bd_by_id_wave %>%
-      dplyr::group_by(time) %>%
-      dplyr::summarise(
-        n_end = sum(bd_end == 1L, na.rm = TRUE),
-        den_end = sum(!is.na(bd_end)),
-        .groups = "drop"
-      ) %>%
-      dplyr::transmute(
-        time, cluster_disp = "Total",
-        Row = "BD present at interval end, n (%)",
-        val = fmt_n_pct(n_end, den_end)
-      )
-  ) %>%
-  dplyr::mutate(Section = "BD status (ever-BD)")
-
-# ---- INTERVAL ONSETS (nested suicidality) -------------------------------------
-su_out_labs <- c(
-  si_passive = "Interval onset - Passive SI, n (%)",
-  si_active  = "Interval onset - Active SI, n (%)",
-  sa         = "Interval onset - Suicide attempt, n (%)",
-  nssi       = "Interval onset - NSSI, n (%)"
-)
-
-events_cs <- pp %>%
-  dplyr::filter(outcome %in% names(su_out_labs)) %>%
-  dplyr::group_by(outcome, time, cluster_disp) %>%
-  dplyr::summarise(
-    n_at_risk = dplyr::n(),
-    n_events  = sum(event == 1L, na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  dplyr::mutate(
-    Row = dplyr::recode(outcome, !!!su_out_labs),
-    val = fmt_n_pct(n_events, n_at_risk),
-    Section = "Interval onsets (nested within ever-BD)"
-  ) %>%
-  dplyr::select(time, cluster_disp, Row, val, Section)
-
-events_total <- pp %>%
-  dplyr::filter(outcome %in% names(su_out_labs)) %>%
-  dplyr::group_by(outcome, time) %>%
-  dplyr::summarise(
-    n_at_risk = dplyr::n(),
-    n_events  = sum(event == 1L, na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  dplyr::mutate(
-    Row = dplyr::recode(outcome, !!!su_out_labs),
-    val = fmt_n_pct(n_events, n_at_risk),
-    cluster_disp = "Total",
-    Section = "Interval onsets (nested within ever-BD)"
-  ) %>%
-  dplyr::select(time, cluster_disp, Row, val, Section)
-
-# ---- Assemble -> wide -> gt -----------------------------------------------------
-long_all <- dplyr::bind_rows(
-  demo_rows_cs, demo_rows_total,
-  bd_rows_cs, bd_rows_total,       # << add these
-  events_cs, events_total
-) %>%
-  dplyr::mutate(
-    cluster_disp = factor(cluster_disp, levels = c("Total","Lower-Risk","Higher-Risk")),
-    time = factor(time, levels = time_levels))
-
-grid <- tidyr::crossing(
-  Row = unique(long_all$Row),
-  Section = unique(long_all$Section),
-  cluster_disp = levels(long_all$cluster_disp),
-  time = levels(long_all$time)
-)
-long_all <- grid %>%
-  dplyr::left_join(long_all, by = c("Row","Section","cluster_disp","time")) %>%
-  dplyr::mutate(val = dplyr::coalesce(val, "\u2014"))
-
-wide <- long_all %>%
-  dplyr::mutate(col_key = paste0(cluster_disp, "::", time)) %>%
-  dplyr::select(Section, Row, col_key, val) %>%
-  tidyr::pivot_wider(names_from = col_key, values_from = val)
-
-col_keys <- c(
-  paste0("Total::", time_levels),
-  paste0("Lower-Risk::", time_levels),
-  paste0("Higher-Risk::", time_levels)
-)
-have <- intersect(col_keys, names(wide))
-wide <- wide %>% dplyr::select(Section, Row, dplyr::all_of(have))
-
-tS3 <- gt::gt(wide, groupname_col = "Section", rowname_col = "Row") |>
-  gt::cols_label(.list = setNames(rep(time_levels, 3), have)) |>
-  gt::tab_spanner(label = "Total", columns = dplyr::all_of(paste0("Total::", time_levels))) |>
-  gt::tab_spanner(label = "Lower-Risk", columns = dplyr::all_of(paste0("Lower-Risk::", time_levels))) |>
-  gt::tab_spanner(label = "Higher-Risk", columns = dplyr::all_of(paste0("Higher-Risk::", time_levels))) |>
-  gt::cols_align(align = "center", columns = dplyr::all_of(have)) |>
-  gt::tab_caption("**Table S3. Characteristics of Participants in the Nested Onset of Suicidality Within Ever-BD by Risk Cluster Analysis**
-Counts are shown per assessment interval (2y, 4y, 6y). Demographics are from the ever-BD risk set (one person-period per participant per interval). Interval onset rows report events within suicidality outcome-specific first-onset risk sets (post baseline-negative restriction and censoring), shown as *n (percent)* of person-periods at risk.") |>
-  gt::tab_options(table.font.size = gt::px(12)) |>
-  gt::fmt_missing(columns = dplyr::everything(), missing_text = "\u2014")
-
-# Save + print
-if (exists("save_gt")) {
-  save_gt(tS3, "Table_S3_Nested_Suicidality_Onset_Characteristics_by_Cluster")
-} else {
-  gt::gtsave(tS3, file.path(getwd(), "Table_S3_Nested_Suicidality_Onset_Characteristics_by_Cluster.html"))
-}
-tS3
-
-```
-
-## Figure 7: Discrete Time Hazards and Cumulative Incidence of Suicidality Onset Nested Within Ever-BD by Risk Cluster
-
-```{r figure 7 stats}
-
-# ================= Figure 7: DTH Hazards & Cumulative Incidence of Suicidality (Nested within ever-BD) =================
-# Outputs:
-#   • fig7 object + saved PDF/PNG
-#   • Console: per-outcome, Year-4 cumulative HR vs LR with RD & RR (95% CI, p)
-#   • Console: across-intervals cluster OR (single summary per outcome)
-#   • Console: BD present at interval start/end ORs (if in model), age within/between ORs
-
-# -------- Config / labels ------------------------------------------------------
-OUT_SU   <- c("si_passive","si_active","sa","nssi")
-OUT_LABS <- c(si_passive="Passive SI",
-              si_active ="Active SI",
-              sa ="Suicide Attempt",
-              nssi ="NSSI")
-cluster_cols <- c("Lower-Risk" = "#11A579", "Higher-Risk" = "#7F3C8D")
-
-cluster_scale_color <- scale_color_manual(
-  name = "Cluster",
-  values = cluster_cols,
-  limits = names(cluster_cols),  # only these two
-  labels = names(cluster_cols),
-  drop = FALSE,
-  na.value = NA
-)
-
-cluster_scale_fill <- scale_fill_manual(
-  values = cluster_cols,
-  limits = names(cluster_cols),
-  drop = FALSE,
-  guide = "none"                # hide fill legend
-)
-
-# File locations for nested DTH fits (adapt if your names differ)
-fit_dir_su <- "/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk/results/main_analysis/3_nested_suic_dth"
-fit_paths_su <- c(
-  si_passive = file.path(fit_dir_su, "fit_primary_si_passive.rds"),
-  si_active = file.path(fit_dir_su, "fit_primary_si_active.rds"),
-  sa = file.path(fit_dir_su, "fit_primary_sa.rds"),
-  nssi = file.path(fit_dir_su, "fit_primary_nssi.rds")
-)
-
-safe_read <- function(p) tryCatch(readRDS(p), error = function(e) { message("Could not read: ", p); NULL })
-
-# ---- Helpers shared with Fig 5 (slightly adapted for nested data) ------------
-wave_levels <- c("ses-02A","ses-04A")  # two post-baseline intervals (end at 2y, 4y)
-wave_pretty <- c("ses-02A"="Year-2", "ses-04A"="Year-4")
-
-coerce_cluster <- function(x) dplyr::recode(as.character(x),
-                                            "C1"="Lower-Risk","1"="Lower-Risk","low"="Lower-Risk","lower"="Lower-Risk",
-                                            "C2"="Higher-Risk","2"="Higher-Risk","high"="Higher-Risk","higher"="Higher-Risk",
-                                            .default = as.character(x))
-
-# Build a reference grid matched to the fit's factor levels/contrasts
-make_ref_frame_su <- function(fit) {
-  frm <- fit@frame
-  
-  levs <- lapply(frm[, vapply(frm, is.factor, TRUE), drop = FALSE], levels)
-  get_lev <- function(v) if (v %in% names(levs)) levs[[v]] else NULL
-  
-  waves_lev   <- get_lev("end_wave"); if (is.null(waves_lev))  stop("No factor levels for end_wave in fit.")
-  cluster_lev <- get_lev("cluster"); if (is.null(cluster_lev)) stop("No factor levels for cluster in fit.")
-  
-  # reference values for covariates (held constant)
-  sex_lev     <- get_lev("sex");        site_lev <- get_lev("site_factor")
-  base_lev    <- get_lev("baseline_status") # usually not used here, kept for safety
-  
-  ref <- expand.grid(
-    end_wave        = waves_lev,
-    cluster         = cluster_lev,
-    age_mid_between = 0,
-    age_mid_cwc     = 0,
-    bd_any_start    = 0,    # hold BD state at reference (0) for display
-    bd_any_end      = 0,
-    sex             = if (!is.null(sex_lev)) sex_lev[1] else NA,
-    site_factor     = if (!is.null(site_lev)) site_lev[1] else NA,
-    stringsAsFactors = FALSE
-  )
-  
-  # coerce to factors with full model levels
-  ref$end_wave    <- factor(ref$end_wave, levels = waves_lev)
-  ref$cluster     <- factor(ref$cluster,  levels = cluster_lev)
-  if (!is.null(sex_lev))  ref$sex         <- factor(ref$sex,         levels = sex_lev)
-  if (!is.null(site_lev)) ref$site_factor <- factor(ref$site_factor, levels = site_lev)
-  if (!is.null(base_lev)) ref$baseline_status <- factor(base_lev[1], levels = base_lev)
-  
-  # model terms/contrasts (remove 1-level factors)
-  ff_fix   <- lme4::nobars(stats::formula(fit))
-  tt       <- stats::delete.response(stats::terms(ff_fix))
-  contr_all <- attr(frm, "contrasts")
-  if (!is.null(contr_all)) {
-    multi_lvl <- names(frm)[sapply(frm, function(x) is.factor(x) && nlevels(x) > 1)]
-    contr_all <- contr_all[names(contr_all) %in% multi_lvl]
-  }
-  
-  X <- stats::model.matrix(tt, ref, contrasts.arg = contr_all)
-  beta <- lme4::fixef(fit)
-  V    <- as.matrix(stats::vcov(fit))
-  
-  # align columns to beta order
-  miss <- setdiff(names(beta), colnames(X))
-  if (length(miss)) X <- cbind(X, matrix(0, nrow(X), length(miss), dimnames = list(NULL, miss)))
-  X <- X[, names(beta), drop = FALSE]
-  
-  list(ref = ref, X = X, beta = beta, V = V,
-       waves = waves_lev, clusters = cluster_lev)
-}
-
-# Hazards -> cumulative risk up to wave index k
-cumrisk_from_haz <- function(h, k) {
-  h <- pmin(pmax(h, 1e-8), 1 - 1e-8)
-  1 - exp(sum(log1p(-h[seq_len(k)])))
-}
-
-# MVN draws of fixed effects: hazards & cumulative risk (by wave x cluster)
-haz_cum_by_wave_ci_mvn <- function(fit, B = 3000, probs = c(0.025, 0.975)) {
-  obj <- make_ref_frame_su(fit)
-  ref <- obj$ref; X <- obj$X; beta <- obj$beta; V <- obj$V
-  
-  # Draws
-  if (requireNamespace("MASS", quietly = TRUE)) {
-    beta_draws <- MASS::mvrnorm(n = B, mu = beta, Sigma = V)
-  } else {
-    L <- try(chol(V), silent = TRUE)
-    if (inherits(L, "try-error")) {
-      V <- diag(diag(V), nrow(V))  # ridge fallback
-      L <- chol(V)
-    }
-    Z <- matrix(stats::rnorm(B * length(beta)), nrow = B)
-    beta_draws <- sweep(Z %*% t(L), 2, beta, `+`)
-  }
-  
-  eta_draws <- X %*% t(beta_draws)
-  p_draws   <- plogis(eta_draws)
-  
-  # index rows by cluster & wave
-  ref$end_wave <- factor(ref$end_wave, levels = obj$waves)
-  ref$cluster  <- factor(ref$cluster,  levels = obj$clusters)
-  idx_by <- split(seq_len(nrow(ref)), paste(ref$cluster, ref$end_wave, sep = "::"))
-  
-  # Hazards: point & CI by row
-  haz <- purrr::map_dfr(names(idx_by), function(key) {
-    r <- idx_by[[key]]
-    phat <- plogis(as.numeric(X[r, , drop = FALSE] %*% beta))
-    draws <- p_draws[r, , drop = FALSE]
-    lo <- stats::quantile(draws, probs = probs[1], na.rm = TRUE)
-    hi <- stats::quantile(draws, probs = probs[2], na.rm = TRUE)
-    tibble(
-      cluster = as.character(ref$cluster[r]),
-      end_wave = as.character(ref$end_wave[r]),
-      hazard = phat, hazard_lo = as.numeric(lo), hazard_hi = as.numeric(hi)
-    )
-  })
-  
-  # Cumulative risk by cluster across ordered waves
-  idx_by_clu <- split(seq_len(nrow(ref)), ref$cluster)
-  cum <- purrr::map_dfr(names(idx_by_clu), function(cl) {
-    rows <- idx_by_clu[[cl]]
-    rows <- rows[order(ref$end_wave[rows])]  # enforce ses-02A -> ses-04A
-    Hhat <- plogis(as.numeric(X[rows, , drop = FALSE] %*% beta))
-    CRhat <- cumsum(log1p(-Hhat)) |> (\(v) 1 - exp(v))()  # numerically stable
-    
-    draws <- p_draws[rows, , drop = FALSE]  # waves x B
-    CRdraws <- apply(draws, 2, function(col) 1 - cumprod(1 - col))
-    if (is.null(dim(CRdraws))) CRdraws <- matrix(CRdraws, nrow = length(rows), ncol = 1)
-    lo <- apply(CRdraws, 1, stats::quantile, probs = probs[1], na.rm = TRUE)
-    hi <- apply(CRdraws, 1, stats::quantile, probs = probs[2], na.rm = TRUE)
-    
-    tibble(
-      cluster = cl,
-      end_wave = as.character(ref$end_wave[rows]),
-      cumrisk = as.numeric(CRhat),
-      cumrisk_lo = as.numeric(lo),
-      cumrisk_hi = as.numeric(hi)
-    )
-  })
-  
-  list(haz = haz, cum = cum)
-}
-
-# Delta-method CI for Year-4 RD/RR (HR vs LR)
-wald_ci <- function(theta_hat, grad, V, level = 0.95, log_scale = FALSE) {
-  V <- V + diag(1e-10, nrow(V))  # tiny ridge
-  se <- sqrt(drop(t(grad) %*% V %*% grad))
-  z  <- qnorm((1 + level)/2)
-  if (log_scale) {
-    lo <- theta_hat * exp(-z * se); hi <- theta_hat * exp(+z * se)
-  } else {
-    lo <- theta_hat - z * se;       hi <- theta_hat + z * se
-  }
-  list(se = se, lo = lo, hi = hi, z = theta_hat / se, p = 2 * pnorm(-abs(theta_hat / se)))
-}
-
-year4_rd_rr_delta <- function(fit, wave_key = "ses-04A") {
-  obj <- make_ref_frame_su(fit)
-  ref <- obj$ref; X <- obj$X; beta <- obj$beta; V <- obj$V
-  waves <- obj$waves
-  if (!wave_key %in% waves) wave_key <- tail(waves, 1)
-  k_idx <- match(wave_key, waves)
-  
-  cl_levels <- levels(ref$cluster)
-  disp <- coerce_cluster(cl_levels)
-  role <- setNames(ifelse(disp == "Higher-Risk","HR", ifelse(disp == "Lower-Risk","LR", NA_character_)), cl_levels)
-  if (anyNA(role)) {
-    # fallback by larger point CR
-    point_cr <- sapply(cl_levels, function(cl) {
-      rows <- which(ref$cluster == cl)
-      h <- plogis(as.numeric(X[rows, , drop = FALSE] %*% beta))
-      cumrisk_from_haz(h, k_idx)
-    })
-    role[] <- "LR"; role[names(which.max(point_cr))] <- "HR"
-  }
-  
-  make_f <- function(cl) {
-    rows <- which(ref$cluster == cl)
-    function(b) {
-      h <- plogis(as.numeric(X[rows, , drop = FALSE] %*% b))
-      cumrisk_from_haz(h, k_idx)
-    }
-  }
-  f_HR <- make_f(names(role)[role == "HR"])
-  f_LR <- make_f(names(role)[role == "LR"])
-  
-  CR_HR <- f_HR(beta); CR_LR <- f_LR(beta)
-  CR_HR <- pmin(pmax(CR_HR, 1e-8), 1 - 1e-8)
-  CR_LR <- pmin(pmax(CR_LR, 1e-8), 1 - 1e-8)
-  RD    <- CR_HR - CR_LR
-  RR    <- CR_HR / CR_LR
-  
-  g_HR <- numDeriv::grad(f_HR, beta)
-  g_LR <- numDeriv::grad(f_LR, beta)
-  
-  # RD
-  g_RD  <- g_HR - g_LR
-  ci_RD <- wald_ci(RD, g_RD, V, level = 0.95, log_scale = FALSE)
-  
-  # log(RR)
-  g_logRR  <- g_HR / CR_HR - g_LR / CR_LR
-  se_logRR <- sqrt(drop(t(g_logRR) %*% V %*% g_logRR))
-  z <- qnorm(0.975)
-  RR_lo <- RR * exp(-z * se_logRR)
-  RR_hi <- RR * exp(+z * se_logRR)
-  p_logRR <- 2 * pnorm(-abs(log(RR) / se_logRR))
-  
-  list(
-    wave = wave_key,
-    CR_HR = CR_HR, CR_LR = CR_LR,
-    RD = RD, RD_lo = ci_RD$lo, RD_hi = ci_RD$hi, RD_p = ci_RD$p,
-    RR = RR, RR_lo = RR_lo, RR_hi = RR_hi, RR_p = p_logRR
-  )
-}
-
-# Across-intervals cluster OR (average contrast over available waves)
-cluster_or_overall <- function(fit) {
-  obj <- make_ref_frame_su(fit)
-  ref <- obj$ref; X <- obj$X; beta <- obj$beta; V <- obj$V
-  waves <- obj$waves
-  cl_lev <- levels(ref$cluster)
-  if (length(cl_lev) < 2) return(NULL)
-  
-  D <- lapply(waves, function(w) {
-    r1 <- which(ref$end_wave == w & ref$cluster == cl_lev[2]) # C1
-    r0 <- which(ref$end_wave == w & ref$cluster == cl_lev[1]) # C2
-    X[r1, , drop=FALSE] - X[r0, , drop=FALSE]
-  })
-  dbar <- Reduce(`+`, D) / length(D)
-  est <- as.numeric(dbar %*% beta)
-  se  <- sqrt(drop(dbar %*% V %*% t(dbar)))
-  OR  <- exp(est)
-  lo  <- OR * exp(-qnorm(0.975) * se)
-  hi  <- OR * exp(+qnorm(0.975) * se)
-  p   <- 2 * pnorm(-abs(est / se))
-  c(OR = OR, lo = lo, hi = hi, p = p)
-}
-
-# Convenience: pull OR/CI/p for a named coefficient if present
-coef_or <- function(fit, term) {
-  b <- lme4::fixef(fit); V <- as.matrix(stats::vcov(fit))
-  if (!term %in% names(b)) return(NULL)
-  est <- unname(b[term]); se <- sqrt(V[term, term, drop=TRUE])
-  OR <- exp(est); lo <- OR * exp(-qnorm(0.975)*se); hi <- OR * exp(+qnorm(0.975)*se)
-  p  <- 2 * pnorm(-abs(est/se))
-  c(OR = OR, lo = lo, hi = hi, p = p)
-}
-
-fmt_p  <- function(p) ifelse(is.na(p), "-", ifelse(p < .001, "<.001", sprintf("%.3f", p)))
-fmt_ci <- function(lo, hi) sprintf("%s-%s", sprintf("%.2f", lo), sprintf("%.2f", hi))
-
-# ---- Load models and compute hazards/cumulative --------------------------------
-fits_su <- lapply(OUT_SU, function(o) safe_read(fit_paths_su[[o]])) |> setNames(OUT_SU)
-loaded_ok <- names(Filter(Negate(is.null), fits_su))
-message("Loaded nested DTH fits: ", paste(loaded_ok, collapse = ", "))
-
-# Wave median ages for x-axis labels (from nested_pp or su_pp_model if present)
-age_meds_tbl <- try({
-  (if (exists("su_pp_model")) su_pp_model else nested_pp) %>%
-    dplyr::group_by(end_wave) %>%
-    dplyr::summarise(age_med = median(age_mid, na.rm = TRUE), .groups = "drop") %>%
-    dplyr::mutate(end_wave = as.character(end_wave))
-}, silent = TRUE)
-if (inherits(age_meds_tbl, "try-error")) {
-  age_meds_tbl <- tibble(end_wave = wave_levels, age_med = NA_real_)
-}
-age_meds_vec <- setNames(age_meds_tbl$age_med, age_meds_tbl$end_wave)
-x_lab_vec <- setNames(
-  ifelse(is.finite(age_meds_vec[wave_levels]),
-         sprintf("%s\nMedian Mid-Interval Age=%.1f", wave_pretty[wave_levels], age_meds_vec[wave_levels]),
-         sprintf("%s\nMedian Mid-Interval Age=-",      wave_pretty[wave_levels])),
-  wave_levels
-)
-
-# Predictive summaries for all outcomes
-haz_list <- list(); cum_list <- list()
-for (o in OUT_SU) {
-  fit <- fits_su[[o]]
-  if (is.null(fit)) next
-  hc <- haz_cum_by_wave_ci_mvn(fit, B = 3000)
-  haz_list[[o]] <- hc$haz %>%
-    mutate(outcome = o,
-           cluster_disp = factor(coerce_cluster(cluster), levels = c("Lower-Risk","Higher-Risk")),
-           end_wave = factor(end_wave, levels = wave_levels))
-  cum_list[[o]] <- hc$cum %>%
-    mutate(outcome = o,
-           cluster_disp = factor(coerce_cluster(cluster), levels = c("Lower-Risk","Higher-Risk")),
-           end_wave = factor(end_wave, levels = wave_levels))
-}
-haz_df <- bind_rows(haz_list)
-cum_df <- bind_rows(cum_list)
-
-# Empirical (unadjusted) per-interval proportions for overlay
-emp_df <- try({
-  (if (exists("su_pp_model")) su_pp_model else nested_pp) %>%
-    dplyr::filter(outcome %in% OUT_SU, event %in% c(0,1)) %>%
-    dplyr::mutate(cluster_disp = factor(coerce_cluster(cluster), levels = c("Lower-Risk","Higher-Risk")),
-                  end_wave = factor(end_wave, levels = wave_levels)) %>%
-    dplyr::group_by(outcome, end_wave, cluster_disp) %>%
-    dplyr::summarise(emp = mean(event == 1L, na.rm = TRUE), .groups = "drop")
-}, silent = TRUE)
-if (inherits(emp_df, "try-error")) {
-  emp_df <- tibble(outcome=character(), end_wave=factor(character(), levels=wave_levels),
-                   cluster_disp=factor(character(), levels=c("Lower-Risk","Higher-Risk")), emp=double())
-}
-
-# --- Observed cumulative incidence (unadjusted) for overlay -------------------
-emp_cum_df <- try({
-  src <- if (exists("su_pp_model")) su_pp_model else nested_pp
-  src %>%
-    dplyr::filter(outcome %in% OUT_SU, event %in% c(0, 1)) %>%
-    dplyr::mutate(
-      end_wave_chr = as.character(end_wave),
-      cluster_chr  = coerce_cluster(cluster)
-    ) %>%
-    # keep only the two waves you're plotting and the two valid clusters
-    dplyr::filter(end_wave_chr %in% wave_levels,
-                  cluster_chr  %in% names(cluster_cols)) %>%
-    dplyr::mutate(
-      end_wave     = factor(end_wave_chr, levels = wave_levels),
-      cluster_disp = factor(cluster_chr,  levels = names(cluster_cols))
-    ) %>%
-    dplyr::group_by(outcome, cluster_disp, end_wave) %>%
-    dplyr::summarise(h = mean(event == 1L, na.rm = TRUE), .groups = "drop") %>%
-    dplyr::group_by(outcome, cluster_disp) %>%
-    dplyr::arrange(end_wave, .by_group = TRUE) %>%
-    dplyr::mutate(cumrisk_obs = 1 - cumprod(1 - pmin(pmax(h, 0), 1))) %>%
-    dplyr::ungroup()
-}, silent = TRUE)
-
-if (inherits(emp_cum_df, "try-error")) {
-  emp_cum_df <- tibble::tibble(
-    outcome = character(),
-    end_wave = factor(character(), levels = wave_levels),
-    cluster_disp = factor(character(), levels = c("Lower-Risk","Higher-Risk")),
-    cumrisk_obs = double()
-  )
-}
-
-# ---- Plot helpers (clean axes only, no gridlines) -----------------------------
-# Tweak these two to change sizes globally
-BASE_TEXT_SIZE   <- 10  # titles & general text
-AXIS_TEXT_SIZE   <- 7.5   # tick labels
-
-axes_only_theme <- function(base_size = BASE_TEXT_SIZE, axis_text = AXIS_TEXT_SIZE) {
-  theme_minimal(base_size = base_size) +
-    theme(
-      panel.grid        = element_blank(),       # no gridlines
-      axis.line.x.bottom= element_line(color = "black", linewidth = 0.3),
-      axis.line.y.left  = element_line(color = "black", linewidth = 0.3),
-      axis.ticks        = element_line(color = "black", linewidth = 0.3),
-      axis.ticks.length = grid::unit(2.5, "pt"),
-      axis.text         = element_text(size = axis_text),
-      legend.position   = "bottom",
-      legend.box        = "horizontal"
-    )
-}
-
-# Per-panel “strip” helpers to remove lines/ticks/labels on interior panels
-strip_x_all <- theme(
-  axis.title.x        = element_blank(),
-  axis.text.x         = element_blank(),
-  axis.ticks.x        = element_blank(),
-  axis.line.x.bottom  = element_blank()
-)
-strip_y_all <- theme(
-  axis.title.y        = element_blank(),
-  axis.text.y         = element_blank(),
-  axis.ticks.y        = element_blank(),
-  axis.line.y.left    = element_blank()
-)
-strip_y_title <- theme(axis.title.y = element_blank())
-
-
-# ---- Build per-outcome panels -------------------------------------------------
-# Dynamic ymax for cumulative (prevents clipping; add a bit of headroom)
-cum_ymax <- if (nrow(cum_df)) min(1, max(cum_df$cumrisk_hi, na.rm = TRUE) * 1.05) else 0.3
-
-plot_haz <- function(out_key) {
-  d <- haz_df %>% dplyr::filter(outcome == out_key)
-  e <- emp_df %>%
-    dplyr::filter(outcome == out_key,
-                  !is.na(cluster_disp),
-                  as.character(end_wave) %in% wave_levels) %>%
-    dplyr::mutate(end_wave = factor(end_wave, levels = wave_levels)) %>%
-    droplevels()
-  
-  ggplot(d, aes(x = end_wave, y = hazard, color = cluster_disp, group = cluster_disp)) +
-    geom_ribbon(aes(ymin = hazard_lo, ymax = hazard_hi, fill = cluster_disp),
-                alpha = 0.18, color = NA) +
-    geom_line(linewidth = 0.9) +
-    geom_point(size = 1.8) +
-    geom_point(data = e, aes(x = end_wave, y = emp, color = cluster_disp),
-               shape = 1, size = 1.8, inherit.aes = FALSE) +
-    scale_y_continuous(labels = scales::percent_format(accuracy = 0.01), limits = c(0, NA)) +
-    scale_x_discrete(drop = FALSE, labels = x_lab_vec) +
-    cluster_scale_color +
-    cluster_scale_fill +
-    guides(color = guide_legend(nrow = 1, byrow = TRUE)) +
-    labs(title = glue("({LETTERS[match(out_key, OUT_SU)]})  {OUT_LABS[[out_key]]} Interval Hazard"),
-         x = "Wave (Interval End)", y = "Predicted hazard (Per Interval)") +
-    axes_only_theme()
-}
-
-plot_cum <- function(out_key) {
-  d <- cum_df %>% dplyr::filter(outcome == out_key)
-  e_cum <- emp_cum_df %>% dplyr::filter(outcome == out_key)
-  
-  ggplot(d, aes(x = end_wave, y = cumrisk, color = cluster_disp, group = cluster_disp)) +
-    geom_ribbon(aes(ymin = cumrisk_lo, ymax = cumrisk_hi, fill = cluster_disp),
-                alpha = 0.15, color = NA) +
-    geom_line(linewidth = 0.9) +
-    geom_point(size = 1.8) +
-    geom_point(data = e_cum,
-               aes(x = end_wave, y = cumrisk_obs, color = cluster_disp),
-               shape = 1, size = 1.8, inherit.aes = FALSE, na.rm = TRUE) +
-    scale_y_continuous(labels = scales::percent_format(accuracy = 0.1),
-                       limits = c(0, cum_ymax)) +
-    scale_x_discrete(drop = FALSE, labels = x_lab_vec) +
-    cluster_scale_color +
-    cluster_scale_fill +
-    labs(title = glue("({LETTERS[match(out_key, OUT_SU)+4]})  {OUT_LABS[[out_key]]} Cumulative Incidence"),
-         x = "Wave (Interval End)", y = "Cumulative Risk") +
-    axes_only_theme()
-}
-
-haz_panels <- lapply(OUT_SU, plot_haz)
-cum_panels <- lapply(OUT_SU, plot_cum)
-
-# Legends: keep only on first hazard panel
-haz_panels[2:4] <- lapply(haz_panels[2:4], \(p) p + theme(legend.position = "none"))
-cum_panels      <- lapply(cum_panels,      \(p) p + theme(legend.position = "none"))
-
-# Show axis lines only on leftmost (y) and bottommost (x) panels in each 2x2 grid
-# Hazards grid: panels arranged as 1 2 / 3 4
-haz_panels[[1]] <- haz_panels[[1]] + strip_x_all                    # top-left: remove x; keep y
-haz_panels[[2]] <- haz_panels[[2]] + strip_x_all   # top-right: remove x and y
-# bottom-left keeps both axes; bottom-right removes y only
-haz_panels[[4]] <- haz_panels[[4]] 
-
-# Cumulative grid: same treatment
-cum_panels[[1]] <- cum_panels[[1]] + strip_x_all
-cum_panels[[2]] <- cum_panels[[2]] + strip_x_all
-cum_panels[[4]] <- cum_panels[[4]]
-
-# Arrange (2x2 hazards over 2x2 cumulative)
-haz_grid <- (haz_panels[[1]]) + (haz_panels[[2]]) +
-  (haz_panels[[3]]) + (haz_panels[[4]]) +
-  patchwork::plot_layout(ncol = 2)
-cum_grid <- (cum_panels[[1]]) + (cum_panels[[2]]) +
-  (cum_panels[[3]]) + (cum_panels[[4]]) +
-  patchwork::plot_layout(ncol = 2)
-
-fig7 <- haz_grid / cum_grid +
-  patchwork::plot_layout(heights = c(1, 1), guides = "collect") &
-  theme(legend.position = "bottom", legend.justification = "center")
-
-print(fig7)
-
-# Save
-out_dir <- "/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk/results/figures"
-pdf7 <- file.path(out_dir, "Figure_07_Nested_Suicidality_DTH_Hazards_and_Cumulative_by_Cluster.pdf")
-png7 <- file.path(out_dir, "Figure_07_Nested_Suicidality_DTH_Hazards_and_Cumulative_by_Cluster.png")
-ggsave(pdf7, fig7, width = 8.5, height = 11, device = cairo_pdf)
-ggsave(png7, fig7, width = 8.5, height = 11, dpi = 720)
-
-# ---- In-line stats for Results -------------------------------------------------
-# 1) Year-4 cumulative risk HR vs LR with RD & RR
-yr4_tbl <- purrr::map_dfr(OUT_SU, function(o) {
-  fit <- fits_su[[o]]; if (is.null(fit)) return(NULL)
-  res <- year4_rd_rr_delta(fit, wave_key = "ses-04A")
-  tibble(
-    outcome = o, out_lab = OUT_LABS[o],
-    wave = res$wave,
-    HR = res$CR_HR, LR = res$CR_LR,
-    RD = res$RD, RD_lo = res$RD_lo, RD_hi = res$RD_hi, RD_p = res$RD_p,
-    RR = res$RR, RR_lo = res$RR_lo, RR_hi = res$RR_hi, RR_p = res$RR_p
-  )
-})
-
-if (nrow(yr4_tbl)) {
-  yr4_lines <- yr4_tbl %>%
-    mutate(
-      line = glue("{out_lab} Year-4 cumulative risk: ",
-                  "{scales::percent(HR, 0.1)} (HR) vs {scales::percent(LR, 0.1)} (LR); ",
-                  "RD = {scales::percent(RD, 0.1)} [{scales::percent(RD_lo, 0.1)}, {scales::percent(RD_hi, 0.1)}], p = {sprintf('%.3f', RD_p)}; ",
-                  "RR = {sprintf('%.2f', RR)} [{sprintf('%.2f', RR_lo)}, {sprintf('%.2f', RR_hi)}], p = {sprintf('%.3f', RR_p)}")
-    ) %>% pull(line)
-  cat("Figure 7 in-line stats - Year-4 cumulative risk (HR vs LR):\n",
-      paste0(" • ", yr4_lines, collapse = "\n"), "\n\n")
-} else {
-  message("Year-4 cumulative table could not be computed (no fits?).")
-}
-
-# 2) Across-intervals cluster OR (summary per outcome)
-clust_lines <- purrr::map_chr(OUT_SU, function(o) {
-  fit <- fits_su[[o]]; if (is.null(fit)) return(NA_character_)
-  or <- cluster_or_overall(fit); if (is.null(or)) return(NA_character_)
-  glue("{OUT_LABS[[o]]}: higher- vs lower-risk OR = {sprintf('%.2f', or['OR'])} ",
-       "(95% CI {fmt_ci(as.numeric(or['lo']), as.numeric(or['hi']))}, p = {fmt_p(as.numeric(or['p']))})")
-}) %>% stats::na.omit()
-if (length(clust_lines)) {
-  cat("Across-intervals cluster effect (OR, averaged over intervals):\n",
-      paste0(" • ", clust_lines, collapse = "\n"), "\n\n")
-}
-
-# 3) BD at interval start/end, and age effects (report if present in the fit)
-pull_effects <- function(fit, map) {
-  out <- list()
-  # bd_any_start / bd_any_end
-  for (tm in c("bd_any_start","bd_any_end","age_mid_cwc","age_mid_between")) {
-    co <- coef_or(fit, tm)
-    if (!is.null(co)) {
-      label <- dplyr::case_when(
-        tm == "bd_any_start"   ~ "BD present at interval start",
-        tm == "bd_any_end"     ~ "BD present at interval end",
-        tm == "age_mid_cwc"    ~ "within-person age",
-        tm == "age_mid_between"~ "between-person age",
-        TRUE ~ tm
-      )
-      out[[tm]] <- glue("{label}: OR = {sprintf('%.2f', co['OR'])} ",
-                        "(95% CI {fmt_ci(as.numeric(co['lo']), as.numeric(co['hi']))}, p = {fmt_p(as.numeric(co['p']))})")
-    }
-  }
-  unname(unlist(out))
-}
-
-eff_lines <- purrr::imap_chr(fits_su, function(fit, o) {
-  if (is.null(fit)) return(NA_character_)
-  effs <- pull_effects(fit, o)
-  if (!length(effs)) return(NA_character_)
-  glue("{OUT_LABS[[o]]}: {paste(effs, collapse='; ')}")
-}) %>% stats::na.omit()
-
-if (length(eff_lines)) {
-  cat("Key covariate effects (reported when present in the model):\n",
-      paste0(" • ", eff_lines, collapse = "\n"), "\n")
-}
-
-```
-
-## Table S4: Characteristics of Participants in the Prevalence of Suicidality Over Time Within Ever-BD by Risk Cluster Analysis
-
-```{r table s4}
-
-## Table S4 - Prevalence of suicidality (GEE) within ever-BD, by cluster
-
-# 0) Prep
-stopifnot(exists("nested_panel"), is.data.frame(nested_panel))
-
-np <- nested_panel %>%
-  dplyr::mutate(
-    participant_id = as.character(participant_id),
-    family_id = factor(as.character(family_id)),
-    site_factor = factor(site_factor),
-    cluster = factor(cluster),
-    wave = factor(wave, levels = c("ses-02A","ses-04A")),
-    outcome = factor(outcome, levels = c("si_passive","si_active","sa","nssi")),
-    sex = factor(sex))
-
-# Keep binary response + required fields; restrict to ever-BD rows
-status_var <- "status"
-np[[status_var]] <- as.integer(np[[status_var]])
-np[[status_var]][!np[[status_var]] %in% c(0L,1L)] <- NA_integer_
-
-panel <- np %>%
-  dplyr::filter(.data[[status_var]] %in% c(0L,1L) | is.na(.data[[status_var]])) %>%
-  dplyr::filter(!is.na(cluster), !is.na(sex), !is.na(site_factor),
-                !is.na(family_id), !is.na(participant_id), !is.na(wave)) %>%
-  dplyr::filter(isTRUE(ever_bd) | ever_bd) %>%
-  # reference levels
-  dplyr::mutate(
-    cluster = forcats::fct_relevel(cluster, "C1"),
-    sex = forcats::fct_relevel(sex, "Female"))
-
-# 1) Display helpers
-time_map_all <- c("ses-02A"="2y","ses-04A"="4y","ses-06A"="6y")
-
-# keep only waves present, but in canonical order
-have_waves <- intersect(names(time_map_all), levels(panel$wave))
-time_map <- time_map_all[have_waves]
-time_levels <- unname(time_map)
-
-fmt_mean_sd <- function(x) {
-  x <- x[is.finite(x)]
-  if (!length(x)) return("\u2014")
-  sprintf("%.2f \u00B1 %.2f", mean(x), stats::sd(x))
-}
-fmt_n <- function(n) ifelse(is.na(n), "\u2014", format(as.integer(n), big.mark = ","))
-fmt_n_pct <- function(n, den) {
-  out <- ifelse(is.na(den) | den == 0,
-                "0 (0.0%)",
-                sprintf("%s (%.1f%%)", fmt_n(n), 100 * n / den))
-  as.character(out)
-}
-
-panel <- panel %>%
-  dplyr::mutate(
-    cluster_disp = coerce_cluster(cluster),
-    time = factor(dplyr::recode(as.character(wave), !!!time_map), levels = time_levels),
-    sex = as.character(sex)) %>%
-  dplyr::filter(!is.na(time), cluster_disp %in% c("Lower-Risk","Higher-Risk"))
-
-# 2) DEMOGRAPHICS (participant x wave; collapse across outcomes)
-demo_base <- panel %>%
-  dplyr::distinct(participant_id, time, cluster_disp, sex, site_factor, age_wave)
-
-demo_counts <- demo_base %>%
-  dplyr::group_by(time, cluster_disp) %>%
-  dplyr::summarise(
-    n_pp = dplyr::n(),
-    n_part = dplyr::n_distinct(participant_id),
-    age_mean_sd = fmt_mean_sd(age_wave),
-    .groups = "drop"
-  )
-
-age_row <- demo_counts %>%
-  dplyr::transmute(time, cluster_disp, Row = "Age in years, Mean (SD)", val = age_mean_sd)
-
-n_rows <- demo_counts %>%
-  tidyr::pivot_longer(c(n_pp, n_part), names_to = "what", values_to = "val_raw") %>%
-  dplyr::mutate(
-    Row = dplyr::case_when(
-      what == "n_part" ~ "N (participants)",
-      what == "n_pp"   ~ "N (person-periods)"
-    ),
-    val = fmt_n(val_raw)
-  ) %>%
-  dplyr::select(time, cluster_disp, Row, val)
-
-sex_tab <- demo_base %>%
-  dplyr::mutate(sex2 = dplyr::case_when(
-    !is.na(sex) & sex %in% c("Male","Female") ~ sex,
-    TRUE ~ "Other/Unknown"
-  )) %>%
-  dplyr::distinct(time, cluster_disp, participant_id, sex2) %>%
-  dplyr::count(time, cluster_disp, sex2, name = "n_sex") %>%
-  dplyr::left_join(demo_counts %>% dplyr::select(time, cluster_disp, n_part), by = c("time","cluster_disp")) %>%
-  dplyr::mutate(val = fmt_n_pct(n_sex, n_part)) %>%
-  dplyr::filter(sex2 %in% c("Male","Female")) %>%
-  dplyr::mutate(Row = paste0("Sex at birth - ", sex2)) %>%
-  dplyr::select(time, cluster_disp, Row, val)
-
-demo_rows_cs <- dplyr::bind_rows(n_rows, age_row, sex_tab) %>%
-  dplyr::mutate(Section = "Demographics")
-
-# Totals
-demo_counts_tot <- demo_base %>%
-  dplyr::group_by(time) %>%
-  dplyr::summarise(
-    n_pp = dplyr::n(),
-    n_part = dplyr::n_distinct(participant_id),
-    age_mean_sd = fmt_mean_sd(age_wave),
-    .groups = "drop"
-  )
-
-n_rows_total <- demo_counts_tot %>%
-  tidyr::pivot_longer(c(n_pp, n_part), names_to = "what", values_to = "val_raw") %>%
-  dplyr::mutate(
-    Row = dplyr::case_when(
-      what == "n_part" ~ "N (participants)",
-      what == "n_pp"   ~ "N (person-periods)"
-    ),
-    val = fmt_n(val_raw),
-    cluster_disp = "Total"
-  ) %>%
-  dplyr::select(time, cluster_disp, Row, val)
-
-age_row_total <- demo_counts_tot %>%
-  dplyr::transmute(time, cluster_disp = "Total", Row = "Age in years, Mean (SD)", val = age_mean_sd)
-
-sex_tab_total <- demo_base %>%
-  dplyr::mutate(sex2 = dplyr::case_when(
-    !is.na(sex) & sex %in% c("Male","Female") ~ sex,
-    TRUE ~ "Other/Unknown"
-  )) %>%
-  dplyr::distinct(time, participant_id, sex2) %>%
-  dplyr::count(time, sex2, name = "n_sex") %>%
-  dplyr::left_join(demo_counts_tot %>% dplyr::select(time, n_part), by = "time") %>%
-  dplyr::mutate(val = fmt_n_pct(n_sex, n_part)) %>%
-  dplyr::filter(sex2 %in% c("Male","Female")) %>%
-  dplyr::mutate(cluster_disp = "Total", Row = paste0("Sex at birth - ", sex2)) %>%
-  dplyr::select(time, cluster_disp, Row, val)
-
-demo_rows_total <- dplyr::bind_rows(n_rows_total, age_row_total, sex_tab_total) %>%
-  dplyr::mutate(Section = "Demographics")
-
-# 3) OCCURRENCE rows - suicidality wave prevalence ------------------------------
-su_out_labs <- c(
-  si_passive = "Occurrence - Passive SI, n (%)",
-  si_active  = "Occurrence - Active SI, n (%)",
-  sa         = "Occurrence - Suicide attempt, n (%)",
-  nssi       = "Occurrence - NSSI, n (%)"
-)
-
-occ_cs <- panel %>%
-  dplyr::filter(outcome %in% names(su_out_labs)) %>%
-  dplyr::group_by(outcome, time, cluster_disp) %>%
-  dplyr::summarise(
-    n_obs   = sum(!is.na(.data[[status_var]])),
-    n_cases = sum(.data[[status_var]] == 1L, na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  dplyr::mutate(
-    Row = dplyr::recode(outcome, !!!su_out_labs),
-    val = fmt_n_pct(n_cases, n_obs),
-    Section = "Occurrence (suicidality wave prevalence)"
-  ) %>%
-  dplyr::select(time, cluster_disp, Row, val, Section)
-
-occ_total <- panel %>%
-  dplyr::filter(outcome %in% names(su_out_labs)) %>%
-  dplyr::group_by(outcome, time) %>%
-  dplyr::summarise(
-    n_obs   = sum(!is.na(.data[[status_var]])),
-    n_cases = sum(.data[[status_var]] == 1L, na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  dplyr::mutate(
-    Row = dplyr::recode(outcome, !!!su_out_labs),
-    val = fmt_n_pct(n_cases, n_obs),
-    cluster_disp = "Total",
-    Section = "Occurrence (suicidality wave prevalence)"
-  ) %>%
-  dplyr::select(time, cluster_disp, Row, val, Section)
-
-# 4) Any-BSD at the same wave (one row per participantxwave to avoid duplication)
-bsd_wave_cs <- panel %>%
-  dplyr::distinct(participant_id, time, cluster_disp, any_bsd) %>%
-  dplyr::group_by(time, cluster_disp) %>%
-  dplyr::summarise(
-    n_obs = sum(!is.na(any_bsd)),
-    n_bsd = sum(any_bsd == 1, na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  dplyr::transmute(
-    time, cluster_disp,
-    Row = "Any BSD at wave, n (%)",
-    val = fmt_n_pct(n_bsd, n_obs),
-    Section = "BD at wave (ever-BD set)"
-  )
-
-bsd_wave_total <- panel %>%
-  dplyr::distinct(participant_id, time, any_bsd) %>%
-  dplyr::group_by(time) %>%
-  dplyr::summarise(
-    n_obs = sum(!is.na(any_bsd)),
-    n_bsd = sum(any_bsd == 1, na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  dplyr::transmute(
-    time, cluster_disp = "Total",
-    Row = "Any BSD at wave, n (%)",
-    val = fmt_n_pct(n_bsd, n_obs),
-    Section = "BD at wave (ever-BD set)"
-  )
-
-# 5) Assemble -> complete grid -> wide -> GT ---------------------------------------
-long_all <- dplyr::bind_rows(
-  demo_rows_cs, demo_rows_total,
-  bsd_wave_cs, bsd_wave_total,
-  occ_cs, occ_total
-) %>%
-  dplyr::mutate(
-    cluster_disp = factor(cluster_disp, levels = c("Total","Lower-Risk","Higher-Risk")),
-    time = factor(time, levels = time_levels)
-  )
-
-grid <- tidyr::crossing(
-  Row = unique(long_all$Row),
-  Section = unique(long_all$Section),
-  cluster_disp = levels(long_all$cluster_disp),
-  time = levels(long_all$time)
-)
-long_all <- grid %>%
-  dplyr::left_join(long_all, by = c("Row","Section","cluster_disp","time")) %>%
-  dplyr::mutate(val = dplyr::coalesce(val, "\u2014"))
-
-wide <- long_all %>%
-  dplyr::mutate(col_key = paste0(cluster_disp, "::", time)) %>%
-  dplyr::select(Section, Row, col_key, val) %>%
-  tidyr::pivot_wider(names_from = col_key, values_from = val)
-
-col_keys <- c(
-  paste0("Total::", time_levels),
-  paste0("Lower-Risk::", time_levels),
-  paste0("Higher-Risk::", time_levels))
-
-have <- intersect(col_keys, names(wide))
-wide <- wide %>% dplyr::select(Section, Row, dplyr::all_of(have))
-
-tS4 <- gt::gt(wide, groupname_col = "Section", rowname_col = "Row") |>
-  gt::cols_label(.list = setNames(rep(time_levels, 3), have)) |>
-  gt::tab_spanner(label = "Total",       columns = dplyr::all_of(paste0("Total::", time_levels))) |>
-  gt::tab_spanner(label = "Lower-Risk",  columns = dplyr::all_of(paste0("Lower-Risk::", time_levels))) |>
-  gt::tab_spanner(label = "Higher-Risk", columns = dplyr::all_of(paste0("Higher-Risk::", time_levels))) |>
-  gt::cols_align(align = "center", columns = dplyr::all_of(have)) |>
-  gt::tab_caption("**Table S4. Characteristics of Participants in the Prevalence of Suicidality Over Time Within Ever-BD by Risk Cluster (GEE Analysis)**
-Counts are shown per assessment wave (2y, 4y, 6y). Demographics collapse to one row per participant per wave within the ever-BD set. 
-“Any BSD at wave” reflects contemporaneous BSD presence at that wave. 
-Occurrence rows report suicidality wave prevalence (status==1) within outcome panels, shown as *n (percent)* of observed person-periods (denominator excludes missing).") |>
-  gt::tab_options(table.font.size = gt::px(12)) |>
-  gt::fmt_missing(columns = dplyr::everything(), missing_text = "\u2014")
-
-# Save + print
-if (exists("save_gt")) {
-  save_gt(tS4, "Table_S4_Suicidality_Prevalence_EverBD_Characteristics_by_Cluster")
-} else {
-  gt::gtsave(tS4, file.path(getwd(), "Table_S4_Suicidality_Prevalence_EverBD_Characteristics_by_Cluster.html"))
-}
-tS4
-
-```
-
-## Figure 8: Ever-BD Nested Suicidality Odds for the Higher-Risk Relative to Lower-Risk Cluster Over Time
-
-```{r figure 8 stats}
-
-# ================= Figure 8: Ever-BD Nested Suicidality Odds (C1 vs C2) Over Time =================
-# Inputs:
-#   - Saved GEE models with wave x cluster interaction:
-#       ".../4_nested_suicidality_mixed_logit/rds/<outcome>_GEE_EXC_INT.rds"
-#   - Optional: nested_panel (for median ages under column strips)
-# Outputs:
-#   - gee_pairs_su (OR/CI/p per outcome x wave via emmeans)
-#   - Console in-line stats (per outcome x wave; and 'any_bsd' main-effect ORs)
-#   - Figure_08_GEE_OR_by_Cluster.pdf/.png
-# =================                                                                =================
-
-# ---- Config ----
-OUT_SU <- c("si_active","si_passive","sa","nssi")
-OUT_LABS <- c(si_active="Active ideation", si_passive="Passive ideation", sa="Suicide attempt", nssi="NSSI")
-wave_map <- c("ses-02A"="Year-2","ses-04A"="Year-4")
-wave_order <- c("Year-2","Year-4")
-out_order <- unname(OUT_LABS[OUT_SU])
-
-fit_dir <- "/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk/results/main_analysis/4_nested_suicidality_mixed_logit/rds"
-fit_paths <- c(
-  si_active  = file.path(fit_dir, "si_active_GEE_EXC_INT.rds"),
-  si_passive = file.path(fit_dir, "si_passive_GEE_EXC_INT.rds"),
-  sa         = file.path(fit_dir, "sa_GEE_EXC_INT.rds"),
-  nssi       = file.path(fit_dir, "nssi_GEE_EXC_INT.rds")
-)
-
-safe_read <- function(p) tryCatch(readRDS(p), error = function(e) { message("Could not read: ", p); NULL })
-
-# Wave medians for labels (fallback to em-dash if unavailable)
-age_by_wave <- try({
-  nested_panel %>%
-    group_by(wave) %>%
-    summarise(age_med = median(age_wave, na.rm = TRUE), .groups = "drop") %>%
-    transmute(wave = as.character(wave),
-              wave_pretty = recode(wave, !!!wave_map),
-              lab = sprintf("%s\n(median age %.1f)", wave_pretty, age_med))
-}, silent = TRUE)
-if (inherits(age_by_wave, "try-error")) {
-  age_by_wave <- tibble(wave = names(wave_map),
-                        wave_pretty = unname(wave_map),
-                        lab = paste0(unname(wave_map), "\n(median age -)"))
-}
-strip_labs <- setNames(age_by_wave$lab, age_by_wave$wave_pretty)
-
-# emmeans helper: C1 vs C2 per wave on logit scale -> OR
-# Robust to factor-level order; uses the model’s vcov()
-em_or_by_wave <- function(fit) {
-  
-  # marginal means on the link scale so differences = log-odds ratios
-  emm <- emmeans::emmeans(fit, ~ cluster | wave, type = "link")
-  lev <- levels(emm@grid$cluster)
-  if (!all(c("C1","C2") %in% lev)) stop("Cluster levels not found in fit: ", paste(lev, collapse = ", "))
-
-  w <- setNames(numeric(length(lev)), lev); w["C2"] <- 1; w["C1"] <- -1
-  cmp <- emmeans::contrast(emm, method = list("C2 - C1" = w))   # one contrast per wave
-  sm  <- summary(cmp, infer = TRUE)                             # on logit (link) scale
-
-  tibble(
-    wave = as.character(sm$wave),
-    OR = exp(sm$estimate),
-    CI_low = exp(sm$lower.CL),
-    CI_high = exp(sm$upper.CL),
-    p = sm$p.value
-  )
-}
-
-# Extract 'any_bsd' main-effect OR (if present in the model)
-extract_anybsd_or <- function(fit) {
-  b <- coef(fit); V <- vcov(fit)
-  nm <- names(b)
-  idx <- grep("any_bsd", nm, ignore.case = TRUE)
-  if (!length(idx)) return(NULL)
-  nm <- nm[idx[1]]
-  est <- unname(b[nm]); se <- sqrt(V[nm, nm, drop=TRUE])
-  OR <- exp(est); lo <- OR * exp(-qnorm(0.975)*se); hi <- OR * exp(+qnorm(0.975)*se); p <- 2*pnorm(-abs(est/se))
-  tibble(term = nm, OR = OR, CI_low = lo, CI_high = hi, p = p)
-}
-
-# Run across outcomes
-fits <- lapply(OUT_SU, \(o) safe_read(fit_paths[[o]])) |> setNames(OUT_SU)
-ok_names <- names(Filter(Negate(is.null), fits))
-message("Loaded fits: ", paste(ok_names, collapse = ", "))
-
-if (!length(ok_names)) stop("No *_GEE_EXC_INT.rds models could be loaded.")
-
-# Per-wave ORs (C1 vs C2) via emmeans
-gee_pairs <- map_dfr(ok_names, function(o) {
-  fit <- fits[[o]]
-  or_tab <- em_or_by_wave(fit) %>%
-    mutate(
-      outcome = o,
-      out_lab = OUT_LABS[[o]],
-      wave_pretty = recode(wave, !!!wave_map)
-    )
-  or_tab
-})
-
-stopifnot(nrow(gee_pairs) > 0)
-
-# 'any_bsd' lines
-anybsd_tbl <- map_dfr(ok_names, function(o) {
-  fit <- fits[[o]]
-  ab  <- extract_anybsd_or(fit)
-  if (is.null(ab)) return(NULL)
-  ab %>% mutate(outcome = o, out_lab = OUT_LABS[[o]])
-})
-
-# ---- In-line stats ------------------------------------------------------------
-fmt_p  <- function(p) ifelse(is.na(p), "-", ifelse(p < .001, "<.001", sprintf("%.3f", p)))
-fmt_ci <- function(lo, hi) sprintf("%s-%s", sprintf("%.2f", lo), sprintf("%.2f", hi))
-
-inline_lines <- gee_pairs %>%
-  mutate(line = glue("{out_lab} {wave_pretty}: OR={sprintf('%.2f', OR)}, 95% CI {fmt_ci(CI_low, CI_high)}, p={fmt_p(p)}")) %>%
-  arrange(factor(out_lab, levels = out_order), factor(wave_pretty, levels = wave_order)) %>%
-  pull(line)
-
-cat("Figure 8 in-line stats (Higher- vs Lower-Risk, emmeans, per wave):\n",
-    paste0(" • ", inline_lines, collapse = "\n"), "\n\n")
-
-if (nrow(anybsd_tbl)) {
-  anybsd_lines <- anybsd_tbl %>%
-    transmute(line = glue("{out_lab}: Any BSD at timepoint OR={sprintf('%.2f', OR)}, 95% CI {fmt_ci(CI_low, CI_high)}, p={fmt_p(p)}")) %>%
-    pull(line)
-  cat("Any-BSD effects (main effect in the GEE model):\n",
-      paste0(" • ", anybsd_lines, collapse = "\n"), "\n\n")
-} else {
-  message("No 'any_bsd' term found in the loaded models (skipping those lines).")
-}
-
-# ---- Panel forest (linear axis 0-15; rows=outcomes, cols=Year-2/Year-4) -------
-# Visual knobs you can tweak
-ci_linewidth   <- 0.35
-cap_linewidth  <- 0.28
-cap_y          <- 1e-7
-dot_size       <- 1.8
-dot_color      <- "#7F3C8D"
-arrow_len_mm   <- 1.5
-col_spacing_pt <- 26
-row_spacing_pt <- 0.5
-tick_len_pt    <- 3
-tick_color     <- "grey35"
-x_min <- 0; x_max <- 8; x_brk <- c(0,2,4,6,8)
-
-# Build plotting frame with truncation flags
-plot_df <- gee_pairs %>%
-  mutate(
-    out_lab     = factor(out_lab,     levels = out_order),
-    wave_pretty = factor(wave_pretty, levels = wave_order),
-    x_low_plot   = pmax(CI_low,  x_min),
-    x_high_plot  = pmin(CI_high, x_max),
-    trunc_right  = CI_high > x_max + 1e-10,
-    trunc_left   = CI_low  < x_min - 1e-10,
-    x_or_plot    = pmin(pmax(OR, x_min), x_max)
-  )
-
-seg_ok    <- filter(plot_df, !trunc_right & !trunc_left)
-seg_right <- filter(plot_df,  trunc_right & !trunc_left)
-seg_left  <- filter(plot_df,  trunc_left  & !trunc_right)
-
-# Theme (no grids; outcome labels on the left; ticks above numbers)
-jamafy_linear <- function(base_size = 10,
-                          col_spacing_pt = 26,
-                          row_spacing_pt = 0.5,
-                          strip_size = 9,
-                          axis_title_x_size = 9,
-                          axis_text_x_size  = 8,
-                          tick_len_pt = 3,
-                          tick_color  = "grey35") {
-  theme_minimal(base_size = base_size) +
-    theme(
-      panel.grid.major = element_blank(),
-      panel.grid.minor = element_blank(),
-      axis.text.x       = element_text(size = axis_text_x_size),
-      axis.title.x      = element_text(size = axis_title_x_size, margin = margin(t = 6)),
-      axis.ticks.x      = element_line(color = tick_color, linewidth = 0.3),
-      axis.ticks.length = grid::unit(tick_len_pt, "pt"),
-      axis.line.x       = element_blank(),
-      axis.title.y      = element_blank(),
-      axis.text.y       = element_blank(),
-      axis.ticks.y      = element_blank(),
-      strip.placement   = "outside",
-      strip.text.x      = element_text(size = strip_size, face = "bold",
-                                       lineheight = 1.05, margin = margin(b = 2)),
-      strip.text.y.left = element_text(size = strip_size, face = "bold", angle = 0,
-                                       margin = margin(r = 6)),
-      strip.background  = element_blank(),
-      panel.spacing.x   = grid::unit(col_spacing_pt, "pt"),
-      panel.spacing.y   = grid::unit(row_spacing_pt, "pt"),
-      legend.position   = "none"
-    )
-}
-
-g8 <- ggplot(plot_df, aes(y = 0)) +
-  geom_vline(xintercept = 1.0, linetype = 2, linewidth = 0.4, color = "grey40") +
-  geom_segment(data = seg_ok,
-               aes(x = x_low_plot, xend = x_high_plot, y = 0, yend = 0),
-               linewidth = ci_linewidth, color = "black") +
-  geom_segment(data = seg_right,
-               aes(x = x_low_plot, xend = x_high_plot, y = 0, yend = 0),
-               linewidth = ci_linewidth, color = "black",
-               arrow = grid::arrow(type = "closed", length = grid::unit(arrow_len_mm, "mm"))) +
-  geom_segment(data = seg_left,
-               aes(x = x_high_plot, xend = x_low_plot, y = 0, yend = 0),
-               linewidth = ci_linewidth, color = "black",
-               arrow = grid::arrow(type = "closed", length = grid::unit(arrow_len_mm, "mm"))) +
-  geom_segment(data = filter(plot_df, !trunc_left),
-               aes(x = x_low_plot,  xend = x_low_plot,  y = -cap_y, yend =  cap_y),
-               linewidth = cap_linewidth, color = "black") +
-  geom_segment(data = filter(plot_df, !trunc_right),
-               aes(x = x_high_plot, xend = x_high_plot, y = -cap_y, yend =  cap_y),
-               linewidth = cap_linewidth, color = "black") +
-  geom_point(aes(x = x_or_plot), size = dot_size, color = dot_color) +
-  scale_x_continuous(limits = c(x_min, x_max), breaks = x_brk,
-                     labels = scales::number_format(accuracy = 0.1, trim = TRUE)) +
-  scale_y_continuous(NULL, breaks = NULL, limits = c(-0.05, 0.05), expand = expansion(mult = 0)) +
-  facet_grid(rows = vars(out_lab),
-             cols = vars(wave_pretty),
-             switch = "y",
-             labeller = labeller(wave_pretty = strip_labs)) +
-  labs(x = "Odds Ratio") +
-  jamafy_linear(col_spacing_pt = col_spacing_pt, row_spacing_pt = row_spacing_pt)
-
-print(g8)
-
-# ---- Save ---------------------------------------------------------------------
-out_dir <- "/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk/results/figures"
-dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
-ggsave(file.path(out_dir, "Figure_08_GEE_OR_by_Cluster.pdf"), g8, width = 5.5, height = 4.5, device = cairo_pdf)
-ggsave(file.path(out_dir, "Figure_08_GEE_OR_by_Cluster.png"), g8, width = 5.5, height = 4.5, dpi = 600)
-message("Saved Figure 8 to:\n  ", file.path(out_dir, "Figure_08_GEE_OR_by_Cluster.pdf"),
-        "\n  ", file.path(out_dir, "Figure_08_GEE_OR_by_Cluster.png"))
-
-```
-
