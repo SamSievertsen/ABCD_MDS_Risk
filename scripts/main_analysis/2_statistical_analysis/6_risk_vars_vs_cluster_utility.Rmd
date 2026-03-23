@@ -1,0 +1,1492 @@
+---
+title: "6. Downstream Predictive-Utility Sensitivity Analysis: Cluster Labels vs MVFS vs Full Baseline Risk Variable Set"
+author: "Sam A. Sievertsen"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: false
+    df_print: paged
+params:
+  
+  # I/O
+  repo: !r Sys.getenv("REPO", unset = here::here())
+  data_dir: "data/data_processed/analysis_datasets"
+  risk_data_rel: "data/data_processed/risk_variable_data.csv"
+  out_dir: "results/main_analysis/2_statistical_analysis/6_risk_vars_vs_cluster_utility"
+
+  # Analysis datasets
+  bd_pp_rds: "bd_person_period_k2_z_score.rds"
+  bd_pp_csv: "bd_person_period_k2_z_score.csv"
+  bd_panel_rds: "bd_panel_k2_z_score.rds"
+  bd_panel_csv: "bd_panel_k2_z_score.csv"
+
+  # Outcomes
+  outcomes: !r c("bipolar_I", "bipolar_II", "bd_nos", "any_bsd")
+
+  # Model settings
+  dth_link: "logit"
+  gee_link: "logit"
+  do_gee_interaction: true
+  gee_corstr: "exchangeable"
+  wave_ref_dth: "ses-04A"
+  wave_ref_prev: "ses-02A"
+  seed: 123
+
+  # Diagnostics / memory control
+  run_qic: false
+  save_full_gee_objects: false
+  progress_log_file: "run_progress.log"
+
+  # Risk variables to compare against cluster labels
+  risk_vars: !r c(
+    "mh_p_cbcl__dsm__dep_tscore",
+    "mh_p_cbcl__dsm__anx_tscore",
+    "mh_p_cbcl__synd__attn_tscore",
+    "mh_p_cbcl__synd__aggr_tscore",
+    "mh_p_gbi_sum",
+    "mh_y_upps__nurg_sum",
+    "mh_y_upps__purg_sum",
+    "le_l_coi__addr1__coi__total__national_zscore",
+    "fc_p_nsc__ns_mean",
+    "sds_total",
+    "family_history_depression",
+    "family_history_mania",
+    "bullying",
+    "nc_y_nihtb__lswmt__uncor_score",
+    "nc_y_nihtb__flnkr__uncor_score",
+    "nc_y_nihtb__pttcp__uncor_score",
+    "ACE_index_sum_score")
+    
+  # MVFS variables to compare against cluster labels and full risk set
+  mvfs_vars: !r c(
+    "mh_p_cbcl__dsm__dep_tscore",
+    "mh_p_cbcl__synd__aggr_tscore",
+    "mh_p_cbcl__synd__attn_tscore",
+    "mh_p_cbcl__dsm__anx_tscore",
+    "mh_p_gbi_sum",
+    "sds_total",
+    "family_history_depression")
+---
+
+```{r global, include = FALSE, echo = FALSE, warning = FALSE}
+knitr::opts_chunk$set(cache = FALSE, message = TRUE, warning = TRUE, results = "markup", comment = "")
+```
+
+## 6.1 Set Up
+
+```{r setup, echo = FALSE, warning = FALSE}
+
+## 6.1 Set Up ##
+
+#6.1.1 Load packages
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(readr)
+  library(tibble)
+  library(stringr)
+  library(glue)
+  library(forcats)
+  library(purrr)
+  library(data.table)
+  library(ggplot2)
+  library(geepack)
+  library(emmeans)
+  library(clubSandwich)
+  library(sandwich)
+  library(lmtest)
+  library(broom)
+  library(kableExtra)
+  library(janitor)
+  library(performance)
+  library(here)
+  library(jsonlite)
+})
+
+#6.1.2 Reproducibility and numeric display
+set.seed(params$seed)
+options(scipen = 999, digits = 8)
+options(encoding = "UTF-8")
+knitr::opts_knit$set(encoding = "UTF-8")
+
+#6.1.3 Resolve paths
+REPO <- params$repo
+DATA_DIR <- file.path(REPO, params$data_dir)
+RISK_PATH <- file.path(REPO, params$risk_data_rel)
+OUT_DIR <- file.path(REPO, params$out_dir)
+
+dir.create(OUT_DIR, recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(OUT_DIR, "tables"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(OUT_DIR, "figures"), recursive = TRUE, showWarnings = FALSE)
+dir.create(file.path(OUT_DIR, "rds"), recursive = TRUE, showWarnings = FALSE)
+
+#6.1.4 Safe writers
+write_csv2 <- function(x, path) {
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  readr::write_csv(x, path)
+}
+
+save_rds2 <- function(x, path) {
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  saveRDS(x, path)
+}
+
+#6.1.5 Readers with RDS preference
+read_obj <- function(rds_path, csv_path) {
+  if (file.exists(rds_path)) {
+    readRDS(rds_path)
+  } else {
+    readr::read_csv(csv_path, show_col_types = FALSE)
+  }
+}
+
+#6.1.6 Progress logging helpers
+PROGRESS_LOG <- file.path(OUT_DIR, params$progress_log_file)
+if (file.exists(PROGRESS_LOG)) file.remove(PROGRESS_LOG)
+
+log_msg <- function(...) {
+  txt <- paste0("[", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "] ", paste0(..., collapse = ""))
+  cat(txt, "\n")
+  cat(txt, "\n", file = PROGRESS_LOG, append = TRUE)
+  flush.console()
+}
+
+log_gc <- function(tag = "") {
+  gc_txt <- paste(capture.output(gc()), collapse = " | ")
+  log_msg(tag, " | gc: ", gc_txt)
+}
+
+#6.1.7 Pack GEE objects before saving to reduce memory pressure
+pack_gee_for_rds <- function(fit) {
+  if (isTRUE(params$save_full_gee_objects)) return(fit)
+
+  list(
+    class = class(fit),
+    call = fit$call,
+    formula = stats::formula(fit),
+    coefficients = stats::coef(fit),
+    corstr = tryCatch(fit$geese$corstr, error = function(e) NULL),
+    scale = tryCatch(fit$geese$gamma, error = function(e) NULL))
+}
+
+save_gee_rds2 <- function(fit, path) {
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  saveRDS(pack_gee_for_rds(fit), path)
+}
+
+#6.1.8 Initial checkpoint
+log_msg("6.1 Setup complete")
+log_gc("6.1 After setup")
+
+```
+
+## 6.2 Load Baseline Risk Data and Prepare Predictors
+
+```{r risk data, echo = FALSE, warning = FALSE}
+
+## 6.2 Load Risk Data ##
+
+#6.2.1 Read baseline risk-variable file
+if (!file.exists(RISK_PATH)) stop(glue("Risk data file not found: {RISK_PATH}"))
+risk_df_raw <- readr::read_csv(RISK_PATH, show_col_types = FALSE)
+log_msg("6.2 Loaded risk_variable_data.csv: N=", nrow(risk_df_raw), ", p=", ncol(risk_df_raw))
+
+#6.2.2 Confirm participant_id exists
+if (!("participant_id" %in% names(risk_df_raw))) {
+  stop("participant_id not found in risk_variable_data.csv")
+}
+
+#6.2.3 Confirm all requested full-risk variables exist
+missing_risk_vars <- setdiff(params$risk_vars, names(risk_df_raw))
+if (length(missing_risk_vars) > 0) {
+  stop(glue("Missing full-risk variables in risk_variable_data.csv: {paste(missing_risk_vars, collapse = ', ')}"))
+}
+
+#6.2.4 Confirm all requested MVFS variables exist
+missing_mvfs_vars <- setdiff(params$mvfs_vars, names(risk_df_raw))
+if (length(missing_mvfs_vars) > 0) {
+  stop(glue("Missing MVFS variables in risk_variable_data.csv: {paste(missing_mvfs_vars, collapse = ', ')}"))
+}
+
+#6.2.5 Restrict to ID + requested predictors
+risk_df <- risk_df_raw %>%
+  dplyr::select(participant_id, dplyr::all_of(params$risk_vars)) %>%
+  dplyr::mutate(participant_id = as.character(participant_id))
+
+#6.2.6 Force known categorical variables to factor
+force_known_categoricals <- function(df) {
+  df <- as.data.frame(df)
+
+  known_cat <- intersect(
+    c("family_history_depression", "family_history_mania", "bullying"),
+    names(df))
+
+  for (nm in known_cat) {
+    df[[nm]] <- factor(df[[nm]])
+  }
+
+  df
+}
+
+#6.2.7 Coerce remaining variable classes conservatively
+coerce_types <- function(df) {
+  df <- as.data.frame(df)
+
+  for (nm in names(df)) {
+    x <- df[[nm]]
+
+    #6.2.7.1 Keep numeric as numeric
+    if (is.numeric(x)) next
+
+    #6.2.7.2 Logical to factor
+    if (is.logical(x)) {
+      df[[nm]] <- factor(x, levels = c(FALSE, TRUE))
+      next
+    }
+
+    #6.2.7.3 Character to factor
+    if (is.character(x)) {
+      df[[nm]] <- factor(x)
+      next
+    }
+
+    #6.2.7.4 Small-cardinality integers to factor
+    if (is.integer(x)) {
+      u <- unique(x[!is.na(x)])
+      if (length(u) <= 10) {
+        df[[nm]] <- factor(x)
+      } else {
+        df[[nm]] <- as.numeric(x)
+      }
+      next
+    }
+
+    #6.2.7.5 Fallback
+    if (!is.factor(x)) df[[nm]] <- factor(x)
+  }
+
+  df
+}
+
+#6.2.8 Z-score numeric columns so the raw-variable model operates on comparable scales
+zscore_numeric <- function(df) {
+  df <- as.data.frame(df)
+  is_num <- vapply(df, is.numeric, logical(1))
+
+  for (nm in names(df)[is_num]) {
+    x <- df[[nm]]
+    mu <- mean(x, na.rm = TRUE)
+    sdv <- stats::sd(x, na.rm = TRUE)
+
+    if (is.finite(sdv) && sdv > 0) {
+      df[[nm]] <- (x - mu) / sdv
+    } else {
+      df[[nm]] <- 0
+    }
+  }
+
+  df
+}
+
+#6.2.9 Build processed predictor frame once
+risk_x <- risk_df %>%
+  dplyr::select(-participant_id) %>%
+  force_known_categoricals() %>%
+  coerce_types() %>%
+  zscore_numeric()
+
+risk_proc <- dplyr::bind_cols(
+  tibble::tibble(participant_id = risk_df$participant_id),
+  as_tibble(risk_x))
+
+#6.2.10 Build formula-ready term string for the full 17-variable models
+risk_term_string <- paste(params$risk_vars, collapse = " + ")
+
+#6.2.11 Build formula-ready term string for the MVFS models
+mvfs_term_string <- paste(params$mvfs_vars, collapse = " + ")
+
+#6.2.12 Quick audit table
+risk_type_tbl <- tibble::tibble(
+  variable = names(risk_x),
+  class = vapply(risk_x, function(x) class(x)[1], character(1)))
+
+write_csv2(risk_type_tbl, file.path(OUT_DIR, "tables", "risk_variable_classes_used.csv"))
+
+knitr::kable(
+  risk_type_tbl,
+  caption = "Baseline full-risk variables used in the cluster-vs-MVFS-vs-full utility sensitivity analysis") %>%
+  kableExtra::kable_styling(full_width = FALSE)
+
+#6.2.13 MVFS audit table
+mvfs_type_tbl <- risk_type_tbl %>%
+  dplyr::filter(variable %in% params$mvfs_vars)
+
+write_csv2(mvfs_type_tbl, file.path(OUT_DIR, "tables", "mvfs_variable_classes_used.csv"))
+
+knitr::kable(
+  mvfs_type_tbl,
+  caption = "MVFS variables used in the cluster-vs-MVFS-vs-full utility sensitivity analysis") %>%
+  kableExtra::kable_styling(full_width = FALSE)
+
+#6.2.14 Free large intermediate objects
+rm(risk_df_raw, risk_df, risk_x)
+invisible(gc())
+
+log_msg("6.2 Processed baseline risk predictors: N=", nrow(risk_proc), ", p=", ncol(risk_proc))
+log_gc("6.2 After processing risk predictors")
+
+```
+
+## 6.3 Load DTH Person-Period Data and Build Analysis Frame
+
+```{r dth data, echo = FALSE, warning = FALSE}
+
+## 6.3 Load DTH Data ##
+
+#6.3.1 Read person-period dataset
+bd_pp <- read_obj(
+  file.path(DATA_DIR, params$bd_pp_rds),
+  file.path(DATA_DIR, params$bd_pp_csv)) %>%
+  dplyr::mutate(
+    participant_id = as.character(participant_id),
+    family_id = factor(as.character(family_id)),
+    site_factor = factor(site_factor),
+    cluster = factor(cluster),
+    start_wave = factor(start_wave),
+    end_wave = factor(end_wave),
+    outcome = factor(outcome),
+    sex = factor(sex))
+
+#6.3.2 Keep modeled BD outcomes only
+bd_pp <- bd_pp %>%
+  dplyr::filter(outcome %in% params$outcomes)
+
+#6.3.3 Mirror primary DTH model-ready filtering
+bd_pp_model <- bd_pp %>%
+  dplyr::filter(event %in% c(0L, 1L)) %>%
+  dplyr::filter(!is.na(cluster)) %>%
+  dplyr::filter(!is.na(age_mid), !is.na(sex), !is.na(site_factor), !is.na(family_id))
+
+#6.3.4 Set reference levels to match primary DTH script
+bd_pp_model <- bd_pp_model %>%
+  dplyr::mutate(
+    cluster = forcats::fct_relevel(cluster, "C1"),
+    end_wave = forcats::fct_relevel(end_wave, "ses-02A", "ses-04A", "ses-06A"),
+    sex = {
+      lv <- levels(sex)
+      ref <- if ("Female" %in% lv) "Female" else lv[1]
+      forcats::fct_relevel(sex, ref)
+    },
+    site_factor = {
+      lv <- levels(site_factor)
+      ref <- if ("site01" %in% lv) "site01" else lv[1]
+      forcats::fct_relevel(site_factor, ref)
+    })
+
+#6.3.5 Compute interval length variables used in the main DTH script
+wave_year <- function(w) {
+  as.numeric(stringr::str_extract(as.character(w), "\\d+"))
+}
+
+bd_pp_model <- bd_pp_model %>%
+  dplyr::mutate(
+    dt_years = pmax(wave_year(end_wave) - wave_year(start_wave), 1),
+    log_dt = log(dt_years)) %>%
+  dplyr::filter(is.finite(dt_years), is.finite(log_dt))
+
+#6.3.6 Reproduce baseline-negative risk set for any BSD
+baseline_any_bsd_ids <- bd_pp_model %>%
+  dplyr::filter(outcome == "any_bsd") %>%
+  dplyr::group_by(participant_id) %>%
+  dplyr::summarise(
+    all_na = all(is.na(baseline_status)),
+    baseline_any_bsd = dplyr::if_else(
+      all_na,
+      NA_integer_,
+      as.integer(any(baseline_status == 1L, na.rm = TRUE))),
+    .groups = "drop")
+
+bd_pp_model <- bd_pp_model %>%
+  dplyr::left_join(
+    baseline_any_bsd_ids %>% dplyr::select(participant_id, baseline_any_bsd),
+    by = "participant_id") %>%
+  dplyr::filter(baseline_any_bsd == 0L)
+
+#6.3.7 Censor after first onset within outcome x participant
+if ("interval_index" %in% names(bd_pp_model)) {
+  bd_pp_model <- bd_pp_model %>%
+    dplyr::arrange(outcome, participant_id, interval_index)
+} else {
+  bd_pp_model <- bd_pp_model %>%
+    dplyr::arrange(outcome, participant_id, as.integer(end_wave))
+}
+
+bd_pp_model <- bd_pp_model %>%
+  dplyr::group_by(outcome, participant_id) %>%
+  dplyr::mutate(after_onset = dplyr::lag(cummax(event == 1L), default = FALSE)) %>%
+  dplyr::filter(!after_onset) %>%
+  dplyr::ungroup() %>%
+  dplyr::select(-after_onset)
+
+#6.3.8 Join raw baseline risk variables by participant_id
+bd_pp_model <- bd_pp_model %>%
+  dplyr::left_join(risk_proc, by = "participant_id")
+
+#6.3.9 Require complete data on the full 17-variable predictor block so that cluster, MVFS, and full-risk models are compared on the exact same rows
+n_before_dth_cc <- nrow(bd_pp_model)
+
+bd_pp_model <- bd_pp_model %>%
+  tidyr::drop_na(dplyr::all_of(params$risk_vars))
+
+log_msg(
+  "6.3 DTH complete-case filter on raw predictors: rows ",
+  n_before_dth_cc, " -> ", nrow(bd_pp_model),
+  "; unique IDs = ", dplyr::n_distinct(bd_pp_model$participant_id))
+
+log_gc("6.3 After DTH frame assembly")
+
+#6.3.10 Sanity check table
+dth_size_tbl <- tibble::tibble(
+  Dataset = "DTH sensitivity analysis frame",
+  Rows = nrow(bd_pp_model),
+  Unique_IDs = dplyr::n_distinct(bd_pp_model$participant_id))
+
+knitr::kable(dth_size_tbl, caption = "DTH sensitivity-analysis dataset size") %>%
+  kableExtra::kable_styling(full_width = FALSE)
+
+#6.3.11 Free source person-period object
+rm(bd_pp)
+invisible(gc())
+
+```
+
+## 6.4 Load Prevalence Panel Data and Build Analysis Frame
+
+```{r prevalence data, echo = FALSE, warning = FALSE}
+
+## 6.4 Load Prevalence Data ##
+
+#6.4.1 Read panel dataset
+bd_panel <- read_obj(
+  file.path(DATA_DIR, params$bd_panel_rds),
+  file.path(DATA_DIR, params$bd_panel_csv)) %>%
+  dplyr::mutate(
+    participant_id = as.factor(participant_id),
+    family_id = as.factor(family_id),
+    site_factor = as.factor(site_factor),
+    cluster = factor(cluster, levels = c("C1", "C2")),
+    wave = factor(wave, levels = c("ses-02A", "ses-04A", "ses-06A"), ordered = TRUE),
+    sex = factor(sex, levels = c("Female", "Male")))
+
+#6.4.2 Confirm primary prevalence variables exist
+req_prev <- c("outcome", "status", "wave", "cluster", "sex", "participant_id", "age_wave_gmc")
+missing_prev <- setdiff(req_prev, names(bd_panel))
+if (length(missing_prev) > 0) {
+  stop(glue("Prevalence panel data missing required variables: {paste(missing_prev, collapse = ', ')}"))
+}
+
+#6.4.3 Keep outcomes of interest and join raw predictors
+bd_panel_model <- bd_panel %>%
+  dplyr::filter(outcome %in% params$outcomes) %>%
+  dplyr::left_join(risk_proc, by = "participant_id")
+
+#6.4.4 Require complete data on the full 17-variable predictor block so that cluster, MVFS, and full-risk models are compared on the exact same rows
+n_before_prev_cc <- nrow(bd_panel_model)
+
+bd_panel_model <- bd_panel_model %>%
+  tidyr::drop_na(dplyr::all_of(params$risk_vars))
+
+log_msg(
+  "6.4 Prevalence complete-case filter on raw predictors: rows ",
+  n_before_prev_cc, " -> ", nrow(bd_panel_model),
+  "; unique IDs = ", dplyr::n_distinct(bd_panel_model$participant_id))
+
+log_gc("6.4 After prevalence frame assembly")
+
+#6.4.5 Ensure baseline prevalence covariate exists
+if (!("baseline_status_bd" %in% names(bd_panel_model))) {
+  stop("baseline_status_bd not found in the panel dataset; this sensitivity script currently mirrors the primary GEE prevalence adjustment set.")
+}
+
+#6.4.6 Reapply the same factor structure used in the main prevalence script
+bd_panel_model <- bd_panel_model %>%
+  dplyr::mutate(
+    participant_id = as.factor(participant_id),
+    family_id = as.factor(family_id),
+    site_factor = as.factor(site_factor),
+    cluster = factor(cluster, levels = c("C1", "C2")),
+    wave = factor(wave, levels = c("ses-02A", "ses-04A", "ses-06A"), ordered = TRUE),
+    sex = factor(sex, levels = c("Female", "Male")),
+    baseline_status_bd = as.factor(baseline_status_bd)) %>%
+  dplyr::arrange(outcome, participant_id, wave)
+
+log_msg("6.4 Reapplied main-script factor structure and sorted prevalence rows")
+log_gc("6.4 After prevalence factor reset")
+
+#6.4.7 Sanity check table
+prev_size_tbl <- tibble::tibble(
+  Dataset = "Prevalence sensitivity analysis frame",
+  Rows = nrow(bd_panel_model),
+  Unique_IDs = dplyr::n_distinct(bd_panel_model$participant_id))
+
+knitr::kable(prev_size_tbl, caption = "Prevalence sensitivity-analysis dataset size") %>%
+  kableExtra::kable_styling(full_width = FALSE)
+
+#6.4.8 Free source panel object
+rm(bd_panel)
+invisible(gc())
+
+```
+
+## 6.5 Helpers for Model Fitting and Comparison
+
+```{r helpers, echo = FALSE, warning = FALSE}
+
+## 6.5 Helper Functions ##
+
+#6.5.1 Robust SE (clustered by participant) helpers
+#6.5.1.1 Cluster-robust CR2 inference for glm objects Use this for the low-dimensional cluster-label DTH model so the inferential standard matches the primary manuscript analyses
+tidy_glm_cr2 <- function(fit, cluster_var) {
+  mf <- model.frame(fit)
+  rn <- rownames(mf)
+  idx <- suppressWarnings(as.integer(rn))
+  if (anyNA(idx)) idx <- seq_len(nrow(mf))
+  cluster_aligned <- cluster_var[idx]
+
+  V <- clubSandwich::vcovCR(fit, cluster = cluster_aligned, type = "CR2")
+  ct <- clubSandwich::coef_test(fit, vcov = V, test = "Satterthwaite")
+  ctd <- as.data.frame(ct)
+
+  #6.5.1.1 Ensure a term column exists
+  if (!("term" %in% names(ctd))) {
+    if ("Coef" %in% names(ctd)) {
+      ctd$term <- as.character(ctd$Coef)
+    } else if (!is.null(rownames(ctd)) && all(nzchar(rownames(ctd)))) {
+      ctd$term <- rownames(ctd)
+    } else {
+      ctd$term <- paste0("b", seq_len(nrow(ctd)))
+    }
+  }
+
+  ct2 <- tibble::as_tibble(ctd)
+
+  pcol  <- intersect(c("p_Satt", "p_z", "p_Nd", "p_t", "p"), names(ct2))[1]
+  dfcol <- intersect(c("df_Satt", "df"), names(ct2))[1]
+  betacol <- intersect(c("beta", "Beta", "Estimate"), names(ct2))[1]
+  secol <- intersect(c("SE", "Std. Error", "Std.Error"), names(ct2))[1]
+  cilocol <- intersect(c("CI_L", "CI_L_Satt", "lower", "Lower"), names(ct2))[1]
+  cihicol <- intersect(c("CI_U", "CI_U_Satt", "upper", "Upper"), names(ct2))[1]
+
+  ct2 %>%
+    dplyr::transmute(
+      term = term,
+      estimate = if (!is.na(betacol)) .data[[betacol]] else NA_real_,
+      SE = if (!is.na(secol)) .data[[secol]] else NA_real_,
+      df = if (!is.na(dfcol)) .data[[dfcol]] else NA_real_,
+      OR = exp(estimate),
+      CI_lo = if (!is.na(cilocol)) exp(.data[[cilocol]]) else NA_real_,
+      CI_hi = if (!is.na(cihicol)) exp(.data[[cihicol]]) else NA_real_,
+      p.value = if (!is.na(pcol)) .data[[pcol]] else NA_real_)
+}
+
+#6.5.1.2 Cluster-robust HC1 inference for glm objects
+tidy_glm_hc1 <- function(fit, cluster_var) {
+  mf <- model.frame(fit)
+  rn <- rownames(mf)
+  idx <- suppressWarnings(as.integer(rn))
+  if (anyNA(idx)) idx <- seq_len(nrow(mf))
+  cluster_aligned <- cluster_var[idx]
+
+  V <- sandwich::vcovCL(fit, cluster = cluster_aligned, type = "HC1")
+  b <- stats::coef(fit)
+
+  #6.5.1.2.1 Align vcov to coefficient order
+  V <- V[names(b), names(b), drop = FALSE]
+
+  #6.5.1.2.2 Extract robust SEs and Wald z-tests
+  se <- sqrt(diag(V))
+  z <- b / se
+  p <- 2 * stats::pnorm(-abs(z))
+
+  tibble::tibble(
+    term = names(b),
+    estimate = unname(b),
+    SE = unname(se),
+    df = NA_real_,
+    OR = exp(estimate),
+    CI_lo = exp(estimate - 1.96 * SE),
+    CI_hi = exp(estimate + 1.96 * SE),
+    p.value = unname(p))
+}
+
+#6.5.2 Robust coefficient extraction for GEE
+tidy_gee_robust <- function(fit) {
+  sm <- summary(fit)$coefficients
+  sm <- as.data.frame(sm)
+  sm$term <- rownames(sm)
+
+  est_col <- intersect(c("Estimate"), names(sm))[1]
+  se_col <- intersect(c("Robust S.E.", "Std.err", "Std.error", "san.se"), names(sm))[1]
+  w_col <- intersect(c("Wald", "Wald Statistic"), names(sm))[1]
+  p_col <- intersect(c("Pr(>|W|)", "Pr(>|z|)", "p"), names(sm))[1]
+
+  sm %>%
+    tibble::as_tibble() %>%
+    dplyr::transmute(
+      term = term,
+      estimate = .data[[est_col]],
+      SE = .data[[se_col]],
+      OR = exp(estimate),
+      CI_lo = exp(estimate - 1.96 * SE),
+      CI_hi = exp(estimate + 1.96 * SE),
+      Wald = if (!is.na(w_col)) .data[[w_col]] else NA_real_,
+      p.value = if (!is.na(p_col)) .data[[p_col]] else NA_real_)
+}
+
+#6.5.3 Robust CI column extractor for emmeans
+extract_emm_ci_cols <- function(tb) {
+  nm <- names(tb)
+  if (all(c("lower.CL", "upper.CL") %in% nm)) return(list(low = tb$lower.CL, high = tb$upper.CL))
+  if (all(c("asymp.LCL", "asymp.UCL") %in% nm)) return(list(low = tb$asymp.LCL, high = tb$asymp.UCL))
+  if (all(c("LCL", "UCL") %in% nm)) return(list(low = tb$LCL, high = tb$UCL))
+  list(low = rep(NA_real_, nrow(tb)), high = rep(NA_real_, nrow(tb)))
+}
+
+#6.5.4 Cluster C2 vs C1 odds ratio by wave from emmeans
+or_by_wave_emm <- function(fit, outcome, model_label) {
+  if (inherits(fit, "try-error")) return(NULL)
+
+  emm <- try(emmeans::emmeans(fit, ~ cluster | wave, type = "link"), silent = TRUE)
+  if (inherits(emm, "try-error")) return(NULL)
+
+  sm <- try(
+    emmeans::contrast(emm, method = "revpairwise") %>% summary(infer = TRUE),
+    silent = TRUE)
+  if (inherits(sm, "try-error")) return(NULL)
+
+  tb <- tibble::as_tibble(sm)
+  ci <- extract_emm_ci_cols(tb)
+
+  tibble::tibble(
+    outcome = outcome,
+    model = model_label,
+    wave = as.character(tb$wave),
+    OR = exp(tb$estimate),
+    CI_lo = exp(ci$low),
+    CI_hi = exp(ci$high))
+}
+
+#6.5.5 Likelihood-style pseudo-R2 for glm. Fit objects created through wrappers may not support update(fit, . ~ 1) cleanly because the original data symbol is not recoverable. Refit the null model directly from model.frame(fit) instead
+pseudo_r2_mcfadden <- function(fit) {
+  mf <- model.frame(fit)
+
+  #6.5.5.1 First column of model.frame(fit) is the response
+  resp <- names(mf)[1]
+
+  #6.5.5.2 Refit intercept-only null model on the exact same analytic rows
+  null_form <- stats::as.formula(paste(resp, "~ 1"))
+  fit_null <- glm(
+    formula = null_form,
+    data = mf,
+    family = stats::family(fit))
+
+  ll_full <- as.numeric(logLik(fit))
+  ll_null <- as.numeric(logLik(fit_null))
+
+  1 - (ll_full / ll_null)
+}
+
+#6.5.6 Brier score helper
+brier_score <- function(obs, pr) {
+  mean((as.numeric(obs) - as.numeric(pr))^2, na.rm = TRUE)
+}
+
+#6.5.7 DTH formulas
+build_dth_formula_cluster <- function() {
+  stats::as.formula("event ~ cluster + sex + end_wave + age_mid_between")
+}
+
+build_dth_formula_raw <- function() {
+  stats::as.formula(glue("event ~ sex + end_wave + age_mid_between + {risk_term_string}"))
+}
+
+build_dth_formula_mvfs <- function() {
+  stats::as.formula(glue("event ~ sex + end_wave + age_mid_between + {mvfs_term_string}"))
+}
+
+#6.5.8 Prevalence formulas
+build_prev_formula_cluster <- function() {
+  stats::as.formula("status ~ cluster + wave + sex + baseline_status_bd + age_wave_gmc")
+}
+
+build_prev_formula_cluster_int <- function() {
+  stats::as.formula("status ~ cluster * wave + sex + baseline_status_bd + age_wave_gmc")
+}
+
+build_prev_formula_mvfs <- function() {
+  stats::as.formula(glue("status ~ wave + sex + baseline_status_bd + age_wave_gmc + {mvfs_term_string}"))
+}
+
+build_prev_formula_raw <- function() {
+  stats::as.formula(glue("status ~ wave + sex + baseline_status_bd + age_wave_gmc + {risk_term_string}"))
+}
+
+#6.5.9 DTH model fitter
+fit_dth_glm <- function(formula, data) {
+  glm(
+    formula,
+    data = data,
+    family = binomial(link = params$dth_link),
+    model = TRUE,
+    x = FALSE,
+    y = FALSE)
+}
+
+#6.5.10 Prevalence model fitter
+#6.5.10.1 Mirror the main prevalence script exactly; do not pass waves= or custom geese.control here
+fit_prev_gee <- function(formula, data) {
+  geepack::geeglm(
+    formula,
+    id = participant_id,
+    data = data,
+    family = binomial(link = params$gee_link),
+    corstr = params$gee_corstr,
+    std.err = "san.se")
+}
+
+#6.5.11 Identify all coefficient names belonging to a variable block
+find_block_coef_names <- function(coef_names, vars) {
+  out <- unique(unlist(lapply(vars, function(v) {
+    coef_names[startsWith(coef_names, v)]
+  })))
+
+  setdiff(out, "(Intercept)")
+}
+
+#6.5.12 Omnibus Wald chi-square for the raw predictor block in glm using HC1
+glm_block_test_hc1 <- function(fit, vars, cluster_var) {
+  mf <- model.frame(fit)
+  rn <- rownames(mf)
+  idx <- suppressWarnings(as.integer(rn))
+  if (anyNA(idx)) idx <- seq_len(nrow(mf))
+  cluster_aligned <- cluster_var[idx]
+
+  keep <- find_block_coef_names(names(stats::coef(fit)), vars)
+
+  if (length(keep) == 0) {
+    return(tibble::tibble(
+      chisq = NA_real_,
+      df = NA_real_,
+      p.value = NA_real_,
+      n_terms = 0L))
+  }
+
+  V <- sandwich::vcovCL(fit, cluster = cluster_aligned, type = "HC1")
+  V <- V[keep, keep, drop = FALSE]
+  b <- stats::coef(fit)[keep]
+
+  stat <- tryCatch(
+    as.numeric(t(b) %*% solve(V) %*% b),
+    error = function(e) NA_real_)
+
+  df <- length(keep)
+  p <- if (is.finite(stat)) stats::pchisq(stat, df = df, lower.tail = FALSE) else NA_real_
+
+  tibble::tibble(
+    chisq = stat,
+    df = df,
+    p.value = p,
+    n_terms = df)
+}
+
+#6.5.13 Omnibus Wald test for the raw predictor block in GEE
+gee_block_test <- function(fit, vars) {
+  sm <- summary(fit)$coefficients
+  rn <- rownames(sm)
+  keep <- find_block_coef_names(rn, vars)
+
+  if (length(keep) == 0) {
+    return(tibble::tibble(
+      chisq = NA_real_,
+      df = NA_real_,
+      p.value = NA_real_,
+      n_terms = 0L))
+  }
+
+  b <- stats::coef(fit)[keep]
+  V <- vcov(fit)[keep, keep, drop = FALSE]
+
+  stat <- tryCatch(
+    as.numeric(t(b) %*% solve(V) %*% b),
+    error = function(e) NA_real_)
+
+  df <- length(keep)
+  p <- if (is.finite(stat)) stats::pchisq(stat, df = df, lower.tail = FALSE) else NA_real_
+
+  tibble::tibble(
+    chisq = stat,
+    df = df,
+    p.value = p,
+    n_terms = df)
+}
+
+#6.5.14 Predicted-probability helper for cluster models
+pred_cluster_by_wave <- function(fit, data, wave_var, age_var, baseline_var = NULL) {
+  ref <- expand.grid(
+    cluster = levels(data$cluster),
+    wave_tmp = levels(data[[wave_var]]),
+    sex = levels(data$sex)[1],
+    stringsAsFactors = FALSE)
+
+  names(ref)[names(ref) == "wave_tmp"] <- wave_var
+  ref[[wave_var]] <- factor(ref[[wave_var]], levels = levels(data[[wave_var]]))
+  ref[[age_var]] <- 0
+
+  if (!is.null(baseline_var)) {
+    ref[[baseline_var]] <- levels(data[[baseline_var]])[1]
+    ref[[baseline_var]] <- factor(ref[[baseline_var]], levels = levels(data[[baseline_var]]))
+  }
+
+  ref$pred <- as.numeric(predict(fit, newdata = ref, type = "response"))
+  ref
+}
+
+```
+
+## 6.6 Primary DTH Sensitivity Analysis: Cluster Labels vs Raw Predictors
+
+```{r dth models, echo = FALSE, warning = FALSE}
+
+## 6.6 DTH Sensitivity Analysis ##
+
+dth_results <- list()
+dth_coef_tbl <- list()
+dth_pred_tbl <- list()
+
+for (out in params$outcomes) {
+
+  log_msg("6.6 Starting DTH outcome: ", out)
+
+  #6.6.1 Subset outcome-specific data
+  dat_o <- bd_pp_model %>%
+    dplyr::filter(outcome == out) %>%
+    droplevels()
+
+  if (nrow(dat_o) == 0) {
+    log_msg("6.6 ", out, ": no rows available after filtering; skipping")
+    next
+  }
+
+  #6.6.2 Create minimal model-specific datasets
+  dat_o_cluster <- dat_o %>%
+  dplyr::select(participant_id, event, cluster, sex, end_wave, age_mid_between)
+
+  dat_o_mvfs <- dat_o %>%
+  dplyr::select(participant_id, event, sex, end_wave, age_mid_between, dplyr::all_of(params$mvfs_vars))
+
+  dat_o_raw <- dat_o %>%
+  dplyr::select(participant_id, event, sex, end_wave, age_mid_between, dplyr::all_of(params$risk_vars))
+
+  log_msg(
+    "6.6 ", out,
+    ": rows=", nrow(dat_o_cluster),
+    ", ids=", dplyr::n_distinct(dat_o_cluster$participant_id),
+    ", events=", sum(dat_o_cluster$event == 1L, na.rm = TRUE))
+  
+  log_gc(paste0("6.6 ", out, " before fits"))
+
+  #6.6.3 Fit cluster-label model
+  log_msg("6.6 ", out, ": fitting cluster GLM")
+  fit_cluster <- tryCatch(
+    fit_dth_glm(build_dth_formula_cluster(), dat_o_cluster),
+    error = function(e) {
+      log_msg("6.6 ", out, ": cluster GLM FAILED - ", conditionMessage(e))
+      stop(e)
+    })
+  
+  log_msg("6.6 ", out, ": cluster GLM fit complete")
+  
+  #6.6.4 Fit MVFS-variable model
+  log_msg("6.6 ", out, ": fitting MVFS GLM")
+  fit_mvfs <- tryCatch(
+    fit_dth_glm(build_dth_formula_mvfs(), dat_o_mvfs),
+    error = function(e) {
+      log_msg("6.6 ", out, ": MVFS GLM FAILED - ", conditionMessage(e))
+      stop(e)
+    })
+
+  log_msg("6.6 ", out, ": MVFS GLM fit complete")
+
+  #6.6.5 Fit raw-variable model
+  log_msg("6.6 ", out, ": fitting raw GLM")
+  fit_raw <- tryCatch(
+    fit_dth_glm(build_dth_formula_raw(), dat_o_raw),
+    error = function(e) {
+      log_msg("6.6 ", out, ": raw GLM FAILED - ", conditionMessage(e))
+      stop(e)
+    })
+  
+  log_msg("6.6 ", out, ": raw GLM fit complete")
+  log_gc(paste0("6.6 ", out, " after GLM fits"))
+
+ #6.6.6 Robust inference table for cluster-label model. Use CR2 to match the primary manuscript DTH inference standard, and fall back to HC1 only if CR2 fails unexpectedly
+  log_msg("6.6 ", out, ": extracting cluster-model robust coefficients (CR2 preferred)")
+  
+  coef_cluster <- tryCatch(
+    tidy_glm_cr2(fit_cluster, cluster_var = dat_o_cluster$participant_id) %>%
+      dplyr::mutate(
+        outcome = out,
+        model = "cluster_model",
+        se_type = "CR2",
+        .before = 1),
+    error = function(e) {
+      log_msg("6.6 ", out, ": CR2 coefficient extraction FAILED - ",
+              conditionMessage(e), "; falling back to HC1")
+  
+      tidy_glm_hc1(fit_cluster, cluster_var = dat_o_cluster$participant_id) %>%
+        dplyr::mutate(
+          outcome = out,
+          model = "cluster_model",
+          se_type = "HC1",
+          .before = 1)
+    })
+  
+  dth_coef_tbl[[paste0(out, "_cluster")]] <- coef_cluster
+  log_msg("6.6 ", out, ": cluster-model robust coefficients extracted")
+
+  #6.6.7 Block test for raw predictor set
+  log_msg("6.6 ", out, ": running raw-predictor HC1 block test")
+  raw_block <- tryCatch(
+    glm_block_test_hc1(
+      fit = fit_raw,
+      vars = params$risk_vars,
+      cluster_var = dat_o_raw$participant_id),
+    error = function(e) {
+      log_msg("6.6 ", out, ": raw HC1 block test FAILED - ", conditionMessage(e))
+      tibble::tibble(chisq = NA_real_, df = NA_real_, p.value = NA_real_, n_terms = NA_integer_)
+    })
+  
+  #6.6.8 Run MVFS-predictor HC1 block test
+  log_msg("6.6 ", out, ": running MVFS HC1 block test")
+  mvfs_block <- tryCatch(
+    glm_block_test_hc1(
+      fit = fit_mvfs,
+      vars = params$mvfs_vars,
+      cluster_var = dat_o_mvfs$participant_id),
+    error = function(e) {
+      log_msg("6.6 ", out, ": MVFS HC1 block test FAILED - ", conditionMessage(e))
+      tibble::tibble(chisq = NA_real_, df = NA_real_, p.value = NA_real_, n_terms = NA_integer_)
+    })
+
+  log_msg("6.6 ", out, ": MVFS HC1 block test complete")
+  
+  log_msg("6.6 ", out, ": raw-predictor HC1 block test complete")
+
+  #6.6.9 Model-level summary comparison
+  dth_results[[out]] <- tibble::tibble(
+    outcome = out,
+    n_rows = nrow(dat_o_cluster),
+    n_ids = dplyr::n_distinct(dat_o_cluster$participant_id),
+    n_events = sum(dat_o_cluster$event == 1L, na.rm = TRUE),
+  
+    cluster_aic = AIC(fit_cluster),
+    cluster_bic = BIC(fit_cluster),
+    cluster_loglik = as.numeric(logLik(fit_cluster)),
+    cluster_pseudo_r2 = pseudo_r2_mcfadden(fit_cluster),
+    cluster_brier = brier_score(dat_o_cluster$event, predict(fit_cluster, type = "response")),
+  
+    mvfs_aic = AIC(fit_mvfs),
+    mvfs_bic = BIC(fit_mvfs),
+    mvfs_loglik = as.numeric(logLik(fit_mvfs)),
+    mvfs_pseudo_r2 = pseudo_r2_mcfadden(fit_mvfs),
+    mvfs_brier = brier_score(dat_o_mvfs$event, predict(fit_mvfs, type = "response")),
+  
+    raw_aic = AIC(fit_raw),
+    raw_bic = BIC(fit_raw),
+    raw_loglik = as.numeric(logLik(fit_raw)),
+    raw_pseudo_r2 = pseudo_r2_mcfadden(fit_raw),
+    raw_brier = brier_score(dat_o_raw$event, predict(fit_raw, type = "response")),
+  
+    delta_aic_mvfs_minus_cluster = AIC(fit_mvfs) - AIC(fit_cluster),
+    delta_bic_mvfs_minus_cluster = BIC(fit_mvfs) - BIC(fit_cluster),
+    delta_pseudo_r2_mvfs_minus_cluster = pseudo_r2_mcfadden(fit_mvfs) - pseudo_r2_mcfadden(fit_cluster),
+    delta_brier_mvfs_minus_cluster =
+      brier_score(dat_o_mvfs$event, predict(fit_mvfs, type = "response")) -
+      brier_score(dat_o_cluster$event, predict(fit_cluster, type = "response")),
+  
+    delta_aic_raw_minus_cluster = AIC(fit_raw) - AIC(fit_cluster),
+    delta_bic_raw_minus_cluster = BIC(fit_raw) - BIC(fit_cluster),
+    delta_pseudo_r2_raw_minus_cluster = pseudo_r2_mcfadden(fit_raw) - pseudo_r2_mcfadden(fit_cluster),
+    delta_brier_raw_minus_cluster =
+      brier_score(dat_o_raw$event, predict(fit_raw, type = "response")) -
+      brier_score(dat_o_cluster$event, predict(fit_cluster, type = "response")),
+  
+    delta_aic_raw_minus_mvfs = AIC(fit_raw) - AIC(fit_mvfs),
+    delta_bic_raw_minus_mvfs = BIC(fit_raw) - BIC(fit_mvfs),
+    delta_pseudo_r2_raw_minus_mvfs = pseudo_r2_mcfadden(fit_raw) - pseudo_r2_mcfadden(fit_mvfs),
+    delta_brier_raw_minus_mvfs =
+      brier_score(dat_o_raw$event, predict(fit_raw, type = "response")) -
+      brier_score(dat_o_mvfs$event, predict(fit_mvfs, type = "response")),
+  
+    mvfs_block_chisq = mvfs_block$chisq,
+    mvfs_block_df = mvfs_block$df,
+    mvfs_block_p = mvfs_block$p.value,
+    mvfs_block_n_terms = mvfs_block$n_terms,
+  
+    raw_block_chisq = raw_block$chisq,
+    raw_block_df = raw_block$df,
+    raw_block_p = raw_block$p.value,
+    raw_block_n_terms = raw_block$n_terms)
+
+  #6.6.10 Predicted hazard by cluster across waves for manuscript interpretation
+  dth_pred_tbl[[out]] <- pred_cluster_by_wave(
+    fit = fit_cluster,
+    data = dat_o_cluster,
+    wave_var = "end_wave",
+    age_var = "age_mid_between") %>%
+    dplyr::mutate(
+      outcome = out,
+      model = "cluster_model",
+      .before = 1)
+
+  #6.6.11 Save model objects
+  log_msg("6.6 ", out, ": saving GLM RDS files")
+  save_rds2(fit_cluster, file.path(OUT_DIR, "rds", glue("dth_cluster_model_{out}.rds")))
+  save_rds2(fit_mvfs, file.path(OUT_DIR, "rds", glue("dth_mvfs_model_{out}.rds")))
+  save_rds2(fit_raw, file.path(OUT_DIR, "rds", glue("dth_raw_model_{out}.rds")))
+  log_msg("6.6 ", out, ": GLM RDS files saved")
+
+  #6.6.12 Cleanup
+  rm(dat_o, dat_o_cluster, dat_o_mvfs, dat_o_raw,
+   fit_cluster, fit_mvfs, fit_raw,
+   coef_cluster, mvfs_block, raw_block)
+  invisible(gc())
+  log_gc(paste0("6.6 ", out, " end outcome"))
+}
+
+dth_summary_tbl <- bind_rows(dth_results)
+dth_coef_tbl <- bind_rows(dth_coef_tbl)
+dth_pred_tbl <- bind_rows(dth_pred_tbl)
+
+write_csv2(dth_summary_tbl, file.path(OUT_DIR, "tables", "dth_cluster_vs_mvfs_vs_raw_model_summary.csv"))
+write_csv2(dth_coef_tbl, file.path(OUT_DIR, "tables", "dth_cluster_model_robust_coefficients.csv"))
+write_csv2(dth_pred_tbl, file.path(OUT_DIR, "tables", "dth_cluster_model_predicted_hazards_by_wave.csv"))
+
+log_msg("6.6 DTH section complete")
+log_gc("6.6 After DTH section")
+
+knitr::kable(
+  dth_summary_tbl,
+  digits = 3,
+  caption = "DTH sensitivity analysis: cluster-label model vs MVFS model vs full baseline predictor model") %>%
+  kableExtra::kable_styling(full_width = FALSE)
+
+```
+
+## 6.7 Primary Prevalence Sensitivity Analysis: Cluster Labels vs Raw Predictors
+
+```{r prevalence models, echo = FALSE, warning = FALSE}
+
+## 6.7 Prevalence Sensitivity Analysis ##
+
+prev_results <- list()
+prev_coef_tbl <- list()
+prev_pred_tbl <- list()
+prev_or_by_wave_tbl <- list()
+
+for (out in params$outcomes) {
+
+  log_msg("6.7 Starting prevalence outcome: ", out)
+
+  #6.7.1 Subset outcome-specific data
+  dat_o <- bd_panel_model %>%
+    dplyr::filter(outcome == out) %>%
+    droplevels()
+
+  if (nrow(dat_o) == 0) {
+    log_msg("6.7 ", out, ": no rows available after filtering; skipping")
+    next
+  }
+
+  #6.7.2 Create minimal model-specific datasets
+  dat_o_cluster <- dat_o %>%
+  dplyr::select(participant_id, status, wave, cluster, sex, baseline_status_bd, age_wave_gmc)
+
+  dat_o_mvfs <- dat_o %>%
+    dplyr::select(participant_id, status, wave, sex, baseline_status_bd, age_wave_gmc, dplyr::all_of(params$mvfs_vars))
+
+  dat_o_raw <- dat_o %>%
+    dplyr::select(participant_id, status, wave, sex, baseline_status_bd, age_wave_gmc, dplyr::all_of(params$risk_vars))
+
+  log_msg(
+    "6.7 ", out,
+    ": rows=", nrow(dat_o_cluster),
+    ", ids=", dplyr::n_distinct(dat_o_cluster$participant_id),
+    ", positives=", sum(dat_o_cluster$status == 1L, na.rm = TRUE))
+  
+  log_gc(paste0("6.7 ", out, " before fits"))
+
+  #6.7.3 Fit cluster-label GEE
+  log_msg("6.7 ", out, ": fitting cluster GEE")
+  fit_cluster <- tryCatch(
+    fit_prev_gee(build_prev_formula_cluster(), dat_o_cluster),
+    error = function(e) {
+      log_msg("6.7 ", out, ": cluster GEE FAILED - ", conditionMessage(e))
+      stop(e)
+    })
+  
+  log_msg("6.7 ", out, ": cluster GEE fit complete")
+  
+  #6.7.4 Fit cluster x wave interaction GEE for timepoint-specific cluster ORs
+  if (isTRUE(params$do_gee_interaction)) {
+    log_msg("6.7 ", out, ": fitting cluster x wave interaction GEE")
+  
+    fit_cluster_int <- tryCatch(
+      fit_prev_gee(build_prev_formula_cluster_int(), dat_o_cluster),
+      error = function(e) {
+        log_msg("6.7 ", out, ": cluster x wave interaction GEE FAILED - ", conditionMessage(e))
+        structure("cluster_interaction_failed", class = "try-error")
+      }
+    )
+  
+    if (!inherits(fit_cluster_int, "try-error")) {
+      log_msg("6.7 ", out, ": cluster x wave interaction GEE fit complete")
+  
+      prev_or_by_wave_tbl[[out]] <- or_by_wave_emm(
+        fit = fit_cluster_int,
+        outcome = out,
+        model_label = "cluster_model_int"
+      )
+    }
+  } else {
+    fit_cluster_int <- structure("cluster_interaction_off", class = "try-error")
+  }
+  
+  #6.7.5 Fit MVFS-variable GEE
+  log_msg("6.7 ", out, ": fitting MVFS GEE")
+  fit_mvfs <- tryCatch(
+    fit_prev_gee(build_prev_formula_mvfs(), dat_o_mvfs),
+    error = function(e) {
+      log_msg("6.7 ", out, ": MVFS GEE FAILED - ", conditionMessage(e))
+      stop(e)
+    })
+
+  log_msg("6.7 ", out, ": MVFS GEE fit complete")
+
+  #6.7.6 Fit raw-variable GEE
+  log_msg("6.7 ", out, ": fitting raw GEE")
+  fit_raw <- tryCatch(
+    fit_prev_gee(build_prev_formula_raw(), dat_o_raw),
+    error = function(e) {
+      log_msg("6.7 ", out, ": raw GEE FAILED - ", conditionMessage(e))
+      stop(e)
+    })
+  
+  log_msg("6.7 ", out, ": raw GEE fit complete")
+  log_gc(paste0("6.7 ", out, " after GEE fits"))
+
+  #6.7.7 Robust coefficient table for cluster-label model
+  log_msg("6.7 ", out, ": extracting cluster-model GEE coefficients")
+  coef_cluster <- tidy_gee_robust(fit_cluster) %>%
+    dplyr::mutate(
+      outcome = out,
+      model = "cluster_model",
+      .before = 1)
+
+  prev_coef_tbl[[paste0(out, "_cluster")]] <- coef_cluster
+
+  #6.7.8 Block test for raw predictor set
+  log_msg("6.7 ", out, ": running raw-predictor GEE block test")
+  raw_block <- tryCatch(
+    gee_block_test(fit_raw, vars = params$risk_vars),
+    error = function(e) {
+      log_msg("6.7 ", out, ": raw GEE block test FAILED - ", conditionMessage(e))
+      tibble::tibble(chisq = NA_real_, df = NA_real_, p.value = NA_real_, n_terms = NA_integer_)
+    })
+  
+  log_msg("6.7 ", out, ": raw-predictor GEE block test complete")
+  
+  #6.7.9 Run MVFS-predictor GEE block test
+  log_msg("6.7 ", out, ": running MVFS GEE block test")
+  mvfs_block <- tryCatch(
+    gee_block_test(fit_mvfs, vars = params$mvfs_vars),
+    error = function(e) {
+      log_msg("6.7 ", out, ": MVFS GEE block test FAILED - ", conditionMessage(e))
+      tibble::tibble(chisq = NA_real_, df = NA_real_, p.value = NA_real_, n_terms = NA_integer_)
+    })
+
+  log_msg("6.7 ", out, ": MVFS GEE block test complete")
+
+  #6.7.10 QIC only if explicitly requested
+  if (isTRUE(params$run_qic)) {
+    log_msg("6.7 ", out, ": computing QIC")
+    qic_cluster <- tryCatch(geepack::QIC(fit_cluster), error = function(e) NULL)
+    qic_mvfs <- tryCatch(geepack::QIC(fit_mvfs), error = function(e) NULL)
+    qic_raw <- tryCatch(geepack::QIC(fit_raw), error = function(e) NULL)
+
+    qic_cluster_val <- if (!is.null(qic_cluster)) unname(qic_cluster[1]) else NA_real_
+    qic_mvfs_val <- if (!is.null(qic_mvfs)) unname(qic_mvfs[1]) else NA_real_
+    qic_raw_val <- if (!is.null(qic_raw)) unname(qic_raw[1]) else NA_real_
+    log_msg("6.7 ", out, ": QIC complete")
+  } else {
+    qic_cluster_val <- NA_real_
+    qic_mvfs_val <- NA_real_
+    qic_raw_val <- NA_real_
+    log_msg("6.7 ", out, ": skipping QIC because params$run_qic = FALSE")
+  }
+
+  #6.7.11 Model-level comparison
+  prev_results[[out]] <- tibble::tibble(
+    outcome = out,
+    n_rows = nrow(dat_o_cluster),
+    n_ids = dplyr::n_distinct(dat_o_cluster$participant_id),
+    n_positive = sum(dat_o_cluster$status == 1L, na.rm = TRUE),
+
+    cluster_qic = qic_cluster_val,
+    cluster_brier = brier_score(dat_o_cluster$status, predict(fit_cluster, type = "response")),
+
+    mvfs_qic = qic_mvfs_val,
+    mvfs_brier = brier_score(dat_o_mvfs$status, predict(fit_mvfs, type = "response")),
+
+    raw_qic = qic_raw_val,
+    raw_brier = brier_score(dat_o_raw$status, predict(fit_raw, type = "response")),
+
+    delta_qic_mvfs_minus_cluster = qic_mvfs_val - qic_cluster_val,
+    delta_brier_mvfs_minus_cluster =
+      brier_score(dat_o_mvfs$status, predict(fit_mvfs, type = "response")) -
+      brier_score(dat_o_cluster$status, predict(fit_cluster, type = "response")),
+
+    delta_qic_raw_minus_cluster = qic_raw_val - qic_cluster_val,
+    delta_brier_raw_minus_cluster =
+      brier_score(dat_o_raw$status, predict(fit_raw, type = "response")) -
+      brier_score(dat_o_cluster$status, predict(fit_cluster, type = "response")),
+
+    delta_qic_raw_minus_mvfs = qic_raw_val - qic_mvfs_val,
+    delta_brier_raw_minus_mvfs =
+      brier_score(dat_o_raw$status, predict(fit_raw, type = "response")) -
+      brier_score(dat_o_mvfs$status, predict(fit_mvfs, type = "response")),
+
+    mvfs_block_chisq = mvfs_block$chisq,
+    mvfs_block_df = mvfs_block$df,
+    mvfs_block_p = mvfs_block$p.value,
+    mvfs_block_n_terms = mvfs_block$n_terms,
+
+    raw_block_chisq = raw_block$chisq,
+    raw_block_df = raw_block$df,
+    raw_block_p = raw_block$p.value,
+    raw_block_n_terms = raw_block$n_terms)
+
+  #6.7.12 Predicted prevalence by cluster across waves
+  prev_pred_tbl[[out]] <- pred_cluster_by_wave(
+    fit = fit_cluster,
+    data = dat_o_cluster,
+    wave_var = "wave",
+    age_var = "age_wave_gmc",
+    baseline_var = "baseline_status_bd") %>%
+    dplyr::mutate(
+      outcome = out,
+      model = "cluster_model",
+      .before = 1)
+
+  #6.7.13 Save model objects
+  log_msg("6.7 ", out, ": saving GEE RDS files")
+  save_gee_rds2(fit_cluster, file.path(OUT_DIR, "rds", glue("prev_cluster_model_{out}.rds")))
+  
+  if (!inherits(fit_cluster_int, "try-error")) {
+    save_gee_rds2(fit_cluster_int, file.path(OUT_DIR, "rds", glue("prev_cluster_int_model_{out}.rds")))
+  }
+  
+  save_gee_rds2(fit_mvfs, file.path(OUT_DIR, "rds", glue("prev_mvfs_model_{out}.rds")))
+  save_gee_rds2(fit_raw, file.path(OUT_DIR, "rds", glue("prev_raw_model_{out}.rds")))
+  log_msg("6.7 ", out, ": GEE RDS files saved")
+
+  #6.7.14 Cleanup
+  rm(dat_o, dat_o_cluster, dat_o_mvfs, dat_o_raw,
+   fit_cluster, fit_cluster_int, fit_mvfs, fit_raw,
+   coef_cluster, mvfs_block, raw_block)
+  invisible(gc())
+  log_gc(paste0("6.7 ", out, " end outcome"))
+}
+
+prev_summary_tbl <- bind_rows(prev_results)
+prev_coef_tbl <- bind_rows(prev_coef_tbl)
+prev_pred_tbl <- bind_rows(prev_pred_tbl)
+prev_or_by_wave_tbl <- bind_rows(prev_or_by_wave_tbl)
+
+write_csv2(prev_summary_tbl, file.path(OUT_DIR, "tables", "prevalence_cluster_vs_mvfs_vs_raw_model_summary.csv"))
+write_csv2(prev_coef_tbl, file.path(OUT_DIR, "tables", "prevalence_cluster_model_coefficients.csv"))
+write_csv2(prev_pred_tbl, file.path(OUT_DIR, "tables", "prevalence_cluster_model_predicted_probabilities_by_wave.csv"))
+write_csv2(prev_or_by_wave_tbl, file.path(OUT_DIR, "tables", "prevalence_cluster_interaction_OR_by_wave.csv"))
+
+log_msg("6.7 Prevalence section complete")
+log_gc("6.7 After prevalence section")
+
+knitr::kable(
+  prev_summary_tbl,
+  digits = 3,
+  caption = "Prevalence sensitivity analysis: cluster-label model vs MVFS model vs full baseline predictor model") %>%
+  kableExtra::kable_styling(full_width = FALSE)
+
+if (nrow(prev_or_by_wave_tbl) > 0) {
+  knitr::kable(
+    prev_or_by_wave_tbl,
+    digits = 3,
+    caption = "Prevalence cluster C2 vs C1 odds ratios by wave from the cluster x wave interaction GEE") %>%
+    kableExtra::kable_styling(full_width = FALSE)
+}
+
+```
+
+## 6.8 Extract Cluster-Main-Effect Results for Manuscript Use
+
+```{r manuscript tables, echo = FALSE, warning = FALSE}
+
+## 6.8 Cluster Main-Effect Tables ##
+
+#6.8.1 DTH cluster coefficient
+dth_cluster_effects <- dth_coef_tbl %>%
+  dplyr::filter(term == "clusterC2") %>%
+  dplyr::select(outcome, model, se_type, term, estimate, SE, df, OR, CI_lo, CI_hi, p.value)
+
+#6.8.2 Prevalence cluster coefficient
+prev_cluster_effects <- prev_coef_tbl %>%
+  dplyr::filter(term == "clusterC2") %>%
+  dplyr::select(outcome, model, term, estimate, SE, OR, CI_lo, CI_hi, p.value)
+
+#6.8.3 Write manuscript-facing extracts
+write_csv2(dth_cluster_effects, file.path(OUT_DIR, "tables", "dth_cluster_main_effects_for_manuscript.csv"))
+write_csv2(prev_cluster_effects, file.path(OUT_DIR, "tables", "prevalence_cluster_main_effects_for_manuscript.csv"))
+
+#6.8.4 Print tables
+knitr::kable(
+  dth_cluster_effects,
+  digits = 3,
+  caption = "DTH: higher-risk cluster main effect (C2 vs C1) from the cluster-label utility model (CR2 preferred; HC1 fallback only if needed)") %>%
+  kableExtra::kable_styling(full_width = FALSE)
+
+knitr::kable(
+  prev_cluster_effects,
+  digits = 3,
+  caption = "Prevalence: higher-risk cluster main effect (C2 vs C1) from the primary cluster-label model") %>%
+  kableExtra::kable_styling(full_width = FALSE)
+
+```
+
+## 6.9 Visualization of Cluster-Model Predicted Risks Across Waves
+
+```{r figures, echo = FALSE, warning = FALSE, fig.width = 8, fig.height = 6}
+
+## 6.9 Predicted Probabilities by Wave for Cluster Models ##
+
+#6.9.1 DTH predicted hazard plot
+p_dth <- dth_pred_tbl %>%
+  dplyr::mutate(
+    end_wave = factor(end_wave, levels = c("ses-02A", "ses-04A", "ses-06A"))) %>%
+  ggplot(aes(x = end_wave, y = pred, color = cluster, group = cluster)) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 1.8) +
+  facet_wrap(~ outcome, scales = "free_y") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 0.1)) +
+  theme_classic(base_size = 11) +
+  labs(
+    title = "DTH cluster-model predicted first-onset hazard by wave",
+    x = "Wave",
+    y = "Predicted hazard",
+    color = "Cluster")
+
+ggsave(filename = file.path(OUT_DIR, "figures", "dth_cluster_model_predicted_hazards_by_wave.png"), plot = p_dth, width = 8, height = 6, dpi = 600, bg = "white")
+
+print(p_dth)
+
+#6.9.2 Prevalence predicted probability plot
+p_prev <- prev_pred_tbl %>%
+  dplyr::mutate(
+    wave = factor(wave, levels = c("ses-02A", "ses-04A", "ses-06A"))) %>%
+  ggplot(aes(x = wave, y = pred, color = cluster, group = cluster)) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 1.8) +
+  facet_wrap(~ outcome, scales = "free_y") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 0.1)) +
+  theme_classic(base_size = 11) +
+  labs(
+    title = "Prevalence cluster-model predicted probability by wave",
+    x = "Wave",
+    y = "Predicted probability",
+    color = "Cluster")
+
+ggsave(filename = file.path(OUT_DIR, "figures", "prevalence_cluster_model_predicted_probabilities_by_wave.png"), plot = p_prev, width = 8, height = 6, dpi = 600, bg = "white")
+
+print(p_prev)
+
+```
+
+## 6.10 Plain-Language Takeaway Table
+
+```{r takeaway table, echo = FALSE, warning = FALSE}
+
+## 6.10 Compact Takeaway Table ##
+
+#6.10.1 Combine DTH and prevalence model-comparison summaries
+takeaway_tbl <- bind_rows(
+  dth_summary_tbl %>%
+    dplyr::transmute(
+      domain = "DTH",
+      outcome,
+      cluster_fit = cluster_pseudo_r2,
+      mvfs_fit = mvfs_pseudo_r2,
+      raw_fit = raw_pseudo_r2,
+      delta_mvfs_minus_cluster = delta_pseudo_r2_mvfs_minus_cluster,
+      delta_raw_minus_cluster = delta_pseudo_r2_raw_minus_cluster,
+      delta_raw_minus_mvfs = delta_pseudo_r2_raw_minus_mvfs,
+      mvfs_block_p = mvfs_block_p,
+      raw_block_p = raw_block_p),
+  prev_summary_tbl %>%
+    dplyr::transmute(
+      domain = "Prevalence",
+      outcome,
+      cluster_fit = cluster_qic,
+      mvfs_fit = mvfs_qic,
+      raw_fit = raw_qic,
+      delta_mvfs_minus_cluster = delta_qic_mvfs_minus_cluster,
+      delta_raw_minus_cluster = delta_qic_raw_minus_cluster,
+      delta_raw_minus_mvfs = delta_qic_raw_minus_mvfs,
+      mvfs_block_p = mvfs_block_p,
+      raw_block_p = raw_block_p))
+
+write_csv2(takeaway_tbl, file.path(OUT_DIR, "tables", "cluster_vs_raw_takeaway_table.csv"))
+
+knitr::kable(
+  takeaway_tbl,
+  digits = 3,
+  caption = "Compact comparison of cluster-label, MVFS, and full baseline predictor models") %>%
+  kableExtra::kable_styling(full_width = FALSE)
+
+```
+
+## 6.11 Reproducibility Log
+
+```{r reproducibility, echo = FALSE, warning = FALSE}
+
+## 6.11 Reproducibility Log ##
+
+log <- list(
+  timestamp = as.character(Sys.time()),
+  repo = REPO,
+  data_dir = DATA_DIR,
+  risk_data_path = RISK_PATH,
+  out_dir = OUT_DIR,
+  outcomes = params$outcomes,
+  dth_link = params$dth_link,
+  gee_link = params$gee_link,
+  do_gee_interaction = params$do_gee_interaction,
+  gee_corstr = params$gee_corstr,
+  run_qic = params$run_qic,
+  save_full_gee_objects = params$save_full_gee_objects,
+  progress_log_file = params$progress_log_file,
+  risk_vars = params$risk_vars,
+  mvfs_vars = params$mvfs_vars)
+
+writeLines(jsonlite::toJSON(log, pretty = TRUE, auto_unbox = TRUE), con = file.path(OUT_DIR, "run_log.json"))
+
+```
