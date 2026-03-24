@@ -81,7 +81,7 @@ rmarkdown::render(
     wave_ref_prev = "${WAVE_REF_PREV}",
     seed = 123,
     run_qic = FALSE,
-    save_full_gee_objects = FALSE,
+    save_full_gee_objects = TRUE,
     progress_log_file = "run_progress.log",
     risk_vars = c(
       "mh_p_cbcl__dsm__dep_tscore",
