@@ -543,6 +543,35 @@ knitr::kable(
   caption = "Audit of binary outcome/covariate coding used in prevalence performance metrics") %>%
   kableExtra::kable_styling(full_width = FALSE)
 
+#6.4.6.2 Structural QC: verify one row per outcome x participant x wave
+prev_dup_tbl <- bd_panel_model %>%
+  dplyr::count(outcome, participant_id, wave, name = "n_rows_cell") %>%
+  dplyr::filter(n_rows_cell > 1)
+
+if (nrow(prev_dup_tbl) > 0) {
+  stop(glue(
+    "Duplicate prevalence rows detected within outcome x participant_id x wave. ",
+    "This would invalidate row-level performance metrics. Example duplicates: ",
+    nrow(prev_dup_tbl)))
+}
+
+#6.4.6.3 Outcome-level row structure QC
+prev_qc_by_outcome <- bd_panel_model %>%
+  dplyr::group_by(outcome) %>%
+  dplyr::summarise(
+    n_rows = dplyr::n(),
+    n_ids = dplyr::n_distinct(participant_id),
+    rows_per_id = n_rows / n_ids,
+    .groups = "drop")
+
+write_csv2(prev_qc_by_outcome, file.path(OUT_DIR, "tables", "prevalence_row_structure_qc.csv"))
+
+knitr::kable(
+  prev_qc_by_outcome,
+  digits = 3,
+  caption = "Prevalence row-structure QC by outcome") %>%
+  kableExtra::kable_styling(full_width = FALSE)
+
 #6.4.7 Sanity check table
 prev_size_tbl <- tibble::tibble(
   Dataset = "Prevalence sensitivity analysis frame",
@@ -798,27 +827,51 @@ coerce_binary01 <- function(x, var_name = "outcome") {
     "Class = {class(x)[1]}; levels/values = {paste(utils::head(unique(as.character(x)), 10), collapse = ', ')}"))
 }
 
-#6.5.5.4 AUC helper with explicit positive-class handling
-auc_binary <- function(obs, pr) {
-  y <- coerce_binary01(obs, var_name = "obs")
-  p <- as.numeric(pr)
+#6.5.5.4 Safe prediction helper mirroring the main mixed-effects script
+safe_predict <- function(mod, newdata = NULL, type = "response") {
+  pr <- try({
+    predict(mod, newdata = newdata, type = type)
+  }, silent = TRUE)
 
-  ok <- is.finite(y) & is.finite(p)
+  if (inherits(pr, "try-error")) {
+    if (is.null(newdata)) {
+      rep(NA_real_, length(stats::fitted(mod)))
+    } else {
+      rep(NA_real_, nrow(newdata))
+    }
+  } else {
+    as.numeric(pr)
+  }
+}
 
-  if (sum(ok) == 0 || length(unique(y[ok])) < 2) {
+#6.5.5.5 Prevalence AUC helper aligned to the main mixed-effects script
+auc_qc_pROC <- function(fit, df, response_var = "status") {
+  y <- df[[response_var]]
+  p <- safe_predict(fit, newdata = df, type = "response")
+
+  ok <- is.finite(p) & !is.na(y)
+
+  if (sum(ok) == 0) {
     return(NA_real_)
   }
 
-  truth_fac <- factor(y[ok], levels = c(0, 1))
+  y_ok <- y[ok]
+  p_ok <- p[ok]
 
-  as.numeric(
-    yardstick::roc_auc_vec(
-      truth = truth_fac,
-      estimate = p[ok],
-      event_level = "second"))
+  #6.5.5.5.1 Accept numeric 0/1, integer 0/1, or 2-level factor/character outcome
+  roc_obj <- try(
+    pROC::roc(response = y_ok, predictor = p_ok, quiet = TRUE),
+    silent = TRUE
+  )
+
+  if (inherits(roc_obj, "try-error")) {
+    return(NA_real_)
+  }
+
+  as.numeric(pROC::auc(roc_obj))
 }
 
-#6.5.5.5 Log-loss helper
+#6.5.5.6 Log-loss helper
 log_loss_binary <- function(obs, pr) {
   y <- coerce_binary01(obs, var_name = "obs")
   p <- pmin(pmax(as.numeric(pr), 1e-8), 1 - 1e-8)
@@ -832,7 +885,7 @@ log_loss_binary <- function(obs, pr) {
   -mean(y[ok] * log(p[ok]) + (1 - y[ok]) * log(1 - p[ok]))
 }
 
-#6.5.5.6 Readable outcome labels
+#6.5.5.7 Readable outcome labels
 label_outcome <- function(x) {
   dplyr::recode(
     as.character(x),
@@ -843,7 +896,7 @@ label_outcome <- function(x) {
     .default = as.character(x))
 }
 
-#6.5.5.7 Readable predictor labels for tables/figures
+#6.5.5.8 Readable predictor labels for tables/figures
 risk_label_lookup <- c(
   "mh_p_cbcl__dsm__dep_tscore" = "CBCL Depression",
   "mh_p_cbcl__dsm__anx_tscore" = "CBCL Anxiety",
@@ -876,7 +929,7 @@ label_risk_term <- function(term) {
   out
 }
 
-#6.5.5.8 Identify nuisance adjustment terms for prevalence coefficient displays
+#6.5.5.9 Identify nuisance adjustment terms for prevalence coefficient displays
 is_nuisance_prev_term <- function(term) {
   term <- as.character(term)
 
@@ -1373,55 +1426,30 @@ for (out in params$outcomes) {
   
   #6.7.3.1 One-time AUC diagnostic for the first prevalence outcome
   if (identical(out, params$outcomes[1])) {
-
-    pr_chk <- as.numeric(predict(fit_cluster, type = "response"))
-    y_chk <- coerce_binary01(dat_o_cluster$status, var_name = "status")
-
+  
+    pr_chk <- safe_predict(fit_cluster, newdata = dat_o_cluster, type = "response")
+    y_chk <- dat_o_cluster$status
+  
     auc_tbl_chk <- tibble::tibble(
       metric = c(
         "min_pred",
         "max_pred",
         "mean_pred_cases",
         "mean_pred_noncases",
-        "auc_yardstick",
-        "auc_pROC_direction_lt",
-        "auc_pROC_direction_gt"),
+        "auc_pROC_auto",
+        "auc_yardstick_legacy_helper"),
       value = c(
         min(pr_chk, na.rm = TRUE),
         max(pr_chk, na.rm = TRUE),
-        mean(pr_chk[y_chk == 1], na.rm = TRUE),
-        mean(pr_chk[y_chk == 0], na.rm = TRUE),
+        mean(pr_chk[coerce_binary01(y_chk, var_name = "status") == 1], na.rm = TRUE),
+        mean(pr_chk[coerce_binary01(y_chk, var_name = "status") == 0], na.rm = TRUE),
+        auc_qc_pROC(fit_cluster, dat_o_cluster, response_var = "status"),
         tryCatch(
-          yardstick::roc_auc_vec(
-            truth = factor(y_chk, levels = c(0, 1)),
-            estimate = pr_chk,
-            event_level = "second"),
-          error = function(e) NA_real_),
-        tryCatch(
-          as.numeric(
-            pROC::auc(
-              pROC::roc(
-                response = factor(y_chk, levels = c(0, 1)),
-                predictor = pr_chk,
-                levels = c("0", "1"),
-                direction = "<",
-                quiet = TRUE))),
-          error = function(e) NA_real_),
-        tryCatch(
-          as.numeric(
-            pROC::auc(
-              pROC::roc(
-                response = factor(y_chk, levels = c(0, 1)),
-                predictor = pr_chk,
-                levels = c("0", "1"),
-                direction = ">",
-                quiet = TRUE))),
+          auc_binary(y_chk, pr_chk),
           error = function(e) NA_real_)))
-
-    write_csv2(
-      auc_tbl_chk,
-      file.path(OUT_DIR, "tables", "prevalence_auc_diagnostic_first_outcome.csv"))
-
+  
+    write_csv2(auc_tbl_chk, file.path(OUT_DIR, "tables", "prevalence_auc_diagnostic_first_outcome.csv"))
+  
     knitr::kable(
       auc_tbl_chk,
       digits = 4,
@@ -1547,9 +1575,9 @@ for (out in params$outcomes) {
   }
   
   #6.7.10.1 Predicted probabilities for performance summaries
-  pr_cluster <- as.numeric(predict(fit_cluster, type = "response"))
-  pr_mvfs <- as.numeric(predict(fit_mvfs, type = "response"))
-  pr_raw <- as.numeric(predict(fit_raw, type = "response"))
+  pr_cluster <- safe_predict(fit_cluster, newdata = dat_o_cluster, type = "response")
+  pr_mvfs <- safe_predict(fit_mvfs, newdata = dat_o_mvfs, type = "response")
+  pr_raw <- safe_predict(fit_raw, newdata = dat_o_raw, type = "response")
 
   #6.7.11 Model-level comparison
   prev_results[[out]] <- tibble::tibble(
@@ -1559,39 +1587,39 @@ for (out in params$outcomes) {
     n_positive = n_positive_cur,
 
     cluster_qic = qic_cluster_val,
-    cluster_auc = auc_binary(dat_o_cluster$status, pr_cluster),
+    cluster_auc = auc_qc_pROC(fit_cluster, dat_o_cluster, response_var = "status"),
     cluster_logloss = log_loss_binary(dat_o_cluster$status, pr_cluster),
     cluster_brier = brier_score(dat_o_cluster$status, pr_cluster),
 
     mvfs_qic = qic_mvfs_val,
-    mvfs_auc = auc_binary(dat_o_mvfs$status, pr_mvfs),
+    mvfs_auc = auc_qc_pROC(fit_mvfs, dat_o_mvfs, response_var = "status"),
     mvfs_logloss = log_loss_binary(dat_o_mvfs$status, pr_mvfs),
     mvfs_brier = brier_score(dat_o_mvfs$status, pr_mvfs),
 
     raw_qic = qic_raw_val,
-    raw_auc = auc_binary(dat_o_raw$status, pr_raw),
+    raw_auc = auc_qc_pROC(fit_raw, dat_o_raw, response_var = "status"),
     raw_logloss = log_loss_binary(dat_o_raw$status, pr_raw),
     raw_brier = brier_score(dat_o_raw$status, pr_raw),
 
     delta_qic_mvfs_minus_cluster = qic_mvfs_val - qic_cluster_val,
-    delta_auc_mvfs_minus_cluster = auc_binary(dat_o_mvfs$status, pr_mvfs) -
-      auc_binary(dat_o_cluster$status, pr_cluster),
+    delta_auc_mvfs_minus_cluster = auc_qc_pROC(fit_mvfs, dat_o_mvfs, response_var = "status") - 
+      auc_qc_pROC(fit_cluster, dat_o_cluster, response_var = "status"),
     delta_logloss_mvfs_minus_cluster = log_loss_binary(dat_o_mvfs$status, pr_mvfs) -
       log_loss_binary(dat_o_cluster$status, pr_cluster),
     delta_brier_mvfs_minus_cluster = brier_score(dat_o_mvfs$status, pr_mvfs) -
       brier_score(dat_o_cluster$status, pr_cluster),
 
     delta_qic_raw_minus_cluster = qic_raw_val - qic_cluster_val,
-    delta_auc_raw_minus_cluster = auc_binary(dat_o_raw$status, pr_raw) -
-      auc_binary(dat_o_cluster$status, pr_cluster),
+    delta_auc_raw_minus_cluster = auc_qc_pROC(fit_raw, dat_o_raw, response_var = "status") -
+      auc_qc_pROC(fit_cluster, dat_o_cluster, response_var = "status"),
     delta_logloss_raw_minus_cluster = log_loss_binary(dat_o_raw$status, pr_raw) -
       log_loss_binary(dat_o_cluster$status, pr_cluster),
     delta_brier_raw_minus_cluster = brier_score(dat_o_raw$status, pr_raw) -
       brier_score(dat_o_cluster$status, pr_cluster),
 
     delta_qic_raw_minus_mvfs = qic_raw_val - qic_mvfs_val,
-    delta_auc_raw_minus_mvfs = auc_binary(dat_o_raw$status, pr_raw) -
-      auc_binary(dat_o_mvfs$status, pr_mvfs),
+    delta_auc_raw_minus_mvfs = auc_qc_pROC(fit_raw, dat_o_raw, response_var = "status") -
+      auc_qc_pROC(fit_mvfs, dat_o_mvfs, response_var = "status"),
     delta_logloss_raw_minus_mvfs = log_loss_binary(dat_o_raw$status, pr_raw) -
       log_loss_binary(dat_o_mvfs$status, pr_mvfs),
     delta_brier_raw_minus_mvfs = brier_score(dat_o_raw$status, pr_raw) -
@@ -2037,7 +2065,7 @@ takeaway_tbl <- dplyr::bind_rows(
     dplyr::transmute(
       domain = "Prevalence",
       outcome = label_outcome(outcome),
-      primary_metric = "AUC",
+      primary_metric = "Row-level in-sample AUC",
       cluster_primary = cluster_auc,
       mvfs_primary = mvfs_auc,
       raw_primary = raw_auc,
@@ -2105,10 +2133,10 @@ cat(glue::glue(
   "For first-onset risk (DTH), the full 17-variable model had the highest McFadden pseudo-R2 for {sum(dth_best_tbl$best_model == 'full 17-variable model', na.rm = TRUE)} of 4 outcomes, and the MVFS recovered {scales::percent(mean(dth_best_tbl$mvfs_share_of_full_gain, na.rm = TRUE), accuracy = 0.1)} of the incremental pseudo-R2 gain achieved by the full model over the cluster model. This indicates that the cluster label retains a meaningful low-dimensional summary of risk, but that some onset-relevant information is lost when the full baseline feature set is collapsed to either the MVFS or the two-cluster label.\n\n"))
 
 cat(glue::glue(
-  "For prevalence, the MVFS had the highest AUC for {sum(prev_best_tbl$best_auc_model == 'MVFS model', na.rm = TRUE)} of 4 outcomes, and both the MVFS and full 17-variable predictor blocks were jointly significant for all 4 outcomes. However, the absolute AUC values remained low across all models (cluster: {round(auc_range_tbl$cluster_auc_min, 3)}-{round(auc_range_tbl$cluster_auc_max, 3)}; MVFS: {round(auc_range_tbl$mvfs_auc_min, 3)}-{round(auc_range_tbl$mvfs_auc_max, 3)}; full 17-variable: {round(auc_range_tbl$raw_auc_min, 3)}-{round(auc_range_tbl$raw_auc_max, 3)}). Accordingly, the prevalence results are best interpreted as evidence of statistically meaningful association and relative parsimony, not as evidence of strong individual-level discrimination.\n\n"))
+  "For prevalence, the MVFS had the highest AUC for {sum(prev_best_tbl$best_auc_model == 'MVFS model', na.rm = TRUE)} of 4 outcomes, and both the MVFS and full 17-variable predictor blocks were jointly significant for all 4 outcomes. The row-level in-sample AUCs ranged from {round(min(c(auc_range_tbl$cluster_auc_min, auc_range_tbl$mvfs_auc_min, auc_range_tbl$raw_auc_min), na.rm = TRUE), 3)} to {round(max(c(auc_range_tbl$cluster_auc_max, auc_range_tbl$mvfs_auc_max, auc_range_tbl$raw_auc_max), na.rm = TRUE), 3)} across the competing models. In this context, those AUCs should be interpreted as a descriptive discrimination check on person-wave rows within the analytic sample, rather than as cross-validated subject-level predictive performance.\n\n"))
 
 cat(
-  "That distinction matters here: the higher-risk cluster still shows large timepoint-specific prevalence odds ratios, especially at earlier waves, but those strong group-level effect sizes do not translate into high pooled row-level classification performance. In practice, the current results support risk enrichment and clinically interpretable stratification more than screening-grade prediction.\n\n")
+  "That distinction is important because the higher-risk cluster still shows large prevalence odds ratios, while the AUC summarizes how well fitted probabilities separate case from non-case rows across the full analytic sample. Together, these results are most useful for comparing relative utility and parsimony across the cluster, MVFS, and full-variable models, rather than for claiming screening-grade prediction.\n\n")
 
 cat(
   "Taken together, the current preliminary takeaway is that the cluster label remains clinically interpretable and strongly associated with outcome, the MVFS is the most efficient reduced non-cluster representation of the concurrent prevalence signal, and the full 17-variable set retains the strongest utility for first-onset modeling.\n\n")
