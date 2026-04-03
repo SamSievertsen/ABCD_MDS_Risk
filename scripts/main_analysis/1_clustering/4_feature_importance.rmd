@@ -1396,8 +1396,8 @@ if (params$mode %in% c("auto", "aggregate")) {
                         watchlist = list(val = dtest),
                         early_stopping_rounds = 30, verbose = 0)
 
-    bi <- tryCatch(bst_cv$best_iteration, error = function(...) NA_integer_)
-    if (is.na(bi) || bi < 1L) bi <- params$xgb_nrounds
+    bi <- tryCatch(bst_cv$best_iteration, error = function(...) NULL)
+    if (is.null(bi) || length(bi) == 0L || is.na(bi) || bi < 1L) bi <- params$xgb_nrounds
     best_iter_vec[i] <- as.integer(bi)
 
     pr <- predict(bst_cv, dtest)
@@ -1431,6 +1431,7 @@ if (params$mode %in% c("auto", "aggregate")) {
 
   #8.7.1 Save final surrogate model
   xgb.save(bst, file.path(paths$shap_dir, "xgb_surrogate.model"))
+  xgboost::xgb.save(bst, file.path(paths$shap_dir, "xgb_surrogate.ubj"))
 
   #8.8 SHAP global importances (mean |SHAP|) for descriptive triangulation
   sv <- shapviz::shapviz(bst, X_pred = X_mat, X = X_df)
@@ -1501,6 +1502,9 @@ if (params$mode %in% c("auto", "aggregate")) {
   #8.8.3 SHAP interaction values (optional multivariate relationships)
   shp_i <- shapviz(
     bst, X_pred = X_mat, X = X_df, interactions = TRUE)
+  
+  #8.8.4 Save SHAP outputs
+  saveRDS(list( X_df = X_df, X_mat = X_mat, feature_names = colnames(X_mat)), file.path(paths$shap_dir, "xgb_surrogate_shap_inputs.rds"))
 
   #8.9 Plot SHAP plots (visual-only; no selection rules)
   #8.9.0 Use a clearer diverging palette for beeswarm-style plots
