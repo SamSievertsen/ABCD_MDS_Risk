@@ -1435,6 +1435,13 @@ if (params$mode %in% c("auto", "aggregate")) {
 
   #8.8 SHAP global importances (mean |SHAP|) for descriptive triangulation
   sv <- shapviz::shapviz(bst, X_pred = X_mat, X = X_df)
+  
+  #8.8.0 Save exact SHAP artifacts for downstream manuscript figures
+  saveRDS(sv, file.path(paths$shap_dir, "xgb_surrogate_shapviz.rds"))
+  saveRDS(list(X_df = X_df, X_mat = X_mat, y = y, features_used = features_used), file.path(paths$shap_dir, "xgb_surrogate_inputs.rds"))
+  
+  #8.8.0.1 Save surrogate model in modern portable format
+  xgboost::xgb.save(bst, file.path(paths$shap_dir, "xgb_surrogate.ubj"))
 
   if (inherits(sv, "shapviz")) {
     S <- sv$S
