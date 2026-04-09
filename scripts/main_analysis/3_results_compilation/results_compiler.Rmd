@@ -3024,18 +3024,18 @@ figS1_df <- dplyr::bind_rows(
 
 #FS1.2 Build a clean multi-panel summary figure
 figS1 <- ggplot(figS1_df, aes(x = k, y = value)) +
-  geom_vline(xintercept = 2, linetype = "dashed", linewidth = 0.4, alpha = 0.7) +
+  geom_vline(xintercept = 2, linetype = "dashed", linewidth = 0.6, alpha = 0.7) +
   geom_line(linewidth = 0.6) +
   geom_point(
     shape = 21,
-    size = 2.2,
-    stroke = 0.6,
+    size = 3.0,
+    stroke = 0.7,
     fill = "white") +
   scale_x_continuous(breaks = sort(unique(figS1_df$k))) +
   scale_y_continuous(
     limits = c(0, 1),
     breaks = seq(0, 1, by = 0.2),
-    expand = expansion(mult = c(0.02, 0.04))) +
+    expand = expansion(mult = c(0.015, 0.03))) +
   facet_wrap(
     ~ metric,
     ncol = 3,
@@ -3048,15 +3048,18 @@ figS1 <- ggplot(figS1_df, aes(x = k, y = value)) +
     title = "Figure S1. MissForest-imputed clustering sensitivity metrics across candidate k solutions",
     x = "Candidate number of clusters (k)",
     y = NULL) +
-  theme_classic(base_size = 12) +
+  theme_classic(base_size = 18) +
   theme(
     strip.background = element_blank(),
-    strip.text = element_text(face = "bold"),
-    plot.title = element_text(face = "bold"),
-    panel.spacing = grid::unit(0.9, "lines"))
+    strip.text = element_text(face = "bold", size = 16, margin = margin(t = 2, b = 2)),
+    plot.title = element_text(face = "bold", size = 14),
+    axis.title.x = element_text(size = 14),
+    axis.text = element_text(size = 12),
+    panel.spacing = grid::unit(0.55, "lines"),
+    plot.margin = margin(4, 8, 4, 8))
 
-#FS1.3 Save and print Figure S2
-save_fig(figS1, "Figure_S1_MissForest_KGrid_Metrics", width = 11.5, height = 4.25)
+#FS1.3 Save and print Figure S1
+save_fig(figS1, "Figure_S1_MissForest_KGrid_Metrics", width = 11.5, height = 7)
 figS1
 
 ```
@@ -3177,13 +3180,13 @@ pretty_feature_order <- dplyr::recode(
   .default = feature_names_plot)
 
 #FS2.2 Create a shared clean theme for all panels
-panel_theme_s2 <- function(base_size = 14) {
+panel_theme_s2 <- function(base_size = 16) {
   theme_classic(base_size = base_size) +
     theme(
-      plot.title = element_text(face = "bold", size = base_size),
+      plot.title = element_text(face = "bold", size = base_size - 1),
       plot.subtitle = element_text(size = base_size - 1),
-      axis.title.x = element_text(size = base_size - 0.5),
-      axis.title.y = element_text(size = base_size - 0.5),
+      axis.title.x = element_text(size = base_size - 1),
+      axis.title.y = element_text(size = base_size - 1.5),
       axis.text.x = element_text(size = base_size - 2),
       axis.text.y = element_text(size = base_size - 2),
       legend.title = element_text(size = base_size - 1),
@@ -3219,23 +3222,23 @@ p_mcr <- ggplot(mcr_seed_plot_df, aes(x = mcr_mean, y = feature_label)) +
     trim = TRUE,
     scale = "width") +
   geom_boxplot(
-    width = 0.15,
+    width = 0.2,
     outlier.shape = NA,
     fill = "white",
     color = "black",
-    linewidth = 0.35) +
+    linewidth = 0.4) +
   geom_point(
     data = mcr_seed_means,
     aes(x = mcr_mean_overall, y = feature_label),
     inherit.aes = FALSE,
     shape = 21,
-    size = 2.6,
+    size = 2.7,
     stroke = 0.6,
     fill = "black",
     color = "black") +
   labs(
     title = "A. Permutation MCR Distributions",
-    x = "Mean misclassification rate (MCR)",
+    x = "Misclassification rate (MCR)",
     y = NULL) +
   panel_theme_s2()
 
@@ -3351,7 +3354,7 @@ figS2 <- p_mcr + p_sep + p_shap +
       plot.title = element_text(face = "bold", size = 15)))
 
 #FS2.7 Save and print Figure S2
-save_fig(figS2, "Figure_S2_Feature_Importance_and_MVFS_Sensitivity", width = 16, height = 7.4)
+save_fig(figS2, "Figure_S2_Feature_Importance_and_MVFS_Sensitivity", width = 18, height = 10, dpi = 720)
 figS2
 
 ```
@@ -4362,9 +4365,9 @@ extract_top_effects_s6 <- function(df, domain_label) {
     dplyr::slice_head(n = 1) %>%
     dplyr::ungroup() %>%
     dplyr::mutate(
-      display_group = "Risk cluster",
+      display_group = "Risk Cluster",
       y_pos = 3,
-      row_label = "Risk cluster")
+      row_label = "Risk Cluster")
 
   #FS6.5.2 Keep the strongest MVFS predictor by absolute log-OR magnitude
   mvfs_df <- df0 %>%
@@ -4375,9 +4378,9 @@ extract_top_effects_s6 <- function(df, domain_label) {
     dplyr::slice_max(order_by = effect_abs_log, n = 1, with_ties = FALSE) %>%
     dplyr::ungroup() %>%
     dplyr::mutate(
-      display_group = "Strongest MVFS predictor",
+      display_group = "Strongest MVFS Predictor",
       y_pos = 2,
-      row_label = paste0("MVFS: ", term_label))
+      row_label = paste0(term_label))
 
   #FS6.5.3 Keep the strongest full-model predictor by absolute log-OR magnitude
   raw_df <- df0 %>%
@@ -4392,9 +4395,9 @@ extract_top_effects_s6 <- function(df, domain_label) {
     dplyr::slice_max(order_by = effect_abs_log, n = 1, with_ties = FALSE) %>%
     dplyr::ungroup() %>%
     dplyr::mutate(
-      display_group = "Strongest full-model predictor",
+      display_group = "Strongest Full-Model Predictor",
       y_pos = 1,
-      row_label = paste0("17-variable: ", term_label))
+      row_label = paste0(term_label))
 
   dplyr::bind_rows(clus_df, mvfs_df, raw_df) %>%
     dplyr::mutate(
@@ -4402,9 +4405,9 @@ extract_top_effects_s6 <- function(df, domain_label) {
       display_group = factor(
         display_group,
         levels = c(
-          "Risk cluster",
-          "Strongest MVFS predictor",
-          "Strongest full-model predictor")),
+          "Risk Cluster",
+          "Strongest MVFS Predictor",
+          "Strongest Full-Model Predictor")),
       outcome_label = factor(
         outcome_label,
         levels = c("BD-I", "BD-II", "BD-NOS", "Any BSD")))
@@ -4439,46 +4442,43 @@ fs6_xmax <- max(figS6_df$ci_hi, na.rm = TRUE)
 fs6_xmax <- ceiling(fs6_xmax / 0.5) * 0.5
 fs6_xmax <- max(fs6_xmax, 5)
 
-#FS6.7.1 Place labels to the left of the CI when possible; otherwise place them to the right
-label_pad_s6 <- 0.08 * fs6_xmax
-left_min_s6  <- 0.35
-right_max_s6 <- fs6_xmax - 0.35
+#FS6.7.1 Create point-adjacent labels positioned slightly above/right of each OR
+fs6_label_dx <- 0.15
+fs6_label_xmax_buffer <- 0.50
 
 figS6_df <- figS6_df %>%
   dplyr::mutate(
-    left_candidate  = pmin(ci_lo, or) - label_pad_s6,
-    right_candidate = pmax(ci_hi, or) + label_pad_s6,
-    label_side = dplyr::if_else(left_candidate >= left_min_s6, "left", "right"),
-    label_x = dplyr::if_else(
-      label_side == "left",
-      left_candidate,
-      pmin(right_candidate, right_max_s6)),
-    label_hjust = dplyr::if_else(label_side == "left", 1, 0),
-    row_label_plot = stringr::str_wrap(row_label, width = 14))
+    row_label_plot = stringr::str_wrap(row_label, width = 16),
+    label_x = pmin(or + fs6_label_dx, fs6_xmax - fs6_label_xmax_buffer),
+    label_y = y_pos + dplyr::case_when(
+      y_pos == 3 ~ 0.18,
+      y_pos == 2 ~ 0.15,
+      y_pos == 1 ~ 0.18,
+      TRUE ~ 0.16))
 
 fs6_cols <- c(
-  "Risk cluster" = "#7F3C8D",
-  "Strongest MVFS predictor" = "#11A579",
-  "Strongest full-model predictor" = "#3969AC")
+  "Risk Cluster" = "#7F3C8D",
+  "Strongest MVFS Predictor" = "#11A579",
+  "Strongest Full-Model Predictor" = "#3969AC")
 
-fig_theme_s6 <- function(base_size = 11) {
+fig_theme_s6 <- function(base_size = 16) {
   ggplot2::theme_classic(base_size = base_size) +
     ggplot2::theme(
       strip.background = ggplot2::element_blank(),
-      strip.text = ggplot2::element_text(face = "bold", size = base_size),
+      strip.text = ggplot2::element_text(face = "bold", size = base_size + 0.5),
       axis.title.y = ggplot2::element_blank(),
       axis.text.y = ggplot2::element_blank(),
       axis.ticks.y = ggplot2::element_blank(),
       axis.title.x = ggplot2::element_text(size = base_size),
-      axis.text.x = ggplot2::element_text(size = base_size - 1),
+      axis.text.x = ggplot2::element_text(size = base_size - 0.5),
       legend.position = "bottom",
       legend.title = ggplot2::element_blank(),
-      legend.text = ggplot2::element_text(size = base_size - 1),
-      plot.title = ggplot2::element_text(face = "bold", size = base_size + 1),
-      plot.subtitle = ggplot2::element_text(size = base_size - 0.5),
+      legend.text = ggplot2::element_text(size = base_size - 0.5),
+      plot.title = ggplot2::element_text(face = "bold", size = base_size + 1.6),
+      plot.subtitle = ggplot2::element_text(size = base_size - 0.1),
       panel.spacing.x = grid::unit(1.2, "lines"),
-      panel.spacing.y = grid::unit(0.9, "lines"),
-      plot.margin = ggplot2::margin(8, 12, 8, 12))
+      panel.spacing.y = grid::unit(1.0, "lines"),
+      plot.margin = ggplot2::margin(10, 14, 10, 14))
 }
 
 #FS6.8 Build the figure
@@ -4491,44 +4491,44 @@ figS6 <- ggplot2::ggplot(
   ggplot2::geom_vline(
     xintercept = 1,
     linetype = "dashed",
-    linewidth = 0.4,
+    linewidth = 0.5,
     color = "grey45") +
   ggplot2::geom_segment(
     ggplot2::aes(x = ci_lo, xend = ci_hi, yend = y_pos),
-    linewidth = 0.6) +
+    linewidth = 0.7) +
   ggplot2::geom_point(
-    size = 2.5) +
+    size = 2.8) +
   ggplot2::geom_label(
     data = figS6_df,
     ggplot2::aes(
       x = label_x,
-      y = y_pos,
-      label = row_label_plot,
-      hjust = label_hjust),
+      y = label_y,
+      label = row_label_plot),
     inherit.aes = FALSE,
-    vjust = 0.5,
-    lineheight = 0.92,
-    size = 2.5,
+    hjust = 0,
+    vjust = 0,
+    lineheight = 0.90,
+    size = 4.0,
     color = "black",
     fill = "white",
     label.size = NA,
-    label.padding = grid::unit(0.10, "lines")) +
+    label.padding = grid::unit(0.08, "lines")) +
   ggplot2::facet_grid(
     domain_label ~ outcome_label) +
   ggplot2::scale_x_continuous(
     breaks = seq(0, fs6_xmax, by = 1),
-    expand = ggplot2::expansion(mult = c(0.02, 0.06))) +
+    expand = ggplot2::expansion(mult = c(0.02, 0.03))) +
   ggplot2::scale_y_continuous(
-    limits = c(0.4, 3.6),
+    limits = c(0.4, 3.75),
     breaks = c(1, 2, 3),
     labels = NULL) +
   ggplot2::scale_color_manual(
     values = fs6_cols,
     breaks = names(fs6_cols),
     labels = c(
-      "Risk cluster",
-      "Strongest MVFS predictor",
-      "Strongest full-model predictor")) +
+      "Risk Cluster",
+      "Strongest MVFS Predictor",
+      "Strongest Full-Model Predictor")) +
   ggplot2::coord_cartesian(
     xlim = c(0, fs6_xmax),
     clip = "on") +
@@ -4538,13 +4538,12 @@ figS6 <- ggplot2::ggplot(
       "Within each outcome, the adjusted higher- versus lower-risk cluster odds ratio is shown alongside the single ",
       "baseline predictor with the largest absolute log-OR magnitude from the MVFS and full 17-variable models. ",
       "Horizontal bars denote 95% confidence intervals."),
-    x = "Odds ratio") +
+    x = "Odds Ratio") +
   fig_theme_s6()
 
 #FS6.9 Save and print Figure S6
-save_fig(figS6, "Figure_S6_Cluster_vs_Strongest_Predictor_ORs", width = 13.5, height = 7.8)
+save_fig(figS6, "Figure_S6_Cluster_vs_Strongest_Predictor_ORs", width = 14.75, height = 9.75, dpi = 1440)
 
 figS6
 
 ```
-
