@@ -1822,23 +1822,23 @@ make_ref_frame_glm <- function(fit, dat) {
   frm <- model.frame(fit)
   mm0 <- model.matrix(fit)
   contr_all <- attr(mm0, "contrasts")
-
+  
   get_levs <- function(var) {
     if (var %in% names(frm) && is.factor(frm[[var]])) levels(frm[[var]]) else NULL
   }
-
+  
   waves_lev <- get_levs("end_wave") %||% levels(dat$end_wave)
   cluster_lev <- get_levs("cluster") %||% levels(dat$cluster)
   sex_lev <- get_levs("sex")
   site_lev <- get_levs("site_factor")
   base_lev <- get_levs("baseline_status")
-
+  
   ref <- expand.grid(
     end_wave = waves_lev,
     cluster = cluster_lev,
     age_mid_between = 0,
     stringsAsFactors = FALSE)
-
+  
   if ("age_mid_cwc" %in% names(frm)) ref$age_mid_cwc <- 0
   if ("age_mid_cwc_orth" %in% names(frm)) ref$age_mid_cwc_orth <- 0
   if ("wave_num" %in% names(frm)) ref$wave_num <- match(ref$end_wave, waves_lev) - 1L
@@ -1853,35 +1853,36 @@ make_ref_frame_glm <- function(fit, dat) {
       dplyr::summarise(log_dt = median(log_dt, na.rm = TRUE), .groups = "drop")
     ref <- ref %>% dplyr::left_join(log_dt_ref, by = "end_wave")
   }
-
+  
   #F2.1.7.1 Coerce factor levels to match fitted model
   for (nm in intersect(names(ref), names(frm))) {
     if (is.factor(frm[[nm]])) ref[[nm]] <- factor(ref[[nm]], levels = levels(frm[[nm]]))
   }
-
+  
   tt <- stats::delete.response(stats::terms(fit))
   X <- stats::model.matrix(tt, ref, contrasts.arg = contr_all)
-
+  
   beta <- stats::coef(fit)
   V <- as.matrix(stats::vcov(fit))
-
+  
   miss <- setdiff(names(beta), colnames(X))
   if (length(miss) > 0) {
     X <- cbind(X, matrix(0, nrow(X), length(miss), dimnames = list(NULL, miss)))
   }
   X <- X[, names(beta), drop = FALSE]
-
+  
   list(ref = ref, X = X, beta = beta, V = V, waves = waves_lev, clus = cluster_lev)
 }
 
-#F2.1.8 Function to compute cumulative risk CIs from glm fixed-effect uncertainty
+#F2.1.8 Estimate CIs with robust helper functions
+#F2.1.8.1 Function to compute cumulative risk CIs from glm fixed-effect uncertainty
 cumrisk_by_wave_ci_mvn_glm <- function(fit, dat, B = 4000, probs = c(0.025, 0.975)) {
   obj <- make_ref_frame_glm(fit, dat)
   ref <- obj$ref
   X <- obj$X
   beta <- obj$beta
   V <- obj$V
-
+  
   if (requireNamespace("MASS", quietly = TRUE)) {
     beta_draws <- MASS::mvrnorm(n = B, mu = beta, Sigma = V)
   } else {
@@ -1889,26 +1890,26 @@ cumrisk_by_wave_ci_mvn_glm <- function(fit, dat, B = 4000, probs = c(0.025, 0.97
     Z <- matrix(stats::rnorm(B * length(beta)), nrow = B)
     beta_draws <- sweep(Z %*% t(L), 2, beta, `+`)
   }
-
+  
   eta_draws <- X %*% t(beta_draws)
   p_draws <- plogis(eta_draws)
-
+  
   ref$end_wave <- factor(ref$end_wave, levels = unique(as.character(ref$end_wave)))
   ref$cluster <- factor(ref$cluster, levels = unique(as.character(ref$cluster)))
   idx_by_clu <- split(seq_len(nrow(ref)), ref$cluster)
-
+  
   out <- lapply(names(idx_by_clu), function(cl) {
     R <- idx_by_clu[[cl]]
     H <- p_draws[R, , drop = FALSE]
     CR <- apply(H, 2, function(col) 1 - cumprod(1 - col))
     if (is.null(dim(CR))) CR <- matrix(CR, nrow = length(R), ncol = 1)
-
+    
     p_hat <- plogis(as.numeric(X[R, , drop = FALSE] %*% beta))
     cr_hat <- 1 - cumprod(1 - p_hat)
-
+    
     lo <- apply(CR, 1, stats::quantile, probs = probs[1], na.rm = TRUE)
     hi <- apply(CR, 1, stats::quantile, probs = probs[2], na.rm = TRUE)
-
+    
     tibble::tibble(
       end_wave = ref$end_wave[R],
       cluster = as.character(ref$cluster[R]),
@@ -1917,36 +1918,36 @@ cumrisk_by_wave_ci_mvn_glm <- function(fit, dat, B = 4000, probs = c(0.025, 0.97
       cumrisk_hi = hi)
   }) %>% 
     dplyr::bind_rows()
-
+  
   out
 }
 
-#F2.1.8b Function to compute per-wave hazard CIs from glm fixed-effect uncertainty
+#F2.1.8.2 Function to compute per-wave hazard CIs from glm fixed-effect uncertainty
 hazard_by_wave_ci_mvn_glm <- function(fit, dat, B = 4000, probs = c(0.025, 0.975)) {
-    obj <- make_ref_frame_glm(fit, dat)
-    ref <- obj$ref
-    X <- obj$X
-    beta <- obj$beta
-    V <- obj$V
-
-    if (requireNamespace("MASS", quietly = TRUE)) {
-        beta_draws <- MASS::mvrnorm(n = B, mu = beta, Sigma = V)
-    } else {
-        L <- chol(V)
-        Z <- matrix(stats::rnorm(B * length(beta)), nrow = B)
-        beta_draws <- sweep(Z %*% t(L), 2, beta, `+`)
-    }
-
-    eta_draws <- X %*% t(beta_draws)
-    p_draws <- plogis(eta_draws)
-    p_hat <- plogis(as.numeric(X %*% beta))
-
-    tibble::tibble(
-        end_wave = factor(ref$end_wave, levels = levels(dat$end_wave)),
-        cluster = as.character(ref$cluster),
-        hazard = p_hat,
-        lo = apply(p_draws, 1, stats::quantile, probs = probs[1], na.rm = TRUE),
-        hi = apply(p_draws, 1, stats::quantile, probs = probs[2], na.rm = TRUE))
+  obj <- make_ref_frame_glm(fit, dat)
+  ref <- obj$ref
+  X <- obj$X
+  beta <- obj$beta
+  V <- obj$V
+  
+  if (requireNamespace("MASS", quietly = TRUE)) {
+    beta_draws <- MASS::mvrnorm(n = B, mu = beta, Sigma = V)
+  } else {
+    L <- chol(V)
+    Z <- matrix(stats::rnorm(B * length(beta)), nrow = B)
+    beta_draws <- sweep(Z %*% t(L), 2, beta, `+`)
+  }
+  
+  eta_draws <- X %*% t(beta_draws)
+  p_draws <- plogis(eta_draws)
+  p_hat <- plogis(as.numeric(X %*% beta))
+  
+  tibble::tibble(
+    end_wave = factor(ref$end_wave, levels = levels(dat$end_wave)),
+    cluster = as.character(ref$cluster),
+    hazard = p_hat,
+    lo = apply(p_draws, 1, stats::quantile, probs = probs[1], na.rm = TRUE),
+    hi = apply(p_draws, 1, stats::quantile, probs = probs[2], na.rm = TRUE))
 }
 
 #F2.1.9 Plotting helpers
@@ -1966,7 +1967,12 @@ wave_pretty <- c("ses-02A" = "Year-2",
                  "ses-04A" = "Year-4",
                  "ses-06A" = "Year-6")
 
-#F2.1.9.4 Axis theme with only axes, no gridlines
+#F2.1.9.4 Explicit cluster colors for Figure 2
+cluster_cols_f2 <- c(
+  "Higher-Risk" = "#7F3C8D",
+  "Lower-Risk" = "#11A579")
+
+#F2.1.9.5 Axis theme with only axes, no gridlines
 axes_only_theme <- function(base_size = 8, axis_text = 6.5) {
   theme_minimal(base_size = base_size) +
     theme(
@@ -1979,43 +1985,48 @@ axes_only_theme <- function(base_size = 8, axis_text = 6.5) {
       axis.ticks.y.right = element_blank(),
       axis.text = element_text(size = axis_text),
       legend.position = "bottom",
-      legend.box = "horizontal")
+      legend.box = "horizontal",
+      plot.margin = margin(6, 6, 6, 6),
+      panel.background = element_rect(fill = "white", color = NA),
+      plot.background = element_rect(fill = "white", color = NA),
+      legend.background = element_rect(fill = "white", color = NA),
+      legend.box.background = element_rect(fill = "white", color = NA))
 }
 
-#F2.1.9.5 Helpers to blank axes on interior panels (use at composition time)
+#F2.1.9.6 Helpers to blank axes on interior panels (use at composition time)
 strip_x <- theme(axis.title.x = element_blank(),
-            axis.text.x = element_blank(),
-            axis.ticks.x = element_blank())
+                 axis.text.x = element_blank(),
+                 axis.ticks.x = element_blank())
 strip_y <- theme(axis.title.y = element_blank(),
-            axis.text.y = element_blank(),
-            axis.ticks.y = element_blank())
+                 axis.text.y = element_blank(),
+                 axis.ticks.y = element_blank())
 
-#F2.1.9.6 Robust cluster display helper
+#F2.1.9.7 Robust cluster display helper
 to_cluster_disp <- function(x) {
   x_chr <- as.character(x)
-
+  
   out <- tryCatch(coerce_cluster(x_chr), error = function(e) rep(NA_character_, length(x_chr)))
-
+  
   out[is.na(out) & x_chr %in% c("C1", "1")] <- "Lower-Risk"
   out[is.na(out) & x_chr %in% c("C2", "2")] <- "Higher-Risk"
-
-  factor(out, levels = c("Lower-Risk", "Higher-Risk"))
+  
+  factor(out, levels = c("Higher-Risk", "Lower-Risk"))
 }
 
 #F2.2 Build hazard-by-wave directly from saved primary glm fits
 haz_by_wave <- purrr::map_dfr(OUT_FIG, function(out) {
   fit <- fits_primary[[out]]
   if (is.null(fit)) return(tibble::tibble())
-
+  
   dat <- bd_pp_model %>%
     dplyr::filter(outcome == out) %>%
     droplevels() %>%
     dplyr::mutate(
       end_wave = factor(end_wave, levels = wave_levels),
       cluster = factor(cluster))
-
+  
   if (!nrow(dat)) return(tibble::tibble())
-
+  
   hazard_by_wave_ci_mvn_glm(fit, dat, B = 2000) %>%
     dplyr::mutate(
       outcome = out,
@@ -2043,7 +2054,7 @@ cum_by_wave <- if (!is_tk(bd_cumrisk_by_wave)) {
       model = dplyr::coalesce(model, "logit"),
       end_wave = factor(end_wave, levels = wave_levels),
       cluster = as.character(cluster),
-      cluster_disp = factor(coerce_cluster(cluster), levels = c("Lower-Risk","Higher-Risk")))
+      cluster_disp = factor(coerce_cluster(cluster), levels = names(cluster_cols_f2)))
 } else {
   tibble::tibble(
     outcome = character(),
@@ -2059,32 +2070,32 @@ cum_by_wave <- if (!is_tk(bd_cumrisk_by_wave)) {
 #F2.2.1 If cumulative-risk CIs are absent in the exported table, backfill from saved glm fits
 need_cum_ci <- (
   nrow(cum_by_wave) == 0 ||
-  !"cumrisk_lo" %in% names(cum_by_wave) ||
-  all(is.na(cum_by_wave$cumrisk_lo)))
+    !"cumrisk_lo" %in% names(cum_by_wave) ||
+    all(is.na(cum_by_wave$cumrisk_lo)))
 
 if (need_cum_ci) {
   cum_ci_list <- lapply(OUT_FIG, function(out) {
     fit <- fits_primary[[out]]
     if (is.null(fit)) return(NULL)
-
+    
     dat <- bd_pp_model %>%
       dplyr::filter(outcome == out) %>%
       droplevels() %>%
       dplyr::mutate(
         end_wave = factor(end_wave, levels = wave_levels),
         cluster = factor(cluster))
-
+    
     if (!nrow(dat)) return(NULL)
-
+    
     cumrisk_by_wave_ci_mvn_glm(fit, dat, B = 2000) %>%
       dplyr::mutate(
         outcome = out,
         model = "logit",
         end_wave = factor(end_wave, levels = wave_levels),
-        cluster_disp = factor(coerce_cluster(cluster), levels = c("Lower-Risk","Higher-Risk"))) %>%
+        cluster_disp = factor(coerce_cluster(cluster), levels = names(cluster_cols_f2))) %>%
       dplyr::select(outcome, model, end_wave, cluster, cluster_disp, cumrisk, cumrisk_lo, cumrisk_hi)
   })
-
+  
   cum_by_wave <- dplyr::bind_rows(purrr::compact(cum_ci_list))
 }
 
@@ -2101,8 +2112,8 @@ age_meds_vec <- setNames(age_meds_tbl$age_med, age_meds_tbl$end_wave)
 #F2.3.3 Create x-axis labels with median ages
 x_lab_vec <- setNames(
   ifelse(is.finite(age_meds_vec[wave_levels]),
-    sprintf("%s\nMedian Mid-Interval Age=%.1f", wave_pretty[wave_levels], age_meds_vec[wave_levels]),
-    sprintf("%s\nMedian Mid-Interval Age=-", wave_pretty[wave_levels])),
+         sprintf("%s\nMedian Mid-Interval Age=%.1f", wave_pretty[wave_levels], age_meds_vec[wave_levels]),
+         sprintf("%s\nMedian Mid-Interval Age=-", wave_pretty[wave_levels])),
   wave_levels)
 
 #F2.4 Compute empirical hazards and cumulative incidence by wave and cluster
@@ -2110,13 +2121,13 @@ x_lab_vec <- setNames(
 emp_cum_by_wave <- bd_pp_model %>%
   dplyr::filter(outcome %in% OUT_FIG) %>%
   dplyr::mutate(
-    cluster_disp = factor(coerce_cluster(cluster), levels = c("Lower-Risk","Higher-Risk")),
+    cluster_disp = factor(coerce_cluster(cluster), levels = names(cluster_cols_f2)),
     end_wave = factor(end_wave, levels = wave_levels)) %>%
   
   #F2.4.1.1 Per-interval empirical hazard among those at risk
   dplyr::group_by(outcome, cluster_disp, end_wave) %>%
   dplyr::summarise(h = mean(event == 1L, na.rm = TRUE), .groups = "drop") %>%
-
+  
   #F2.4.1.2 Roll up to cumulative incidence: 1 - Π(1 - h_j)
   dplyr::group_by(outcome, cluster_disp) %>%
   dplyr::arrange(end_wave, .by_group = TRUE) %>%
@@ -2125,30 +2136,30 @@ emp_cum_by_wave <- bd_pp_model %>%
 
 #F2.5 Plot predicted and observed hazard by wave and cluster
 plot_haz_wave <- function(df, out_key, panel_letter = NULL) {
-
+  
   d <- df %>%
     dplyr::filter(outcome == out_key, model == "logit") %>%
     dplyr::mutate(
       end_wave = factor(as.character(end_wave), levels = wave_levels),
-      cluster_disp = factor(cluster_disp, levels = c("Lower-Risk", "Higher-Risk"))) %>%
+      cluster_disp = factor(cluster_disp, levels = names(cluster_cols_f2))) %>%
     dplyr::arrange(cluster_disp, end_wave) %>%
     dplyr::filter(!is.na(cluster_disp), is.finite(hazard))
-
+  
   if (is.null(panel_letter)) {
     i <- match(out_key, OUT_FIG)
     panel_letter <- LETTERS[i]
   }
-
+  
   has_ci <- nrow(d) > 0 &&
     all(c("lo", "hi") %in% names(d)) &&
     any(is.finite(d$lo) & is.finite(d$hi), na.rm = TRUE)
-
+  
   emp <- emp_cum_by_wave %>%
     dplyr::filter(outcome == out_key) %>%
     dplyr::mutate(
       end_wave = factor(as.character(end_wave), levels = wave_levels),
-      cluster_disp = factor(cluster_disp, levels = c("Lower-Risk", "Higher-Risk")))
-
+      cluster_disp = factor(cluster_disp, levels = names(cluster_cols_f2)))
+  
   ggplot() +
     
     #F2.5.1 Add hazard CI ribbon behind the model-estimated lines
@@ -2182,14 +2193,14 @@ plot_haz_wave <- function(df, out_key, panel_letter = NULL) {
     scale_x_discrete(labels = x_lab_vec, drop = FALSE) +
     scale_y_continuous(labels = scales::percent_format(accuracy = 0.1)) +
     scale_color_manual(
-      values = cluster_cols,
-      breaks = names(cluster_cols),
-      labels = names(cluster_cols),
+      values = cluster_cols_f2,
+      breaks = names(cluster_cols_f2),
+      labels = names(cluster_cols_f2),
       drop = FALSE) +
     scale_fill_manual(
-      values = cluster_cols,
-      breaks = names(cluster_cols),
-      labels = names(cluster_cols),
+      values = cluster_cols_f2,
+      breaks = names(cluster_cols_f2),
+      labels = names(cluster_cols_f2),
       guide = "none",
       drop = FALSE) +
     labs(
@@ -2202,87 +2213,160 @@ plot_haz_wave <- function(df, out_key, panel_letter = NULL) {
 
 #F2.6 Plot cumulative incidence by wave and cluster
 plot_cum_wave <- function(df, out_key) {
-  d <- df %>% dplyr::filter(.data$outcome == out_key)
+  d <- df %>%
+    dplyr::filter(.data$outcome == out_key) %>%
+    dplyr::mutate(
+      end_wave = factor(as.character(end_wave), levels = wave_levels),
+      cluster_disp = factor(cluster_disp, levels = names(cluster_cols_f2)))
   has_ci <- all(c("cumrisk_lo","cumrisk_hi") %in% names(d)) &&
     any(is.finite(d$cumrisk_lo) & is.finite(d$cumrisk_hi), na.rm = TRUE)
   i <- match(out_key, OUT_FIG)
   panel_letter <- LETTERS[i + 4]
   
   #F2.6.1 Observed cumulative for each outcome
-  emp <- emp_cum_by_wave %>% dplyr::filter(outcome == out_key)
+  emp <- emp_cum_by_wave %>%
+    dplyr::filter(outcome == out_key) %>%
+    dplyr::mutate(
+      end_wave = factor(as.character(end_wave), levels = wave_levels),
+      cluster_disp = factor(cluster_disp, levels = names(cluster_cols_f2)))
   
   #F2.6.2 Plot cumulative incidence by wave and cluster
   ggplot(d, aes(x = end_wave, y = cumrisk, color = cluster_disp, group = cluster_disp)) +
     { if (has_ci) geom_ribbon(aes(ymin = cumrisk_lo, ymax = cumrisk_hi, fill = cluster_disp),
-      alpha = 0.15, color = NA) } +
-      geom_line(size = 0.9) +
-      geom_point(size = 1.8) +
-      
-      #F2.6.3 Overlay observed empirical cumulative incidence
-      geom_point(data = emp,
-                aes(x = end_wave, y = cumrisk_obs, color = cluster_disp),
-                shape = 1, size = 1.8, inherit.aes = FALSE) +
-
+                              alpha = 0.15, color = NA) } +
+    geom_line(size = 0.9) +
+    geom_point(size = 1.8) +
+    
+    #F2.6.3 Overlay observed empirical cumulative incidence
+    geom_point(data = emp,
+               aes(x = end_wave, y = cumrisk_obs, color = cluster_disp),
+               shape = 1, size = 1.8, inherit.aes = FALSE) +
+    
     #F2.6.4 Scales and labels
     scale_y_continuous(labels = scales::percent_format(accuracy = 0.1), limits = c(0, 0.30)) +
-      scale_x_discrete(drop = FALSE, labels = x_lab_vec) +
-      scale_color_manual(values = cluster_cols, breaks = names(cluster_cols), labels = names(cluster_cols)) +
-      scale_fill_manual(values = cluster_cols, guide = "none") +
-      labs(title = paste0("(", panel_letter, ")  ", OUT_LABS[[out_key]], " Cumulative Incidence"),
-          x = "Wave (Interval End)", y = "Cumulative Risk", color = "Cluster") +
-      axes_only_theme()
+    scale_x_discrete(drop = FALSE, labels = x_lab_vec) +
+    scale_color_manual(
+      values = cluster_cols_f2,
+      breaks = names(cluster_cols_f2),
+      labels = names(cluster_cols_f2),
+      drop = FALSE) +
+    scale_fill_manual(
+      values = cluster_cols_f2,
+      breaks = names(cluster_cols_f2),
+      labels = names(cluster_cols_f2),
+      guide = "none",
+      drop = FALSE) +
+    labs(title = paste0("(", panel_letter, ")  ", OUT_LABS[[out_key]], " Cumulative Incidence"),
+         x = "Wave (Interval End)", y = "Cumulative Risk", color = "Cluster") +
+    axes_only_theme()
 }
 
 #F2.7 Build combined by wave and cumulative plot panels
 #F2.7.1 Generate hazard and cumulative panels for each outcome
 haz_panels <- lapply(seq_along(OUT_FIG), function(i) {
-    plot_haz_wave(haz_by_wave, OUT_FIG[i], panel_letter = LETTERS[i])
-  })
+  plot_haz_wave(haz_by_wave, OUT_FIG[i], panel_letter = LETTERS[i])
+})
 cum_panels <- lapply(OUT_FIG, function(o) plot_cum_wave(cum_by_wave, o))
 
-#F2.7.2 Keep legend only on the first hazard panel
-haz_panels[2:4] <- lapply(haz_panels[2:4], function(p) p + theme(legend.position = "none"))
+#F2.7.2 Prepare the panel versions used in the final layout
+haz_layout_panels <- list(
+  haz_panels[[1]] + strip_x,
+  haz_panels[[2]] + strip_x,
+  haz_panels[[3]],
+  haz_panels[[4]]
+)
 
-#F2.7.3 Hide all legends on cumulative panels
-cum_panels <- lapply(cum_panels, function(p) p + theme(legend.position = "none"))
+cum_layout_panels <- list(
+  cum_panels[[1]] + strip_x,
+  cum_panels[[2]] + strip_x,
+  cum_panels[[3]],
+  cum_panels[[4]]
+)
 
-#F2.7.4 Strip interior axes (2x2 grids for hazards and cumulative)
-haz_grid <- (haz_panels[[1]] + strip_x) + (haz_panels[[2]] + strip_x) +
-  (haz_panels[[3]]) + (haz_panels[[4]]) +
-  patchwork::plot_layout(ncol = 2)
+#F2.7.3 Extract a shared legend with explicit white background
+legend_f2 <- cowplot::get_legend(
+  haz_panels[[1]] +
+    theme(
+      legend.position = "bottom",
+      panel.background = element_rect(fill = "white", color = NA),
+      plot.background = element_rect(fill = "white", color = NA),
+      legend.background = element_rect(fill = "white", color = NA),
+      legend.box.background = element_rect(fill = "white", color = NA))
+)
 
-#F2.7.5 Hide legends on cumulative grid interior panels
-cum_grid <- (cum_panels[[1]] + strip_x) + (cum_panels[[2]] + strip_x) +
-  (cum_panels[[3]]) + (cum_panels[[4]]) +
-  patchwork::plot_layout(ncol = 2)
-cum_grid <- cum_grid & theme(legend.position = "none")
+#F2.7.4 Remove legends from the actual panel plots
+haz_layout_panels <- lapply(haz_layout_panels, function(p) p + theme(legend.position = "none"))
+cum_layout_panels <- lapply(cum_layout_panels, function(p) p + theme(legend.position = "none"))
 
-#F2.8 Combine hazard and cumulative grids into final figure 2, print, and save
-fig2 <- haz_grid / cum_grid +
-  patchwork::plot_layout(heights = c(1, 1), guides = "collect") &
-  theme(legend.position = "bottom", legend.justification = "center")
+#F2.7.5 Align all 8 panels simultaneously so the top and bottom blocks share identical geometry
+aligned_f2 <- cowplot::align_plots(
+  plotlist = c(haz_layout_panels, cum_layout_panels),
+  align = "hv",
+  axis = "tblr",
+  greedy = FALSE
+)
+
+#F2.7.6 Rebuild the top and bottom 2x2 grids from the already-aligned grobs
+haz_grid <- cowplot::plot_grid(
+  plotlist = aligned_f2[1:4],
+  ncol = 2,
+  rel_widths = c(1, 1),
+  rel_heights = c(1, 1))
+
+cum_grid <- cowplot::plot_grid(
+  plotlist = aligned_f2[5:8],
+  ncol = 2,
+  rel_widths = c(1, 1),
+  rel_heights = c(1, 1))
+
+#F2.7.7 Stack the two aligned grids
+fig2_main <- cowplot::plot_grid(
+  haz_grid,
+  cum_grid,
+  ncol = 1,
+  rel_heights = c(1, 1),
+  align = "v",
+  axis = "lr")
+
+#F2.7.8 Wrap the legend in a white drawing surface
+legend_plot_f2 <- cowplot::ggdraw() +
+  cowplot::draw_grob(legend_f2, x = 0, y = 0, width = 1, height = 1) +
+  theme(
+    plot.background = element_rect(fill = "white", color = NA))
+
+#F2.8 Combine figure + legend
+fig2 <- cowplot::plot_grid(
+  fig2_main,
+  legend_plot_f2,
+  ncol = 1,
+  rel_heights = c(1, 0.08))
+
 print(fig2)
-save_fig(fig2, "Figure_02_DTH_Hazards_and_Cumulative_by_Cluster", width = 9.5, height = 11)
+
+#F2.9 Save Figure 2 with white background (avoid transparent legend band artifacts)
+ggplot2::ggsave(filename = file.path(fig_dir, "Figure_02_DTH_Hazards_and_Cumulative_by_Cluster.pdf"), plot = fig2, width = 9.5, height = 11, bg = "white")
+
+ggplot2::ggsave(filename = file.path(fig_dir, "Figure_02_DTH_Hazards_and_Cumulative_by_Cluster.png"), plot = fig2, width = 9.5, height = 11, dpi = 720, bg = "white")
 
 
 ## In Line Stats Related to BD DTH Analyses (Figure 2) ##
 
-#F2.9 Helper functions for in-line stats
-#F2.9.1 Create reference frame for predictions from fitted primary glm model
+#F2.10 Helper functions for in-line stats
+#F2.10.1 Create reference frame for predictions from fitted primary glm model
 make_ref_frame <- function(fit, dat) {
     make_ref_frame_glm(fit = fit, dat = dat)
 }
 
-#F2.9.2 Cumulative risk from hazards helper
+#F2.10.2 Cumulative risk from hazards helper
 cumrisk_from_haz <- function(h, k) {
   h <- pmin(pmax(h, 1e-8), 1 - 1e-8)
   1 - exp(sum(log1p(-h[seq_len(k)])))
 }
 
-#F2.9.3 Wald CI helper
+#F2.10.3 Wald CI helper
 wald_ci <- function(theta_hat, grad, V, level = 0.95, log_scale = FALSE) {
   
-  #F2.9.3.1 Small ridge in case of near-singular V
+  #F2.10.3.1 Small ridge in case of near-singular V
   if (any(!is.finite(V))) V[!is.finite(V)] <- 0
   V <- V + diag(1e-10, nrow(V))
   se <- sqrt(drop(t(grad) %*% V %*% grad))
@@ -2297,7 +2381,7 @@ wald_ci <- function(theta_hat, grad, V, level = 0.95, log_scale = FALSE) {
   list(se = se, lo = lo, hi = hi, z = theta_hat / se, p = 2 * pnorm(-abs(theta_hat / se)))
 }
 
-#F2.9.4 Year-6 cumulative risk difference and ratio from primary glm hazards
+#F2.10.4 Year-6 cumulative risk difference and ratio from primary glm hazards
 year6_rd_rr_delta <- function(fit, dat, wave_key = "ses-06A") {
   obj <- make_ref_frame(fit, dat)
   ref <- obj$ref; X <- obj$X; beta <- obj$beta; V <- obj$V
@@ -2306,7 +2390,7 @@ year6_rd_rr_delta <- function(fit, dat, wave_key = "ses-06A") {
   if (!wave_key %in% waves) wave_key <- tail(waves, 1)
   k_idx <- match(wave_key, waves)
 
-  #F2.9.4.1 Map C1/C2 -> Higher/Lower using coerce_cluster()
+  #F2.10.4.1 Map C1/C2 -> Higher/Lower using coerce_cluster()
   cl_levels <- levels(ref$cluster)
   disp <- coerce_cluster(cl_levels)
   role <- setNames(rep(NA_character_, length(cl_levels)), cl_levels)
@@ -2314,7 +2398,7 @@ year6_rd_rr_delta <- function(fit, dat, wave_key = "ses-06A") {
   role[disp == "Lower-Risk"] <- "LR"
   if (anyNA(role)) {
     
-    #F2.9.4.2 Fallback: choose HR as the one with larger point CR
+    #F2.10.4.2 Fallback: choose HR as the one with larger point CR
     point_cr <- sapply(cl_levels, function(cl) {
       rows <- which(ref$cluster == cl)
       h <- plogis(as.numeric(X[rows, , drop = FALSE] %*% beta))
@@ -2323,7 +2407,7 @@ year6_rd_rr_delta <- function(fit, dat, wave_key = "ses-06A") {
     role[] <- "LR"; role[names(which.max(point_cr))] <- "HR"
   }
 
-  #F2.9.4.3 Functions to compute cumulative risk by cluster
+  #F2.10.4.3 Functions to compute cumulative risk by cluster
   make_f <- function(cl) {
     rows <- which(ref$cluster == cl)
     function(b) {
@@ -2332,7 +2416,7 @@ year6_rd_rr_delta <- function(fit, dat, wave_key = "ses-06A") {
     }
   }
 
-  #F2.9.4.4 Cumulative risks, RD, RR, and their CIs
+  #F2.10.4.4 Cumulative risks, RD, RR, and their CIs
   f_HR <- make_f(names(role)[role == "HR"])
   f_LR <- make_f(names(role)[role == "LR"])
   CR_HR <- f_HR(beta); CR_LR <- f_LR(beta)
@@ -2345,7 +2429,7 @@ year6_rd_rr_delta <- function(fit, dat, wave_key = "ses-06A") {
   g_RD  <- g_HR - g_LR
   ci_RD <- wald_ci(RD, g_RD, V, level = 0.95, log_scale = FALSE)
 
-  #F2.9.4.5 Log-RR & CI
+  #F2.10.4.5 Log-RR & CI
   g_logRR  <- g_HR / CR_HR - g_LR / CR_LR
   se_logRR <- sqrt(drop(t(g_logRR) %*% V %*% g_logRR))
   z <- qnorm(0.975)
@@ -2353,7 +2437,7 @@ year6_rd_rr_delta <- function(fit, dat, wave_key = "ses-06A") {
   RR_hi <- RR * exp(+z * se_logRR)
   p_logRR <- 2 * pnorm(-abs(log(RR) / se_logRR))
 
-  #F2.9.4.6 Return results
+  #F2.10.4.6 Return results
   list(
     wave = wave_key,
     CR_HR = CR_HR, CR_LR = CR_LR,
@@ -2361,7 +2445,7 @@ year6_rd_rr_delta <- function(fit, dat, wave_key = "ses-06A") {
     RR = RR, RR_lo = RR_lo, RR_hi = RR_hi, RR_p = p_logRR)
 }
 
-#F2.10 Compute Year-6 cumulative risk differences and ratios by outcome and store in a table
+#F2.11 Compute Year-6 cumulative risk differences and ratios by outcome and store in a table
 cum6 <- lapply(OUT_FIG, function(out) {
   fit <- fits_primary[[out]]; if (is.null(fit)) return(NULL)
   dat <- bd_pp_model %>%
@@ -2369,13 +2453,13 @@ cum6 <- lapply(OUT_FIG, function(out) {
     droplevels() %>%
     dplyr::mutate(
         
-        #F2.10.1 Ensure factors have correct levels
+        #F2.11.1 Ensure factors have correct levels
         end_wave = factor(end_wave, levels = wave_levels),
         cluster = factor(cluster),
         sex = factor(sex),
         site_factor = factor(site_factor))
 
-  #F2.10.2 Compute Year-6 cumulative risk RD/RR
+  #F2.11.2 Compute Year-6 cumulative risk RD/RR
   res <- year6_rd_rr_delta(fit, dat, wave_key = "ses-06A")
   tibble::tibble(
     outcome = out,
@@ -2387,7 +2471,7 @@ cum6 <- lapply(OUT_FIG, function(out) {
     }) %>% 
     dplyr::bind_rows()
 
-#F2.11 Clean output table for in-line reporting
+#F2.12 Clean output table for in-line reporting
 cum6_lines <- cum6 %>%
   mutate(
     line = glue::glue(
@@ -2397,11 +2481,11 @@ cum6_lines <- cum6 %>%
       "RR = {sprintf('%.2f', RR)} [{sprintf('%.2f', RR_lo)}, {sprintf('%.2f', RR_hi)}], p = {sprintf('%.3f', RR_p)}")) %>% 
       pull(line)
 
-#F2.12 Print cumulative risk difference/ratio lines
+#F2.13 Print cumulative risk difference/ratio lines
 cat(paste("•", cum6_lines), sep = "\n")
 
-#F2.13 Extract cluster and age effects for in-line reporting
-#F2.13.1 Create a robust outcome-key helper for DTH summary tables
+#F2.14 Extract cluster and age effects for in-line reporting
+#F2.14.1 Create a robust outcome-key helper for DTH summary tables
 to_bd_outcome_key <- function(x) {
   key <- gsub("[^a-z0-9]", "", tolower(as.character(x)))
 
@@ -2413,7 +2497,7 @@ to_bd_outcome_key <- function(x) {
     TRUE ~ as.character(x))
 }
 
-#F2.13.2 Create a robust outcome-label helper for DTH summary tables
+#F2.14.2 Create a robust outcome-label helper for DTH summary tables
 to_bd_out_lab <- function(x) {
   key <- to_bd_outcome_key(x)
 
@@ -2425,7 +2509,7 @@ to_bd_out_lab <- function(x) {
     TRUE ~ as.character(x))
 }
 
-#F2.13.3 Create a helper to format p-values for inline text
+#F2.14.3 Create a helper to format p-values for inline text
 fmt_p_inline <- function(p) {
   dplyr::case_when(
     is.na(p) ~ "-",
@@ -2433,7 +2517,7 @@ fmt_p_inline <- function(p) {
     TRUE ~ paste0("= ", sprintf("%.3f", p)))
 }
 
-#F2.13.4 Determine whether the robust SE column is named se_method or se_type
+#F2.14.4 Determine whether the robust SE column is named se_method or se_type
 se_col <- if ("se_method" %in% names(bd_dth_sum)) {
   "se_method"
 } else if ("se_type" %in% names(bd_dth_sum)) {
@@ -2442,7 +2526,7 @@ se_col <- if ("se_method" %in% names(bd_dth_sum)) {
   stop("Could not find either 'se_method' or 'se_type' in bd_dth_sum.")
 }
 
-#F2.14 Primary cluster main effect = adjusted pooled interval-onset OR (Higher- vs Lower-Risk)
+#F2.15 Primary cluster main effect = adjusted pooled interval-onset OR (Higher- vs Lower-Risk)
 cluster_effects_primary <- bd_dth_sum %>%
   dplyr::filter(
     model == "logit_primary",
@@ -2471,7 +2555,7 @@ if (length(cluster_lines_primary) > 0) {
   cat("\n")
 }
 
-#F2.15 Primary age term = between-person age only
+#F2.16 Primary age term = between-person age only
 age_effects_primary <- bd_dth_sum %>%
   dplyr::filter(
     model == "logit_primary",
@@ -2496,7 +2580,7 @@ if (length(age_lines_primary) > 0) {
   cat(paste("•", age_lines_primary), sep = "\n")
 }
 
-#F2.15.1 Sensitivity note for within-person orthogonalized age
+#F2.16.1 Sensitivity note for within-person orthogonalized age
 age_effects_within <- bd_dth_sum %>%
   dplyr::filter(
     model == "logit_within_orth",
