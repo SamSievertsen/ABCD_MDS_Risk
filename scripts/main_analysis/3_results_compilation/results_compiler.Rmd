@@ -2134,6 +2134,23 @@ emp_cum_by_wave <- bd_pp_model %>%
   dplyr::mutate(cumrisk_obs = 1 - cumprod(1 - pmin(pmax(h, 0), 1))) %>%
   dplyr::ungroup()
 
+#F2.4.2 Set a shared y-axis for Panels A-D (interval hazards)
+haz_ymax_raw <- max(
+  c(haz_by_wave$hazard, haz_by_wave$hi, emp_cum_by_wave$h),
+  na.rm = TRUE)
+
+haz_ymax <- if (is.finite(haz_ymax_raw) && haz_ymax_raw <= 0.12) {
+  0.12
+  } else {
+    0.15
+  }
+
+haz_y_breaks <- if (haz_ymax == 0.12) {
+  c(0, 0.03, 0.06, 0.09, 0.12)
+  } else {
+    c(0, 0.05, 0.10, 0.15)
+  }
+
 #F2.5 Plot predicted and observed hazard by wave and cluster
 plot_haz_wave <- function(df, out_key, panel_letter = NULL) {
   
@@ -2191,7 +2208,11 @@ plot_haz_wave <- function(df, out_key, panel_letter = NULL) {
       shape = 1,
       size = 1.6) +
     scale_x_discrete(labels = x_lab_vec, drop = FALSE) +
-    scale_y_continuous(labels = scales::percent_format(accuracy = 0.1)) +
+    scale_y_continuous(
+      labels = scales::percent_format(accuracy = 1),
+      limits = c(0, haz_ymax),
+      breaks = haz_y_breaks,
+      expand = expansion(mult = c(0, 0.02))) +
     scale_color_manual(
       values = cluster_cols_f2,
       breaks = names(cluster_cols_f2),
@@ -2243,7 +2264,7 @@ plot_cum_wave <- function(df, out_key) {
                shape = 1, size = 1.8, inherit.aes = FALSE) +
     
     #F2.6.4 Scales and labels
-    scale_y_continuous(labels = scales::percent_format(accuracy = 0.1), limits = c(0, 0.30)) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 1), limits = c(0, 0.30)) +
     scale_x_discrete(drop = FALSE, labels = x_lab_vec) +
     scale_color_manual(
       values = cluster_cols_f2,
@@ -2265,7 +2286,8 @@ plot_cum_wave <- function(df, out_key) {
 #F2.7.1 Generate hazard and cumulative panels for each outcome
 haz_panels <- lapply(seq_along(OUT_FIG), function(i) {
   plot_haz_wave(haz_by_wave, OUT_FIG[i], panel_letter = LETTERS[i])
-})
+  })
+
 cum_panels <- lapply(OUT_FIG, function(o) plot_cum_wave(cum_by_wave, o))
 
 #F2.7.2 Prepare the panel versions used in the final layout
@@ -2273,15 +2295,13 @@ haz_layout_panels <- list(
   haz_panels[[1]] + strip_x,
   haz_panels[[2]] + strip_x,
   haz_panels[[3]],
-  haz_panels[[4]]
-)
+  haz_panels[[4]])
 
 cum_layout_panels <- list(
   cum_panels[[1]] + strip_x,
   cum_panels[[2]] + strip_x,
   cum_panels[[3]],
-  cum_panels[[4]]
-)
+  cum_panels[[4]])
 
 #F2.7.3 Extract a shared legend with explicit white background
 legend_f2 <- cowplot::get_legend(
@@ -2291,8 +2311,7 @@ legend_f2 <- cowplot::get_legend(
       panel.background = element_rect(fill = "white", color = NA),
       plot.background = element_rect(fill = "white", color = NA),
       legend.background = element_rect(fill = "white", color = NA),
-      legend.box.background = element_rect(fill = "white", color = NA))
-)
+      legend.box.background = element_rect(fill = "white", color = NA)))
 
 #F2.7.4 Remove legends from the actual panel plots
 haz_layout_panels <- lapply(haz_layout_panels, function(p) p + theme(legend.position = "none"))
@@ -2303,8 +2322,7 @@ aligned_f2 <- cowplot::align_plots(
   plotlist = c(haz_layout_panels, cum_layout_panels),
   align = "hv",
   axis = "tblr",
-  greedy = FALSE
-)
+  greedy = FALSE)
 
 #F2.7.6 Rebuild the top and bottom 2x2 grids from the already-aligned grobs
 haz_grid <- cowplot::plot_grid(
@@ -2344,9 +2362,9 @@ fig2 <- cowplot::plot_grid(
 print(fig2)
 
 #F2.9 Save Figure 2 with white background (avoid transparent legend band artifacts)
-ggplot2::ggsave(filename = file.path(fig_dir, "Figure_02_DTH_Hazards_and_Cumulative_by_Cluster.pdf"), plot = fig2, width = 9.5, height = 11, bg = "white")
+ggplot2::ggsave(filename = file.path(fig_dir, "Figure_02_DTH_Hazards_and_Cumulative_by_Cluster.pdf"), plot = fig2, width = 9, height = 12, bg = "white")
 
-ggplot2::ggsave(filename = file.path(fig_dir, "Figure_02_DTH_Hazards_and_Cumulative_by_Cluster.png"), plot = fig2, width = 9.5, height = 11, dpi = 720, bg = "white")
+ggplot2::ggsave(filename = file.path(fig_dir, "Figure_02_DTH_Hazards_and_Cumulative_by_Cluster.png"), plot = fig2, width = 9, height = 12, dpi = 720, bg = "white")
 
 
 ## In Line Stats Related to BD DTH Analyses (Figure 2) ##
