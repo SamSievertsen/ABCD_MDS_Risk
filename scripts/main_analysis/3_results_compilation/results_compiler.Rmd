@@ -21,7 +21,7 @@ knitr::opts_chunk$set(fig.width = 8, fig.height = 5, dpi = 300, fig.align = "cen
 
 ```
 
-```{r setup, include=FALSE}
+```{r setup, include = FALSE, echo = FALSE, warning = FALSE}
 
 #1. Script Setup
 #1.1 Load in dependent packages from renv
@@ -298,7 +298,7 @@ This document compiles all manuscript-ready figures and tables for the ABCD MDS 
 - Outputs: In-memory frames/objects (e.g., `risk_vars`, `outcome_vars`, `bd_pp`, `val_sil_*`); TK frames if files are missing
 - Notes: `read_or_tk()` seeds placeholders with expected columns; stats frames are standardized for consistent downstream use
 
-```{r input-config}
+```{r input-config, echo = FALSE, warning = FALSE}
 
 #2. Inputs Configuration
 #2.1 Read in core datasets
@@ -791,7 +791,7 @@ seed_if_needed()
 - Outputs: Saves `Table_01_Analytic_Sample_Characteristics` as HTML/PNG/RTF in `results/tables`; returns a gt table
 - Notes: Panel A mirrors the total columns of Table S1 and Panel B mirrors the total columns of Table S2, but both are generated directly from source data so the compiler remains self-contained and updates automatically with the analysis outputs
 
-```{r table 1}
+```{r table 1, echo = FALSE, warning = FALSE}
 
 ## Table 1: Characteristics of the two primary analytic samples ##
 
@@ -1228,7 +1228,7 @@ t1_gt
 - Outputs: Saves `Table_02_Baseline_Characteristics` as HTML/PNG/RTF in `results/tables`; returns a gt object (fallback mini table if `gtsummary` missing)
 - Notes: Requires strict raw column names (see `DEM_COLS`) and outcome variables (`DIAG_COLS`); earliest session per participant
 
-```{r table 2}
+```{r table 2, echo = FALSE, warning = FALSE}
 
 ## Table 2: Baseline characteristics of the clustered sample ##
 
@@ -1404,7 +1404,7 @@ if (requireNamespace("gtsummary", quietly = TRUE)) {
 - Outputs: Saves `Table_03_Risk_Variables_by_Cluster` as HTML/PNG/RTF; returns a gt table
 - Notes: Automatically pivots wide `risk_vars` to long; detects variable types (binary vs continuous); uses `effectsize` and `glm`
 
-```{r table 3}
+```{r table 3, echo = FALSE, warning = FALSE}
 
 ## Table 3: Risk-variable descriptive statistics by cluster (+ effect sizes) ##
 
@@ -1581,7 +1581,7 @@ t3_gt
 - Outputs: Saves Table_S1_Onset_Characteristics_by_Cluster as HTML/PNG/RTF; returns a gt table
 - Notes: Applies model-ready filters consistent with survival analyses; reports demographics and interval onset counts per outcome
 
-```{r table s1}
+```{r table s1, echo = FALSE, warning = FALSE}
 
 ## 6. Table S1: Characteristics of participants in the onset analysis ##
 
@@ -1880,7 +1880,7 @@ ts1
 - Outputs: Saves `Figure_02_DTH_Hazards_and_Cumulative_by_Cluster.{pdf,png}`; prints Year-6 RD/RR lines and age-term summaries
 - Notes: Computes cumulative risk CIs via MVN draws of fixed effects (or boot fallback); overlays observed empirical hazards/cumulative
 
-```{r figure 2 stats}
+```{r figure 2 stats, echo = FALSE, warning = FALSE}
 
 ## Figure 2: Discrete-time hazards and cumulative incidence by cluster ##
 
@@ -2540,7 +2540,7 @@ year6_rd_rr_delta <- function(fit, dat, wave_key = "ses-06A") {
   RR <- CR_HR / CR_LR
   g_HR <- numDeriv::grad(f_HR, beta)
   g_LR <- numDeriv::grad(f_LR, beta)
-  g_RD  <- g_HR - g_LR
+  g_RD <- g_HR - g_LR
   ci_RD <- wald_ci(RD, g_RD, V, level = 0.95, log_scale = FALSE)
 
   #F2.10.4.5 Log-RR & CI
@@ -2729,7 +2729,7 @@ if (nrow(age_effects_within) > 0) {
 - Outputs: Saves Table_S2_Prevalence_Characteristics_by_Cluster as HTML/PNG/RTF; prints a gt table
 - Notes: Denominator for occurrence rows excludes missing status; demographics taken from Any BSD panel per wave; clusters displayed as Higher-/Lower-Risk
 
-```{r table s2}
+```{r table s2, echo = FALSE, warning = FALSE}
 
 ## Table S2 - Prevalence (GEE) analysis characteristics ##
 
@@ -3002,7 +3002,7 @@ tS2
 - Outputs: Prints inline lines for manuscript
 - Notes: Uses emmeans contrasts on the link scale and robust vcov from geeglm; truncates long CIs with arrows to share a common x-axis
 
-```{r bd odds over time stats}
+```{r bd odds over time stats, echo = FALSE, warning = FALSE}
 
 ## Bipolar Disorder Odds by Risk Cluster Over Time ##
 
@@ -3102,7 +3102,7 @@ cat("GEE in-line stats (Higher- vs Lower-Risk, emmeans, per wave):\n",
 - Outputs: Saves `Table_S3_Baseline_Missingness_Clustering_Variables` as HTML/PNG/RTF in results/tables; returns a gt table
 - Notes: The saved pct_miss field is a proportion, so it is displayed here as a percentage for publication-quality formatting
 
-```{r table s3}
+```{r table s3, echo = FALSE, warning = FALSE}
 
 ## Table S3: Baseline missingness across the 17 risk variables used for clustering ##
 
@@ -3143,7 +3143,7 @@ tS3_gt
 - Outputs: Saves `Table_S4_MissForest_KGrid_Metrics` as HTML/PNG/RTF in results/tables; returns a gt table
 - Notes: This table uses only the missForest solution, consistent with the current supplement and revised analysis plan
 
-```{r table s4}
+```{r table s4, echo = FALSE, warning = FALSE}
 
 ## Table S4: k-prototypes fit, stability, and anchor-concordance metrics for missForest-imputed baseline data across candidate k solutions ##
 
@@ -3190,7 +3190,7 @@ tS4_gt
 - Outputs: Saves `Figure_S1_MissForest_KGrid_Metrics.{pdf,png}` in results/figures; returns a ggplot object
 - Notes: This is the figure supported by the saved outputs. The current imputation script does not save replicate-level silhouette or ARI distributions, so this figure summarizes the exported metric values across k rather than plotting distributions
 
-```{r figure s1}
+```{r figure s1, echo = FALSE, warning = FALSE}
 
 ## Figure S1: MissForest-imputed clustering sensitivity metrics across candidate k solutions ##
 
@@ -3269,7 +3269,7 @@ figS1
 - Outputs: Saves `Table_S5_Feature_Importance_and_MVFS_Composition` as HTML/PNG/RTF in `results/tables`; returns a gt table
 - Notes: The final MVFS composition is taken directly from the saved selected-solution RDS when available; if that object is unavailable, the code falls back to the first `mvfs_n` features by final priority rank
 
-```{r table s5}
+```{r table s5, echo = FALSE, warning = FALSE}
 
 ## Table S5: Feature importance summary and resulting MVFS composition ##
 
@@ -3354,7 +3354,7 @@ tS5_gt
 - Outputs: Saves `Figure_S2_Feature_Importance_and_MVFS_Sensitivity.{pdf,png}` in `results/figures`; returns a combined figure object
 - Notes: The SHAP beeswarm panel is embedded from the saved analysis figure because the feature-importance pipeline saved the visualization but not an exported observation-level SHAP matrix suitable for exact downstream reconstruction
 
-```{r figure s2}
+```{r figure s2, echo = FALSE, warning = FALSE}
 
 ## Figure S2: Feature-importance and parsimonious-feature-set sensitivity displays ##
 
@@ -3564,7 +3564,7 @@ figS2
 - Outputs: Saves `Figure_S3_MVFS_Trace_ARI_and_Jaccard.{pdf,png}` in `results/figures`; returns a combined figure object
 - Notes: This figure intentionally focuses on the selected primary trace rather than retaining facet labels from the intermediate analysis plots, which is cleaner and more aligned with publication display standards
 
-```{r figure s3}
+```{r figure s3, echo = FALSE, warning = FALSE}
 
 ## Figure S3: MVFS agreement and stability trace across candidate subset size ##
 
@@ -3666,7 +3666,7 @@ figS3
 - Outputs: Saves `Table_S6_Algorithm_Benchmark_Metrics` as HTML/PNG/RTF in results/tables; returns a gt table
 - Notes: Standardizes algorithm labels across k-prototypes, KAMILA, and clustMD; uses mean Gower silhouette as the common primary comparison metric; bolds the preferred row within each algorithm; retains BIC descriptively for clustMD only because it is not available for the other algorithms
 
-```{r table s6}
+```{r table s6, echo = FALSE, warning = FALSE}
 
 ## Table S6: Cross-algorithm clustering benchmark metrics across candidate k solutions ##
 
@@ -3779,7 +3779,7 @@ tS6_gt
 - Outputs: Saves `Figure_S4_Algorithm_Benchmark_Metrics.{pdf,png}` in results/figures; returns a combined figure object
 - Notes: Panel A displays mean Gower silhouette, the shared primary cross-algorithm comparison metric; Panel B displays ARI versus the original k-prototypes k=2 anchor partition as a descriptive concordance metric; open circles mark the preferred solution within each algorithm under the shared Gower-silhouette framework
 
-```{r figure s4}
+```{r figure s4, echo = FALSE, warning = FALSE}
 
 ## Figure S4: Cross-algorithm benchmark sensitivity metrics across candidate k solutions ##
 
@@ -3918,7 +3918,7 @@ figS4
 - Outputs: Saves `Figure_S5_Common_Comorbidity_Sensitivity_ORs.{pdf,png}` in results/figures; returns a combined figure object
 - Notes: Restricts display to the 3 contrasts reported in the supplement results; uses a log-scale odds-ratio axis with a reference line at OR=1; Panel A shows contrasts versus no diagnosis, and Panel B shows the direct pairwise comparison between BSD plus comorbidity and other diagnosis only
 
-```{r figure s5}
+```{r figure s5, echo = FALSE, warning = FALSE}
 
 ## Figure S5: Common-comorbidity sensitivity-analysis odds ratios by wave ##
 
@@ -4102,7 +4102,7 @@ figS5
 - Outputs: Saves `Table_S7_Alternative_Baseline_Risk_Representation_Utility` as HTML/PNG/RTF in `results/tables`; returns a gt table
 - Notes: Primary metrics are McFadden pseudo-R2 for first-onset models and row-level in-sample AUC for occurrence models; joint block-test p-values correspond to the MVFS and full 17-variable predictor blocks beyond shared covariates
 
-```{r table s7}
+```{r table s7, echo = FALSE, warning = FALSE}
 
 ## Table S7: Relative downstream BSD-related information retained by alternative baseline risk representations ##
 
@@ -4192,7 +4192,7 @@ tS7_gt
 - Outputs: Saves `Table_S8_DTH_Alternative_Baseline_Risk_Representation_ORs` as HTML/PNG/RTF in `results/tables`; returns a gt table
 - Notes: Displays only the baseline-risk representation terms of interest; nuisance covariates such as sex, wave, age, and intercept terms are omitted for readability
 
-```{r table s8}
+```{r table s8, echo = FALSE, warning = FALSE}
 
 ## Table S8: Participant-clustered robust-SE adjusted odds ratios for first-onset models ##
 
@@ -4342,7 +4342,7 @@ tS8_gt
 - Outputs: Saves `Table_S9_GEE_Alternative_Baseline_Risk_Representation_ORs` as HTML/PNG/RTF in `results/tables`; returns a gt table
 - Notes: Displays only the baseline-risk representation terms of interest; nuisance covariates such as wave, sex, baseline outcome status, age, and intercept terms are omitted for readability
 
-```{r table s9}
+```{r table s9, echo = FALSE, warning = FALSE}
 
 ## Table S9: Robust-SE adjusted odds ratios for occurrence models ##
 
@@ -4430,7 +4430,7 @@ tS9_gt
 - Outputs: Saves `Figure_S6_Cluster_vs_Strongest_Single_Predictor_Effect_Magnitudes.{pdf,png}` in results/figures; returns a ggplot object
 - Notes: For the MVFS and full 17-variable models, the plotted point is the single baseline predictor with the largest odds-ratio magnitude relative to 1.0 within that outcome/model, defined as exp(abs(log(OR))); inferential details remain in Tables S8 and S9
 
-```{r figure s6}
+```{r figure s6, echo = FALSE, warning = FALSE}
 
 ## Figure S6: Cluster-label versus strongest single-predictor ORs across alternative baseline risk representations ##
 
