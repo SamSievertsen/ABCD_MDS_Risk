@@ -3199,7 +3199,7 @@ figS1_df <- dplyr::bind_rows(
   kgrid_mf %>%
     dplyr::transmute(
       k = as.integer(k),
-      metric = "Mean silhouette",
+      metric = "Mean Silhouette",
       value = as.numeric(silhouette_huang),
       ymin = NA_real_,
       ymax = NA_real_),
@@ -3213,12 +3213,12 @@ figS1_df <- dplyr::bind_rows(
   kgrid_mf %>%
     dplyr::transmute(
       k = as.integer(k),
-      metric = "ARI vs anchor",
+      metric = "ARI vs Anchor",
       value = as.numeric(ari_vs_anchor_k2),
       ymin = NA_real_,
       ymax = NA_real_)) %>%
   dplyr::mutate(
-    metric = factor(metric, levels = c("Mean silhouette", "Mean Jaccard", "ARI vs anchor")))
+    metric = factor(metric, levels = c("Mean Silhouette", "Mean Jaccard", "ARI vs Anchor")))
 
 #FS1.2 Build a clean multi-panel summary figure
 figS1 <- ggplot(figS1_df, aes(x = k, y = value)) +
@@ -3239,9 +3239,9 @@ figS1 <- ggplot(figS1_df, aes(x = k, y = value)) +
     ncol = 3,
     scales = "fixed",
     labeller = as_labeller(c(
-      "Mean silhouette" = "A. Mean silhouette",
+      "Mean Silhouette" = "A. Mean Silhouette",
       "Mean Jaccard" = "B. Mean Jaccard",
-      "ARI vs anchor" = "C. ARI vs anchor"))) +
+      "ARI vs Anchor" = "C. ARI vs Anchor"))) +
   labs(
     title = "Figure S1. MissForest-imputed clustering sensitivity metrics across candidate k solutions",
     x = "Candidate number of clusters (k)",
@@ -3611,7 +3611,7 @@ p_mvfs_ari <- ggplot(mvfs_trace_plot_df, aes(x = n_features, y = ari)) +
     breaks = seq(0, 1, by = 0.2),
     expand = expansion(mult = c(0.02, 0.04))) +
   labs(
-    title = "A. Agreement with anchor partition",
+    title = "A. Agreement With Anchor Partition",
     x = NULL,
     y = "Adjusted Rand index") +
   theme_classic(base_size = 12) +
@@ -3635,7 +3635,7 @@ p_mvfs_jacc <- ggplot(mvfs_trace_plot_df, aes(x = n_features, y = jaccard_min)) 
     breaks = seq(0, 1, by = 0.2),
     expand = expansion(mult = c(0.02, 0.04))) +
   labs(
-    title = "B. Minimum clusterwise stability",
+    title = "B. Minimum Clusterwise Stability",
     x = "Candidate subset size, |S| (number of features)",
     y = "Minimum Jaccard similarity") +
   theme_classic(base_size = 12) +
@@ -3849,7 +3849,7 @@ p_alg_sil <- ggplot(
     breaks = names(alg_cols_s4),
     labels = names(alg_cols_s4)) +
   labs(
-    title = "A. Mean Gower silhouette by candidate k",
+    title = "A. Mean Gower Silhouette by Candidate k",
     x = "Candidate number of clusters (k)",
     y = "Mean Gower silhouette",
     color = "Algorithm") +
@@ -3885,7 +3885,7 @@ p_alg_ari <- ggplot(
     breaks = names(alg_cols_s4),
     labels = names(alg_cols_s4)) +
   labs(
-    title = "B. ARI vs original k-prototypes k=2 anchor",
+    title = "B. ARI vs Original k-prototypes k=2 Anchor",
     x = "Candidate number of clusters (k)",
     y = "Adjusted Rand index",
     color = "Algorithm") +
@@ -3925,7 +3925,7 @@ figS4
 #FS5.1 Guard against placeholder input
 if (is_tk(comorb_or_by_wave)) {
   stop(
-    "Figure S5 requires results/main_analysis/2_statistical_analysis/5_comorbidity_sensitivity_analysis/tables/gee_or_by_wave.csv. ",
+    "Figure S5 requires ./results/main_analysis/2_statistical_analysis/5_comorbidity_sensitivity_analysis/tables/gee_or_by_wave.csv. ",
     "Run 5_comorbidity_sensitivity_analysis.Rmd first, then knit again.")
 }
 
@@ -4030,7 +4030,7 @@ p_figS5_A <- ggplot2::ggplot(
     switch = "y",
     labeller = ggplot2::label_wrap_gen(width = 30)) +
   ggplot2::labs(
-    title = "A. Contrasts versus no diagnosis",
+    title = "A. Contrasts Versus no Diagnosis",
     x = NULL) +
   forest_theme_s5() +
   ggplot2::theme(
@@ -4065,7 +4065,7 @@ p_figS5_B <- ggplot2::ggplot(
     switch = "y",
     labeller = ggplot2::label_wrap_gen(width = 30)) +
   ggplot2::labs(
-    title = "B. Direct pairwise comparison",
+    title = "B. Direct Pairwise Comparison",
     x = "Odds ratio (Higher-Risk vs Lower-Risk)") +
   forest_theme_s5()
 
@@ -4615,10 +4615,10 @@ extract_top_effects_s6 <- function(df, domain_label) {
 figS6_df <- dplyr::bind_rows(
   extract_top_effects_s6(
     dth_utility_coef,
-    "A. First-onset models"),
+    "A. First-Onset Models"),
   extract_top_effects_s6(
     prev_utility_coef,
-    "B. Occurrence models"))
+    "B. Occurrence Models"))
 
 #FS6.6.1 Save source data for auditing
 readr::write_csv(
@@ -4641,8 +4641,8 @@ fs6_xmax <- ceiling(fs6_xmax / 0.5) * 0.5
 fs6_xmax <- max(fs6_xmax, 5)
 
 #FS6.7.1 Create point-adjacent labels positioned slightly above/right of each OR
-fs6_label_dx <- 0.15
-fs6_label_xmax_buffer <- 0.50
+fs6_label_dx <- 0.13
+fs6_label_xmax_buffer <- 0.45
 
 figS6_df <- figS6_df %>%
   dplyr::mutate(
@@ -4670,7 +4670,7 @@ fig_theme_s6 <- function(base_size = 16) {
       axis.title.x = ggplot2::element_text(size = base_size),
       axis.text.x = ggplot2::element_text(size = base_size - 0.5),
       legend.position = "bottom",
-      legend.title = ggplot2::element_blank(),
+      legend.title = ggplot2::element_text(size = base_size - 0.5),
       legend.text = ggplot2::element_text(size = base_size - 0.5),
       plot.title = ggplot2::element_text(face = "bold", size = base_size + 1.6),
       plot.subtitle = ggplot2::element_text(size = base_size - 0.1),
@@ -4736,11 +4736,12 @@ figS6 <- ggplot2::ggplot(
       "Within each outcome, the adjusted higher- versus lower-risk cluster odds ratio is shown alongside the single ",
       "baseline predictor with the largest absolute log-OR magnitude from the MVFS and full 17-variable models. ",
       "Horizontal bars denote 95% confidence intervals."),
-    x = "Odds Ratio") +
+    x = "Odds Ratio",
+    color = "Model") +
   fig_theme_s6()
 
 #FS6.9 Save and print Figure S6
-save_fig(figS6, "Figure_S6_Cluster_vs_Strongest_Predictor_ORs", width = 14.75, height = 9.75, dpi = 1440)
+save_fig(figS6, "Figure_S6_Cluster_vs_Strongest_Predictor_ORs", width = 14.8, height = 9.75, dpi = 1440)
 
 figS6
 
