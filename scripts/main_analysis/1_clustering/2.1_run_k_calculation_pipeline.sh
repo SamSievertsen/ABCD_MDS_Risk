@@ -1,46 +1,45 @@
 #!/usr/bin/env bash
 
 ## 2.1_run_k_calculation_pipeline.sh ##
-## Master submission script: launches partial array -> merges -> final consensus ##
+## Master submission script: for each configuration, fit -> silhouette array -> merge -> report ##
+## Usage: bash 2.1_run_k_calculation_pipeline.sh [config ...]   (defaults to all three configurations) ##
 
 # Use strict Bash mode (fast error out)
 set -euo pipefail
 IFS=$'\n\t'
 
-# Submit the 35 task array for one index x one k partial validations
-PARTIAL_JID=$(sbatch --parsable 2.2_partial_k_calc_validation.sh)
+# Run from this script's directory so the relative sbatch paths resolve
+cd "$(dirname "${BASH_SOURCE[0]}")"
 
-# For each of the 5 indices, submit a merge job that depends on that index's 7
-# partial tasks finishing successfully
-declare -a MERGE_JIDS
-INDICES=(silhouette cindex gamma ptbiserial tau)
+# Configurations to run: arguments if given, otherwise primary, backup, and emotional-abuse fallback concurrently
+if [[ $# -gt 0 ]]; then
+  CONFIGS=("$@")
+else
+  CONFIGS=(primary backup_cbcl3raw fallback_emo_ace)
+fi
 
-# Run each of the indices in a nested loop
-for i in "${!INDICES[@]}"; do
-  idx="${INDICES[$i]}"
+# Submit an independent dependency chain per configuration, so configurations run concurrently
+for cfg in "${CONFIGS[@]}"; do
 
-  # Compute the 7 array-task IDs for this index
-  start=$(( i * 7 + 1 ))
-  end=$(( i * 7 + 7 ))
-  deps=""
-  for t in $(seq "$start" "$end"); do
-    deps+="${PARTIAL_JID}_$t:"
-  done
-  deps=${deps%:}
+  # Fit k = 2:8 once and cache with an embedded fingerprint
+  FIT_JID=$(sbatch --parsable --job-name="kfit_${cfg}" --export=ALL,CONFIG="${cfg}" 2.2_fit_kproto.sh)
+  FIT_JID=${FIT_JID%%;*}
 
-  # Merge the products of the partial jobs
-  MERGE_JIDS[$i]=$(sbatch --parsable \
-    --export=ALL,IDX="${idx}" \
-    --dependency=afterok:"${deps}" \
-    2.3_merge_k_calc_validation.sh)
+  # One array task per k computes individual silhouette widths from the cached fits (only after a successful fit)
+  SIL_JID=$(sbatch --parsable --job-name="ksil_${cfg}" --export=ALL,CONFIG="${cfg}" \
+    --dependency=afterok:"${FIT_JID}" 2.3_partial_silhouette.sh)
+  SIL_JID=${SIL_JID%%;*}
+
+  # Merge runs after the whole array ends either way, so a task lost to resources falls back to the exact computation
+  MERGE_JID=$(sbatch --parsable --job-name="kmerge_${cfg}" --export=ALL,CONFIG="${cfg}" \
+    --dependency=afterany:"${SIL_JID}" 2.4_merge_silhouette.sh)
+  MERGE_JID=${MERGE_JID%%;*}
+
+  # Report renders only if the merge succeeded
+  REPORT_JID=$(sbatch --parsable --job-name="kreport_${cfg}" --export=ALL,CONFIG="${cfg}" \
+    --dependency=afterok:"${MERGE_JID}" 2.5_k_calc_consensus.sh)
+  REPORT_JID=${REPORT_JID%%;*}
+
+  # Print the chain for this configuration
+  echo "${cfg}: fit=${FIT_JID} silhouette_array=${SIL_JID} merge=${MERGE_JID} report=${REPORT_JID}"
 done
-
-# Once all partial jobs are completed & merged, submit the consensus & plot job
-ALL_MERGE_DEPS=$(IFS=:; echo "${MERGE_JIDS[*]}")
-sbatch --dependency=afterok:"${ALL_MERGE_DEPS}" 2.4_k_calc_consensus.sh
-
-# Print statements describing the partial and whole jobs' status
-echo "Partial array job: $PARTIAL_JID"
-echo "Merge jobs: ${MERGE_JIDS[*]}"
-echo "Final consensus will run after merges."
-

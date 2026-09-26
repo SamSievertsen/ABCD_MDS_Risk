@@ -1,0 +1,1278 @@
+---
+title: "Preliminary Expanded Feature Clustering Sensitivity"
+author: "Sam A. Sievertsen"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    self_contained: true
+    toc: true
+    toc_float: true
+params:
+  scaling_method: "z_score"
+  k_max: 8
+  n_boot: 25
+  stab_nstart: 8
+  seed: 123
+  overwrite: false
+  run_validation_kproto: false
+  sil_method: "full"
+  sil_subsample_n: 2000
+  sil_subsample_reps: 5
+  cbcl_dp_cutoff: 65
+  base_config: "bas2_fhx"
+  descriptive_config: "full_maximal"
+  profile_configs: !r c("bas2_fhx", "cbcl_dp_rawsum", "full_maximal", "full_maximal_dpsum", "anchor_nocbcl", "full_maximal_nocbcl")
+  risk_data_file: "risk_variable_data.csv"
+  raw_data_file: "dataset.csv"
+---
+
+```{r global, include = FALSE}
+
+# Set global env variables
+knitr::opts_chunk$set(echo = TRUE, cache = FALSE, message = TRUE, warning = TRUE, results = "markup", verbose = TRUE, comment = "")
+
+```
+
+```{r environment, echo = FALSE, include = FALSE, warning = FALSE}
+
+## Load packages, data, & set env ##
+
+# Load necessary packages
+library(knitr)
+library(kableExtra)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(purrr)
+library(furrr)
+library(parallelly)
+library(readr)
+library(clustMixType)
+library(cluster)
+library(mclust)
+library(effectsize)
+library(moments)
+library(ggplot2)
+library(glue)
+library(here)
+
+# Configure parallel backend across the k values being fit, respecting the SLURM/cgroup allocation
+n_workers <- min(as.integer(parallelly::availableCores()), length(2:params$k_max))
+if (n_workers > 1) {
+  plan(multisession, workers = n_workers)
+} else {
+  plan(sequential)
+}
+options(future.globals.maxSize = 5e9)
+cat(glue::glue("Parallel workers: {n_workers}\n"))
+
+# Set numerical options
+options(scipen = 999, digits = 8)
+
+# Set seed for reproducible random starts
+set.seed(params$seed)
+
+# Set scaling method from piped params argument
+scaling_method <- params$scaling_method
+
+# Set paths to be used in reading in data & objects
+REPO <- here()
+datapath <- file.path(REPO, "data", "data_processed")
+
+# Establish the path to the preliminary results dir and write it if it does not exist
+prelim_dir <- file.path(datapath, "expanded_feature_preliminary")
+dir.create(prelim_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Set up logging (from SLURM), falling back to a local file when unset
+log_file <- Sys.getenv("DETAILED_LOG", unset = file.path(REPO, "logs", "expanded_feature_preliminary.log"))
+dir.create(dirname(log_file), recursive = TRUE, showWarnings = FALSE)
+
+# Create a logging helper matching the pipe delimited convention used elsewhere
+log_event <- function(tag, ...) {
+  cat(
+    sprintf("%s|%s|%s\n", format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"), tag, paste(..., collapse = "|")),
+    file = log_file, append = TRUE
+  )
+}
+
+# Read in risk variable data for clustering
+risk_variable_data <- read.csv(file.path(datapath, params$risk_data_file))
+
+```
+
+## Purpose
+
+Preliminary sensitivity run resolving the open feature-set questions empirically before committing to the full revision pipeline. Eleven configurations, most varying one element from a common base so differences are attributable:
+
+| Config | Question it answers |
+|---|---|
+| `anchor` | Published 17 features, refit on common rows. Validity check. |
+| `bas2_fhx` | **BASE.** BAS RR (v01) + Drive, plus FHx psychosis and hospitalization |
+| `bas4_fhx` | Does adding BIS (v01) and Fun Seeking change anything? |
+| `cbcl3_dim` | Does swapping DSM-5 depression + anxiety for the Anxious/Depressed syndrome scale change anything? |
+| `cbcl3_bin` | Does the classic binary dysregulation profile (all 3 scales T >= cutoff) change anything? |
+| `cbcl_dp_rawsum` | **Does replacing the 4 CBCL scales with the DP raw sum (Giampetruzzi et al., 2026) change anything?** |
+| `cbcl_dp_pc1` | **Does replacing the 4 CBCL scales with the DP first principal component change anything?** |
+| `ace_split` | Does partitioning abuse out of the ACE composite change anything? |
+| `full_maximal` | Everything at once: all current features plus BIS, Fun Seeking, FHx additions, and the ACE abuse partition, holding CBCL as-is |
+| `full_maximal_dpsum` | **Everything at once, but with the 4 CBCL scales replaced by the DP raw sum** |
+| `anchor_nocbcl` | What remains of the published solution with the CBCL scales removed entirely? |
+| `full_maximal_nocbcl` | What remains of the maximal solution with the CBCL scales removed entirely? |
+
+The two new DP configurations follow Giampetruzzi et al. (2026, *JCPP*), who operationalized the dysregulation profile two ways: as the sum of the three raw subscale scores, and as the first principal component of the three subscales (centered and scaled). Both replace the four CBCL scales with a single continuous variable, which also isolates whether the `cbcl3_bin` collapse was due to dichotomization or to reducing four features to one. Note that Giampetruzzi used the youth self-report YSR; the CBCL here is parent report.
+
+Read the **CBCL Dysregulation Profile Variables**, **Decision Aid**, and **Feature Separation Profiles** sections first. Everything else is supporting detail.
+
+Existing cached solutions are reused. The DP variables are derived from the CBCL subscales already in the feature union, so the analytic row set should be unchanged; a fingerprint check halts execution if it is not.
+
+Bootstrap replicates default to `r params$n_boot`. Rerun the chosen configuration at `n_boot = 1000` before reporting anything externally.
+
+## Data Prep
+
+```{r data prep, warning = FALSE, echo = FALSE}
+
+## Data Prep ##
+
+#1. Define the feature sets using the column names written by the wrangling script
+#1.1 The published 17 clustering features
+feats_anchor <- c(
+  "mh_p_cbcl__dsm__dep_tscore", "mh_p_cbcl__dsm__anx_tscore",
+  "mh_p_cbcl__synd__attn_tscore", "mh_p_cbcl__synd__aggr_tscore",
+  "mh_p_gbi_sum", "mh_y_upps__nurg_sum", "mh_y_upps__purg_sum",
+  "le_l_coi__addr1__coi__total__national_zscore", "fc_p_nsc__ns_mean", "sds_total",
+  "family_history_depression", "family_history_mania", "bullying",
+  "nc_y_nihtb__lswmt__uncor_score", "nc_y_nihtb__flnkr__uncor_score",
+  "nc_y_nihtb__pttcp__uncor_score", "ACE_index_sum_score"
+)
+
+#1.2 The four CBCL scales, isolated so they can be removed as a block
+feats_cbcl <- c(
+  "mh_p_cbcl__dsm__dep_tscore", "mh_p_cbcl__dsm__anx_tscore",
+  "mh_p_cbcl__synd__attn_tscore", "mh_p_cbcl__synd__aggr_tscore"
+)
+
+#1.3 The three CBCL syndrome raw sums that compose the dysregulation profile
+feats_cbcl_dp_raw <- c("mh_p_cbcl__synd__anxdep_sum", "mh_p_cbcl__synd__attn_sum", "mh_p_cbcl__synd__aggr_sum")
+
+#1.4 The BAS scales, per Pagliaccio et al. (2016) revised scoring
+feats_bas2 <- c("mh_y_bisbas__bas__rr_sum__v01", "mh_y_bisbas__bas__dr_sum")
+feats_bas4 <- c(feats_bas2, "mh_y_bisbas__bis_sum__v01", "mh_y_bisbas__bas__fs_sum")
+
+#1.5 The two derived family history variables
+feats_fhx <- c("family_history_psychosis", "family_history_hospitalization")
+
+#1.6 The SDSC subscales, reported descriptively only and never clustered
+sdsc_subscales <- c(
+  "ph_p_sds__dims_sum", "ph_p_sds__sbd_sum", "ph_p_sds__da_sum",
+  "ph_p_sds__swtd_sum", "ph_p_sds__does_sum", "ph_p_sds__hyphy_sum"
+)
+
+#1.7 Raw columns needed to derive the abuse indicators and the emotional abuse proxy
+#1.7.1 KSADS PTSD module items indexing physical and sexual abuse (release 5.1 names, no 6.x equivalent)
+ksads_abuse_items <- c(
+  physical = "ksads_ptsd_raw_762_p", physical2 = "ksads_ptsd_raw_763_p",
+  sexual   = "ksads_ptsd_raw_767_p", sexual2   = "ksads_ptsd_raw_768_p"
+)
+
+#1.7.2 Family Environment Scale conflict item used as an emotional abuse proxy, both reporters
+fes_emotional_items <- c("fc_y_fes__confl_005", "fc_p_fes__confl_005")
+
+#2. Derive the two new family history variables from the raw DEAP export
+#2.1 Map the desired variable names onto their ABCD family history module stems
+famhx_stems <- c(
+  family_history_psychosis = "halluc",
+  family_history_hospitalization = "hosp"
+)
+
+#2.2 Build the first-degree relative source column names for a given stem
+famhx_source_cols <- function(stem) {
+  c(
+    sprintf("mh_p_famhx__%s__fath_001", stem),
+    sprintf("mh_p_famhx__%s__moth_001", stem),
+    sprintf("mh_p_famhx__%s__full__young_%03d", stem, 1:5),
+    sprintf("mh_p_famhx__%s__full__old_%03d", stem, 1:5)
+  )
+}
+
+#2.3 Build the any-relative gate column name for a given stem
+famhx_gate_col <- function(stem) sprintf("mh_p_famhx__%s_001", stem)
+
+#2.4 Assemble every raw family history column needed
+famhx_raw_cols <- unlist(
+  lapply(famhx_stems, function(s) c(famhx_source_cols(s), famhx_gate_col(s))),
+  use.names = FALSE
+)
+
+#2.5 List the BAS, SDSC, and CBCL columns to be pulled from the raw export
+new_columns <- c(feats_bas4, sdsc_subscales, "mh_p_cbcl__synd__anxdep_tscore", feats_cbcl_dp_raw)
+
+#2.6 Read only the needed columns from the raw export and filter to baseline
+raw_data_baseline <- readr::read_csv(
+  file.path(REPO, "data", "data_raw", params$raw_data_file),
+  col_select = all_of(c("participant_id", "session_id", new_columns, famhx_raw_cols,
+                        unname(ksads_abuse_items), fes_emotional_items)),
+  show_col_types = FALSE
+) %>%
+  filter(session_id == "ses-00A")
+
+#2.7 Confirm one baseline row per participant before deriving or joining
+stopifnot(!any(duplicated(raw_data_baseline$participant_id)))
+
+#2.8 Derive a first-degree relative history indicator, mirroring the depression derivation
+derive_family_history <- function(data, stem) {
+
+  #2.8.1 Flag any first-degree relative endorsement, treating NA as not endorsed
+  any_first_degree <- Reduce(
+    `|`,
+    lapply(famhx_source_cols(stem), function(cc) tidyr::replace_na(data[[cc]] == 1, FALSE))
+  )
+
+  #2.8.2 Assign 1 for any first-degree endorsement, 0 where the gate item was answered, NA otherwise
+  dplyr::case_when(
+    any_first_degree ~ 1,
+    data[[famhx_gate_col(stem)]] == 1 ~ 0,
+    data[[famhx_gate_col(stem)]] == 0 ~ 0,
+    TRUE ~ NA_real_
+  )
+}
+
+#2.9 Apply the derivation for each stem and report endorsement
+for (nm in names(famhx_stems)) {
+  raw_data_baseline[[nm]] <- derive_family_history(raw_data_baseline, famhx_stems[[nm]])
+  cat(glue(
+    "{nm}: {sum(raw_data_baseline[[nm]] == 1, na.rm = TRUE)} endorsed, ",
+    "{sum(is.na(raw_data_baseline[[nm]]))} missing of {nrow(raw_data_baseline)}\n"
+  ))
+}
+
+#3. Derive the abuse indicators used by the ace_split and maximal configurations
+#3.1 Physical abuse factor: either KSADS physical abuse item endorsed
+raw_data_baseline$abuse_physical <- dplyr::case_when(
+  raw_data_baseline[[ksads_abuse_items[["physical"]]]] == 1 |
+    raw_data_baseline[[ksads_abuse_items[["physical2"]]]] == 1 ~ 1,
+  !is.na(raw_data_baseline[[ksads_abuse_items[["physical"]]]]) |
+    !is.na(raw_data_baseline[[ksads_abuse_items[["physical2"]]]]) ~ 0,
+  TRUE ~ NA_real_
+)
+
+#3.2 Sexual abuse factor: either KSADS sexual abuse item endorsed
+raw_data_baseline$abuse_sexual <- dplyr::case_when(
+  raw_data_baseline[[ksads_abuse_items[["sexual"]]]] == 1 |
+    raw_data_baseline[[ksads_abuse_items[["sexual2"]]]] == 1 ~ 1,
+  !is.na(raw_data_baseline[[ksads_abuse_items[["sexual"]]]]) |
+    !is.na(raw_data_baseline[[ksads_abuse_items[["sexual2"]]]]) ~ 0,
+  TRUE ~ NA_real_
+)
+
+#3.3 Emotional abuse proxy: either reporter endorses the family criticism item, mirroring the bullying collapse
+raw_data_baseline$abuse_emotional <- dplyr::case_when(
+  raw_data_baseline[[fes_emotional_items[1]]] == 1 |
+    raw_data_baseline[[fes_emotional_items[2]]] == 1 ~ 1,
+  !is.na(raw_data_baseline[[fes_emotional_items[1]]]) |
+    !is.na(raw_data_baseline[[fes_emotional_items[2]]]) ~ 0,
+  TRUE ~ NA_real_
+)
+
+#3.4 Report endorsement for each abuse indicator
+feats_abuse <- c("abuse_physical", "abuse_sexual", "abuse_emotional")
+for (nm in feats_abuse) {
+  cat(glue(
+    "{nm}: {sum(raw_data_baseline[[nm]] == 1, na.rm = TRUE)} endorsed ",
+    "({round(100 * mean(raw_data_baseline[[nm]] == 1, na.rm = TRUE), 2)}%), ",
+    "{sum(is.na(raw_data_baseline[[nm]]))} missing\n"
+  ))
+}
+
+#4. Join the derived and new columns onto the clustering data
+risk_variable_data <- risk_variable_data %>%
+  left_join(
+    raw_data_baseline %>%
+      dplyr::select(all_of(c("participant_id", new_columns, names(famhx_stems), feats_abuse))),
+    by = "participant_id"
+  )
+
+#5. Derive the reduced ACE sum, the CBCL dysregulation profile binary, and the DP raw sum
+#5.1 Reduced ACE sum removes the physical and sexual abuse factors from the composite
+#5.1.1 The emotional abuse proxy is not currently in the composite, so nothing is removed for it
+risk_variable_data <- risk_variable_data %>%
+  mutate(
+    ACE_index_reduced = ACE_index_sum_score - abuse_physical - abuse_sexual
+  )
+
+#5.2 Verify the reduced sum is coherent before it is used as a feature
+ace_check <- risk_variable_data %>%
+  filter(!is.na(ACE_index_reduced))
+cat(glue(
+  "ACE reduced sum: range {min(ace_check$ACE_index_reduced)} to {max(ace_check$ACE_index_reduced)}; ",
+  "{sum(ace_check$ACE_index_reduced < 0)} negative values (should be 0)\n"
+))
+if (any(ace_check$ACE_index_reduced < 0)) {
+  stop("Negative values in ACE_index_reduced. The abuse factor derivation does not match the composite; stop and reconcile against the wrangling script before proceeding.")
+}
+
+#5.3 CBCL dysregulation profile binary: all three syndrome scales at or above the cutoff
+risk_variable_data <- risk_variable_data %>%
+  mutate(
+    cbcl_dysregulation_binary = dplyr::case_when(
+      mh_p_cbcl__synd__anxdep_tscore >= params$cbcl_dp_cutoff &
+        mh_p_cbcl__synd__attn_tscore >= params$cbcl_dp_cutoff &
+        mh_p_cbcl__synd__aggr_tscore >= params$cbcl_dp_cutoff ~ 1,
+      !is.na(mh_p_cbcl__synd__anxdep_tscore) &
+        !is.na(mh_p_cbcl__synd__attn_tscore) &
+        !is.na(mh_p_cbcl__synd__aggr_tscore) ~ 0,
+      TRUE ~ NA_real_
+    )
+  )
+
+#5.4 Report dysregulation profile endorsement
+cat(glue(
+  "CBCL dysregulation profile (all 3 scales T >= {params$cbcl_dp_cutoff}): ",
+  "{sum(risk_variable_data$cbcl_dysregulation_binary == 1, na.rm = TRUE)} endorsed ",
+  "({round(100 * mean(risk_variable_data$cbcl_dysregulation_binary == 1, na.rm = TRUE), 2)}%)\n"
+))
+
+#5.5 CBCL dysregulation profile raw sum, per Giampetruzzi et al. (2026)
+risk_variable_data <- risk_variable_data %>%
+  mutate(cbcl_dp_raw_sum = mh_p_cbcl__synd__anxdep_sum + mh_p_cbcl__synd__attn_sum + mh_p_cbcl__synd__aggr_sum)
+
+#5.6 Confirm the raw sums carry no missingness beyond the T-scores they generate
+raw_vs_t_missing <- sum(!is.na(risk_variable_data$mh_p_cbcl__synd__aggr_tscore) & is.na(risk_variable_data$cbcl_dp_raw_sum))
+cat(glue("Rows with CBCL T-scores but missing a DP raw sum: {raw_vs_t_missing} (should be 0)\n"))
+if (raw_vs_t_missing > 0) {
+  warning("DP raw sum has missingness beyond the T-scores; the analytic row set may change and invalidate cached fits.")
+}
+
+#6. Sanity check that the ABCD SDSC subscales reconstruct the internally computed total
+sds_check <- risk_variable_data %>%
+  filter(if_all(all_of(c("sds_total", sdsc_subscales)), ~ !is.na(.))) %>%
+  mutate(subscale_sum = rowSums(across(all_of(sdsc_subscales))))
+cat(glue(
+  "SDSC total vs subscale sum: {sum(sds_check$sds_total == sds_check$subscale_sum)} of ",
+  "{nrow(sds_check)} exact matches (r = {round(cor(sds_check$sds_total, sds_check$subscale_sum), 4)})\n"
+))
+
+#7. Define the eleven configurations
+#7.1 The leading candidate base
+feats_base <- c(feats_anchor, feats_bas2, feats_fhx)
+
+#7.2 The maximal set, defined separately so its no-CBCL variant can be derived from it
+feats_maximal <- c(
+  setdiff(feats_anchor, "ACE_index_sum_score"),
+  feats_bas4, feats_fhx,
+  "ACE_index_reduced", feats_abuse
+)
+
+#7.3 Assemble the configuration list
+config_feats <- list(
+
+  #7.3.1 Published 17 features, refit on common rows as a validity check
+  anchor = feats_anchor,
+
+  #7.3.2 Leading candidate base
+  bas2_fhx = feats_base,
+
+  #7.3.3 Full BIS/BAS, adding BIS (v01) and Fun Seeking
+  bas4_fhx = c(feats_anchor, feats_bas4, feats_fhx),
+
+  #7.3.4 Three dimensional CBCL scales, swapping DSM-5 dep and anx for the Anxious/Depressed syndrome scale
+  cbcl3_dim = c(
+    setdiff(feats_base, c("mh_p_cbcl__dsm__dep_tscore", "mh_p_cbcl__dsm__anx_tscore")),
+    "mh_p_cbcl__synd__anxdep_tscore"
+  ),
+
+  #7.3.5 Classic binary dysregulation profile replacing all four CBCL scales
+  cbcl3_bin = c(
+    setdiff(feats_base, feats_cbcl),
+    "cbcl_dysregulation_binary"
+  ),
+
+  #7.3.6 DP raw sum replacing all four CBCL scales
+  cbcl_dp_rawsum = c(
+    setdiff(feats_base, feats_cbcl),
+    "cbcl_dp_raw_sum"
+  ),
+
+  #7.3.7 DP first principal component replacing all four CBCL scales; derived below after row restriction
+  cbcl_dp_pc1 = c(
+    setdiff(feats_base, feats_cbcl),
+    "cbcl_dp_pc1"
+  ),
+
+  #7.3.8 ACE composite partitioned into abuse binaries plus a reduced sum
+  ace_split = c(
+    setdiff(feats_base, "ACE_index_sum_score"),
+    "ACE_index_reduced", feats_abuse
+  ),
+
+  #7.3.9 Maximal set, holding the CBCL scales as they are
+  full_maximal = feats_maximal,
+  
+  #7.3.10 Maximal set with the four CBCL scales replaced by the DP raw sum
+  full_maximal_dpsum = c(
+    setdiff(feats_maximal, feats_cbcl),
+    "cbcl_dp_raw_sum"
+  ),
+
+  #7.3.11 Published feature set with the four CBCL scales removed entirely
+  anchor_nocbcl = setdiff(feats_anchor, feats_cbcl),
+
+  #7.3.12 Maximal feature set with the four CBCL scales removed entirely
+  full_maximal_nocbcl = setdiff(feats_maximal, feats_cbcl)
+)
+
+#7.4 Label each configuration with what it varies, for readable output
+config_meta <- tibble::tribble(
+  ~config,                ~varies_from_base,
+  "anchor",               "Published 17 features (validity check)",
+  "bas2_fhx",             "BASE: + BAS RR & Drive, + FHx psychosis & hospitalization",
+  "bas4_fhx",             "BASE + BIS & BAS Fun Seeking",
+  "cbcl3_dim",            "BASE, DSM-5 dep+anx swapped for Anxious/Depressed syndrome",
+  "cbcl3_bin",            glue("BASE, 4 CBCL scales replaced by binary DP (all T >= {params$cbcl_dp_cutoff})"),
+  "cbcl_dp_rawsum",       "BASE, 4 CBCL scales replaced by DP raw sum (anxdep + attn + aggr)",
+  "cbcl_dp_pc1",          "BASE, 4 CBCL scales replaced by DP PC1 (scaled PCA of 3 raw sums)",
+  "ace_split",            "BASE, ACE partitioned into 3 abuse binaries + reduced sum",
+  "full_maximal",         "All accepted additions combined, CBCL held as-is",
+  "full_maximal_dpsum",   "MAXIMAL, 4 CBCL scales replaced by DP raw sum",
+  "anchor_nocbcl",        "ANCHOR with all 4 CBCL scales REMOVED",
+  "full_maximal_nocbcl",  "MAXIMAL with all 4 CBCL scales REMOVED"
+)
+
+#7.5 Record which features each configuration introduces relative to the base, for the decision aid
+config_introduces <- list(
+  anchor              = character(0),
+  bas2_fhx            = c(feats_bas2, feats_fhx),
+  bas4_fhx            = setdiff(feats_bas4, feats_bas2),
+  cbcl3_dim           = "mh_p_cbcl__synd__anxdep_tscore",
+  cbcl3_bin           = "cbcl_dysregulation_binary",
+  cbcl_dp_rawsum      = "cbcl_dp_raw_sum",
+  cbcl_dp_pc1         = "cbcl_dp_pc1",
+  ace_split           = c("ACE_index_reduced", feats_abuse),
+  full_maximal        = c(setdiff(feats_bas4, feats_bas2), "ACE_index_reduced", feats_abuse),
+  full_maximal_dpsum  = c(setdiff(feats_bas4, feats_bas2), "ACE_index_reduced", feats_abuse, "cbcl_dp_raw_sum"),
+  anchor_nocbcl       = character(0),
+  full_maximal_nocbcl = character(0)
+)
+
+#8. Verify every column required by any configuration is present, excepting PC1 which is derived below
+missing_cols <- setdiff(
+  setdiff(unique(c(unlist(config_feats), sdsc_subscales)), "cbcl_dp_pc1"),
+  names(risk_variable_data)
+)
+if (length(missing_cols) > 0) {
+  stop(glue("Missing expected columns: {paste(missing_cols, collapse = ', ')}"))
+}
+
+#9. Ensure dichotomization of categorical data for clustering
+#9.1 Assemble the full categorical feature list across all configurations
+feats_categorical <- c("family_history_depression", "family_history_mania", "bullying",
+                       feats_fhx, feats_abuse, "cbcl_dysregulation_binary")
+
+#9.2 Coerce to factor
+risk_variable_data <- risk_variable_data %>%
+  mutate(across(all_of(feats_categorical), as.factor))
+
+#10. Derive the DP first principal component on the rows that will form the analytic sample
+#10.1 Identify the union of all features excluding PC1, which does not yet exist
+feats_union <- unique(unlist(config_feats))
+feats_union_pre_pca <- setdiff(feats_union, "cbcl_dp_pc1")
+
+#10.2 Identify rows complete on every other clustering feature; PC1 will be complete on exactly these rows
+pca_rows <- complete.cases(risk_variable_data[, feats_union_pre_pca])
+
+#10.3 Fit the PCA on centered and scaled raw subscale sums, per Giampetruzzi et al. (2026)
+cbcl_dp_pca <- prcomp(risk_variable_data[pca_rows, feats_cbcl_dp_raw], center = TRUE, scale. = TRUE)
+
+#10.4 Orient PC1 so higher scores indicate greater dysregulation, since prcomp sign is arbitrary
+pc1_scores <- cbcl_dp_pca$x[, 1]
+if (cor(pc1_scores, risk_variable_data$cbcl_dp_raw_sum[pca_rows]) < 0) {
+  cbcl_dp_pca$rotation[, 1] <- -cbcl_dp_pca$rotation[, 1]
+  cbcl_dp_pca$x[, 1] <- -cbcl_dp_pca$x[, 1]
+  pc1_scores <- cbcl_dp_pca$x[, 1]
+}
+
+#10.5 Write PC1 back onto the data frame, NA outside the analytic rows
+risk_variable_data$cbcl_dp_pc1 <- NA_real_
+risk_variable_data$cbcl_dp_pc1[pca_rows] <- pc1_scores
+
+#11. Restrict to rows complete across the union of all configuration features
+#11.1 Record the pre-restriction n
+n_before <- nrow(risk_variable_data)
+
+#11.2 Drop rows incomplete on clustering features only, leaving SDSC subscale missingness alone
+risk_variable_data <- risk_variable_data %>%
+  filter(if_all(all_of(feats_union), ~ !is.na(.)))
+
+#11.3 Report and log the retained n
+n_after <- nrow(risk_variable_data)
+cat(glue("Rows retained: {n_after} of {n_before} ({n_before - n_after} dropped on new feature missingness)\n"))
+log_event("PREP", scaling_method, glue("n_before={n_before}"), glue("n_after={n_after}"))
+
+#12. Guard cached solutions against a silently changed analytic row set
+#12.1 The cached kproto fits are only valid if the retained participants are identical
+fingerprint_file <- file.path(prelim_dir, sprintf("row_fingerprint_%s.rds", scaling_method))
+
+#12.2 Compare against the stored fingerprint, or write it on first run
+if (file.exists(fingerprint_file) && isFALSE(params$overwrite)) {
+  stored_ids <- readRDS(fingerprint_file)
+  if (!identical(sort(as.character(stored_ids)), sort(as.character(risk_variable_data$participant_id)))) {
+    stop(glue(
+      "Analytic row set has changed since the cached solutions were written ",
+      "(cached n={length(stored_ids)}, current n={nrow(risk_variable_data)}). ",
+      "Cached kproto fits are no longer comparable. Re-run with overwrite = TRUE, ",
+      "or delete the contents of {prelim_dir}."
+    ))
+  }
+  cat(glue("Row fingerprint matches cached solutions (n = {length(stored_ids)}); cached fits will be reused\n"))
+} else {
+  saveRDS(risk_variable_data$participant_id, fingerprint_file)
+  cat(glue("Row fingerprint written for n = {nrow(risk_variable_data)}\n"))
+}
+
+#13. Build the clustering frame with participant IDs as row names
+#13.1 Subset to the union of clustering features
+risk_variable_clustering_data <- risk_variable_data[, feats_union, drop = FALSE]
+
+#13.2 Set subject IDs as row names
+row.names(risk_variable_clustering_data) <- risk_variable_data$participant_id
+
+#14. Identify continuous and categorical variables
+continuous_vars <- names(risk_variable_clustering_data)[sapply(risk_variable_clustering_data, is.numeric)]
+categorical_vars <- names(risk_variable_clustering_data)[sapply(risk_variable_clustering_data, is.factor)]
+
+#15. Scaling function to be matched with established param
+apply_scaling <- function(df, method) {
+  out <- df
+  if (method != "none") {
+    cont_cols <- intersect(continuous_vars, names(df))
+    cont <- df[cont_cols]
+    scaled <- switch(method,
+      z_score = scale(cont),
+      min_max = purrr::map_df(cont, ~ (.x - min(.x, na.rm=TRUE)) / (max(.x, na.rm=TRUE) - min(.x, na.rm=TRUE))),
+      percentile = purrr::map_df(cont, ~ rank(.x, na.last="keep") / sum(!is.na(.x)) * 100),
+      max_absolute = purrr::map_df(cont, ~ .x / max(abs(.x), na.rm=TRUE)),
+      robust = purrr::map_df(cont, ~ (.x - median(.x, na.rm=TRUE)) / (IQR(.x, na.rm=TRUE) %||% 1))
+    )
+    out[cont_cols] <- scaled
+  }
+  out
+}
+
+#16. Scale each configuration according to the param set in the script call
+configs <- purrr::map(config_feats, ~ apply_scaling(risk_variable_clustering_data[.x], scaling_method))
+
+#17. Report the composition of each configuration
+purrr::imap_dfr(configs, ~ tibble(
+  config = .y,
+  n_features = ncol(.x),
+  n_numeric = sum(sapply(.x, is.numeric)),
+  n_categorical = sum(sapply(.x, is.factor))
+)) %>%
+  left_join(config_meta, by = "config") %>%
+  knitr::kable(caption = "Feature composition by configuration") %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+#18. Confirm the expected feature counts before proceeding
+stopifnot(
+  ncol(configs$anchor) == 17,
+  ncol(configs$anchor_nocbcl) == 13,
+  ncol(configs$cbcl_dp_rawsum) == 18,
+  ncol(configs$cbcl_dp_pc1) == 18,
+  ncol(configs$full_maximal_nocbcl) == ncol(configs$full_maximal) - 4,
+  ncol(configs$full_maximal_dpsum) == ncol(configs$full_maximal) - 3
+)
+
+```
+
+## CBCL Dysregulation Profile Variables
+
+Descriptive characterization of the two continuous DP operationalizations from Giampetruzzi et al. (2026), computed on the analytic sample. The raw sum implicitly weights subscales by their item count (Anxious/Depressed 13 items, Attention Problems 10, Aggressive Behavior 18), whereas the scaled PCA weights them by their loadings.
+
+```{r dp variables, warning = FALSE, message = FALSE, echo = FALSE}
+
+## Distributional and structural characterization of the DP raw sum and PC1 ##
+
+#1. PCA summary: variance explained and loadings
+#1.1 Variance explained by each component
+pca_var <- tibble(
+  component = paste0("PC", seq_along(cbcl_dp_pca$sdev)),
+  sd = cbcl_dp_pca$sdev,
+  variance_explained = cbcl_dp_pca$sdev^2 / sum(cbcl_dp_pca$sdev^2),
+  cumulative = cumsum(cbcl_dp_pca$sdev^2 / sum(cbcl_dp_pca$sdev^2))
+)
+
+#1.2 Print variance explained
+pca_var %>%
+  knitr::kable(caption = "PCA of the three CBCL DP raw subscale sums (centered, scaled): variance explained", digits = 3) %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+#1.3 Print loadings, with Giampetruzzi's YSR-DP T1 loadings for reference (0.57, 0.57, 0.59)
+as.data.frame(cbcl_dp_pca$rotation) %>%
+  tibble::rownames_to_column("subscale") %>%
+  knitr::kable(caption = "PCA loadings (Giampetruzzi et al. 2026 YSR-DP PC1 loadings at T1: anxdep 0.57, attn 0.57, aggr 0.59)", digits = 3) %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+#1.4 Log the PC1 variance explained
+log_event("DP_PCA", glue("PC1_var={round(pca_var$variance_explained[1], 3)}"))
+
+#2. Implicit subscale weighting in the raw sum vs the PCA
+#2.1 Raw sum weights are proportional to each subscale's SD; PCA weights are loading / subscale SD on the raw scale
+subscale_sd <- sapply(risk_variable_data[feats_cbcl_dp_raw], sd)
+tibble(
+  subscale = feats_cbcl_dp_raw,
+  raw_sd = subscale_sd,
+  raw_sum_relative_weight = subscale_sd / min(subscale_sd),
+  pc1_loading = cbcl_dp_pca$rotation[, 1],
+  pc1_relative_weight_on_raw_scale = (cbcl_dp_pca$rotation[, 1] / subscale_sd) / min(cbcl_dp_pca$rotation[, 1] / subscale_sd)
+) %>%
+  knitr::kable(caption = "Implicit relative weighting of each subscale under the raw sum vs PC1", digits = 3) %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+#3. Distributional descriptives for the DP variables and their constituent subscales
+#3.1 Create a helper returning a full descriptive row
+describe_var <- function(data, var) {
+  x <- data[[var]]
+  x <- x[!is.na(x)]
+  tibble(
+    variable = var,
+    n = length(x),
+    mean = mean(x), sd = sd(x), median = median(x), mad = mad(x),
+    min = min(x), p25 = quantile(x, 0.25), p75 = quantile(x, 0.75), max = max(x),
+    skew = moments::skewness(x), kurtosis = moments::kurtosis(x) - 3,
+    pct_at_min = 100 * mean(x == min(x))
+  )
+}
+
+#3.2 Describe the DP variables, their raw constituents, and the currently used T-scores for reference
+dp_describe_vars <- c("cbcl_dp_raw_sum", "cbcl_dp_pc1", feats_cbcl_dp_raw, feats_cbcl, "mh_p_cbcl__synd__anxdep_tscore")
+dp_descriptives <- purrr::map_dfr(dp_describe_vars, ~ describe_var(risk_variable_data, .x))
+
+#3.3 Print
+dp_descriptives %>%
+  knitr::kable(caption = "Distributional descriptives: DP variables, raw subscale sums, and current T-scores (pct_at_min = floor rate)", digits = 3) %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+#3.4 Write to CSV
+readr::write_csv(dp_descriptives, file.path(prelim_dir, "cbcl_dp_descriptives.csv"))
+
+#4. Correlation among DP variables, constituents, and currently used CBCL scales
+cor_vars <- c("cbcl_dp_raw_sum", "cbcl_dp_pc1", feats_cbcl_dp_raw, feats_cbcl, "mh_p_cbcl__synd__anxdep_tscore")
+cor_mat <- cor(risk_variable_data[cor_vars], use = "complete.obs")
+
+#4.1 Print the correlation matrix
+round(cor_mat, 3) %>%
+  knitr::kable(caption = "Pearson correlations among DP variables, raw subscales, and current CBCL T-scores") %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 11)
+
+#4.2 State the key correlation explicitly
+cat(glue("\nCorrelation between DP raw sum and DP PC1: {round(cor_mat['cbcl_dp_raw_sum', 'cbcl_dp_pc1'], 4)}\n"))
+
+#5. Distribution plots
+#5.1 Histograms of the two DP variables and the three raw subscales
+dp_plot_data <- risk_variable_data %>%
+  dplyr::select(all_of(c("cbcl_dp_raw_sum", "cbcl_dp_pc1", feats_cbcl_dp_raw))) %>%
+  tidyr::pivot_longer(everything(), names_to = "variable", values_to = "value") %>%
+  mutate(variable = factor(variable, levels = c("cbcl_dp_raw_sum", "cbcl_dp_pc1", feats_cbcl_dp_raw)))
+
+dp_hist <- ggplot(dp_plot_data, aes(x = value)) +
+  geom_histogram(bins = 40, fill = "grey55", color = "white") +
+  facet_wrap(~ variable, scales = "free", nrow = 2) +
+  labs(x = NULL, y = "Count", title = "Distributions of DP variables and raw subscale sums") +
+  theme_minimal(base_size = 11)
+
+print(dp_hist)
+
+#5.2 Scatter of raw sum vs PC1
+dp_scatter <- ggplot(risk_variable_data, aes(x = cbcl_dp_raw_sum, y = cbcl_dp_pc1)) +
+  geom_point(alpha = 0.15, size = 0.8) +
+  geom_smooth(method = "lm", se = FALSE, color = "firebrick", linewidth = 0.8) +
+  labs(x = "DP raw sum", y = "DP PC1",
+       title = glue("DP raw sum vs PC1 (r = {round(cor_mat['cbcl_dp_raw_sum', 'cbcl_dp_pc1'], 3)})")) +
+  theme_minimal(base_size = 11)
+
+print(dp_scatter)
+
+#5.3 Overlay the raw sum distribution against the DP binary cutoff group for context
+risk_variable_data %>%
+  mutate(dp_binary = factor(cbcl_dysregulation_binary, labels = c("Below cutoff", "At/above cutoff"))) %>%
+  ggplot(aes(x = cbcl_dp_raw_sum, fill = dp_binary)) +
+  geom_histogram(bins = 40, position = "identity", alpha = 0.6, color = "white") +
+  scale_fill_manual(values = c("grey60", "firebrick")) +
+  labs(x = "DP raw sum", y = "Count", fill = glue("Binary DP (all 3 T >= {params$cbcl_dp_cutoff})"),
+       title = "Where the binary DP cutoff falls on the continuous raw sum") +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "bottom")
+
+```
+
+**Reading this section:**
+
+- If PC1 explains roughly two thirds of variance or more with near-equal loadings, the three subscales behave as a single dimension, consistent with Giampetruzzi (67 to 77%, loadings 0.55 to 0.63) and Deutz's bifactor general factor
+- If the raw sum and PC1 correlate above roughly 0.97, they are functionally one variable for clustering purposes and the choice between them is presentational
+- `pct_at_min` on the raw sum is the floor rate. A large floor in a population sample is expected and is the analogue of T-score truncation at 50
+- The implicit weighting table shows how much more the raw sum leans on Aggressive Behavior than PC1 does
+
+## Fit All Configurations
+
+All configurations use `nstart = 8` and the package default data-driven lambda. Configurations already fitted in a prior run load from cache; only the two DP configurations require new fits.
+
+```{r clustering, warning = FALSE, message = FALSE, echo = FALSE}
+
+## Fit k-prototypes across k for all configurations ##
+
+#1. Create a vector containing the k's to test
+k_vals <- 2:params$k_max
+
+#2. Fit or load each configuration
+kp_lists <- purrr::imap(configs, function(dat, cfg) {
+
+  #2.1 List where to stash / load the kproto list for this configuration
+  proto_file <- file.path(prelim_dir, sprintf("kproto_%s_%s.rds", cfg, scaling_method))
+
+  #2.2 Load cached kproto list if it already exists and overwrite is not requested
+  if (file.exists(proto_file) && isFALSE(params$overwrite)) {
+    log_event("PROTO_SKIP", cfg, scaling_method, glue("loaded {length(k_vals)} ks from cache"))
+    cat(glue("{cfg}: loaded from cache\n"))
+    return(readRDS(proto_file))
+  }
+
+  #2.3 Otherwise start the kproto timer and compute
+  proto_start <- Sys.time()
+  log_event("PROTO_START", cfg, scaling_method)
+  cat(glue("{cfg}: fitting {length(k_vals)} solutions\n"))
+
+  #2.3.1 Execute kproto across k, leaving lambda at the package default
+  kp_list <- future_map(
+    k_vals,
+    ~ kproto(x = dat,
+             k = .x,
+             nstart = 8,
+             verbose = FALSE),
+    .options = furrr_options(seed = TRUE)
+  )
+
+  #2.3.2 Provide a k suffix to each of the k values
+  names(kp_list) <- paste0("k", k_vals)
+
+  #2.3.3 Save the kproto list
+  saveRDS(kp_list, proto_file)
+
+  #2.3.4 Log end status for clustering
+  proto_end <- Sys.time()
+  log_event("PROTO_END", cfg, scaling_method,
+            glue("duration={round(as.numeric(difftime(proto_end, proto_start, units = 'mins')), 1)}min"))
+
+  kp_list
+})
+
+#3. Extract the data-driven lambda actually used by each configuration for reporting
+lambda_used <- purrr::map_dbl(kp_lists, ~ mean(.x[["k2"]]$lambda))
+cat("Data-driven lambda by configuration:\n"); print(round(lambda_used, 3))
+log_event("LAMBDA", paste(names(lambda_used), round(lambda_used, 3), sep = "=", collapse = "|"))
+
+#4. Align cluster labels across configurations so the higher-risk profile is always level 1
+#4.1 Cluster numbering from kproto is arbitrary, so orient every solution by sleep disturbance
+align_labels <- function(labels, orient_var) {
+  means <- tapply(orient_var, labels, mean, na.rm = TRUE)
+  higher <- names(which.max(means))
+  factor(ifelse(as.character(labels) == higher, "Higher-risk", "Lower-risk"),
+         levels = c("Higher-risk", "Lower-risk"))
+}
+
+#4.2 Build an aligned k = 2 label vector for every configuration
+aligned_k2 <- purrr::map(kp_lists, ~ align_labels(.x$k2$cluster, risk_variable_data$sds_total))
+
+#4.3 Store the anchor and base partitions for agreement testing
+anchor_labels <- aligned_k2$anchor
+base_labels <- aligned_k2[[params$base_config]]
+
+#4.4 Confirm the orientation worked by reporting mean sleep disturbance per aligned cluster
+purrr::imap_dfr(aligned_k2, ~ tibble(
+  config = .y,
+  mean_sds_higher = mean(risk_variable_data$sds_total[.x == "Higher-risk"]),
+  mean_sds_lower = mean(risk_variable_data$sds_total[.x == "Lower-risk"]),
+  n_higher = sum(.x == "Higher-risk")
+)) %>%
+  knitr::kable(caption = "Label alignment check: higher-risk cluster oriented by SDSC total", digits = 2) %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+```
+
+## Internal Validation Across k
+
+Gower silhouette is computed on the full analytic sample. The distance matrix depends only on the feature set, not on *k*, so it is computed once per configuration and reused across all candidate solutions.
+
+```{r validation, warning = FALSE, message = FALSE, echo = FALSE}
+
+## Silhouette and WSS across k for all configurations ##
+
+#1. Create a helper computing mean Gower silhouette across all k for one configuration
+#1.1 Gower distance is computed once and reused, since it depends only on the feature set
+silhouette_across_k <- function(dat, kp_list, cfg) {
+
+  #1.1.1 Compose the output path, keyed by method so full and subsampled caches do not collide
+  sil_file <- file.path(prelim_dir, sprintf("silhouette_%s_%s_%s.rds", params$sil_method, cfg, scaling_method))
+
+  #1.1.2 Return the cached vector if it exists and overwrite is not requested
+  if (file.exists(sil_file) && isFALSE(params$overwrite)) {
+    log_event("SIL_SKIP", cfg, params$sil_method)
+    return(readRDS(sil_file))
+  }
+
+  #1.1.3 Start the timer
+  sil_start <- Sys.time()
+  log_event("SIL_START", cfg, params$sil_method, glue("n={nrow(dat)}"))
+  cat(glue("{cfg}: computing {params$sil_method}-sample Gower silhouette\n"))
+
+  if (identical(params$sil_method, "full")) {
+
+    #1.1.4 Compute the full-sample Gower distance matrix once
+    dd <- cluster::daisy(dat, metric = "gower")
+
+    #1.1.5 Evaluate every candidate k against the same distance matrix
+    sils <- vapply(kp_list, function(kp) {
+      lab <- as.integer(factor(kp$cluster))
+      if (length(unique(lab)) < 2) return(NA_real_)
+      mean(cluster::silhouette(lab, dd)[, "sil_width"])
+    }, numeric(1))
+
+    #1.1.6 Release the distance matrix before moving to the next configuration
+    rm(dd); invisible(gc())
+
+  } else {
+
+    #1.1.7 Fall back to the subsampled estimator when requested
+    sils <- vapply(kp_list, function(kp) {
+      set.seed(params$seed)
+      vals <- vapply(seq_len(params$sil_subsample_reps), function(r) {
+        idx <- sample.int(nrow(dat), min(params$sil_subsample_n, nrow(dat)))
+        lab <- as.integer(factor(kp$cluster[idx]))
+        if (length(unique(lab)) < 2) return(NA_real_)
+        dsub <- cluster::daisy(dat[idx, , drop = FALSE], metric = "gower")
+        mean(cluster::silhouette(lab, dsub)[, "sil_width"])
+      }, numeric(1))
+      mean(vals, na.rm = TRUE)
+    }, numeric(1))
+  }
+
+  #1.1.8 Persist and log
+  saveRDS(sils, sil_file)
+  log_event("SIL_END", cfg, params$sil_method,
+            glue("duration={round(as.numeric(difftime(Sys.time(), sil_start, units = 'mins')), 1)}min"))
+
+  sils
+}
+
+#2. Compute silhouette for every configuration, sequentially to bound peak memory
+silhouette_by_config <- purrr::imap(configs, ~ silhouette_across_k(.x, kp_lists[[.y]], .y))
+
+#3. Bind silhouette and WSS trajectories into a single frame
+metrics_by_k <- purrr::imap_dfr(kp_lists, function(kp_list, cfg) {
+  tibble(
+    config = cfg,
+    k = k_vals,
+    gower_silhouette = as.numeric(silhouette_by_config[[cfg]]),
+    wss = purrr::map_dbl(kp_list, "tot.withinss")
+  )
+})
+
+#4. Optionally run the full Huang silhouette via validation_kproto
+#4.1 This is O(n^2) per k and can take days at this sample size, so it is off by default
+if (isTRUE(params$run_validation_kproto)) {
+  validation_results <- purrr::imap(configs, function(dat, cfg) {
+    validation_file <- file.path(prelim_dir, sprintf("val_%s_%s_silhouette.rds", cfg, scaling_method))
+    if (file.exists(validation_file) && isFALSE(params$overwrite)) {
+      log_event("VAL_SKIP", cfg, scaling_method, "silhouette")
+      return(readRDS(validation_file))
+    }
+    vr_sil <- validation_kproto(method = "silhouette", data = dat, k = k_vals,
+                                kp_obj = "all", nstart = 8, verbose = FALSE)
+    saveRDS(vr_sil, validation_file)
+    vr_sil
+  })
+  metrics_by_k <- metrics_by_k %>%
+    mutate(huang_silhouette = purrr::map2_dbl(config, k, ~ as.numeric(validation_results[[.x]]$indices)[which(k_vals == .y)]))
+}
+
+#5. Print the silhouette trajectory table
+metrics_by_k %>%
+  dplyr::select(config, k, gower_silhouette) %>%
+  tidyr::pivot_wider(names_from = config, values_from = gower_silhouette) %>%
+  knitr::kable(
+    caption = glue("Gower silhouette by k ({params$sil_method} sample, n = {nrow(risk_variable_data)}, {scaling_method} scaling)"),
+    digits = 3) %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+#6. Plot the silhouette trajectories, faceted so each configuration is legible
+#6.1 Generate the faceted silhouette plot
+silhouette_plot <- metrics_by_k %>%
+  mutate(config = factor(config, levels = names(configs))) %>%
+  ggplot(aes(x = k, y = gower_silhouette, group = config)) +
+  geom_line(linewidth = 0.8, color = "grey40") +
+  geom_point(size = 1.8, color = "grey20") +
+  geom_vline(xintercept = 2, linetype = "dashed", color = "firebrick") +
+  facet_wrap(~ config, nrow = 3) +
+  scale_x_continuous(breaks = k_vals) +
+  labs(x = "Number of clusters (k)", y = "Mean Gower silhouette (full sample)",
+       title = "Silhouette trajectories by candidate feature set") +
+  theme_minimal(base_size = 12)
+
+#6.2 Print the silhouette plot
+print(silhouette_plot)
+
+```
+
+## Agreement and Stability at k = 2
+
+```{r agreement, warning = FALSE, message = FALSE, echo = FALSE}
+
+## Agreement with the anchor and base partitions, plus bootstrap stability at k = 2 ##
+
+#1. Create a helper running the bootstrap stability analysis for a given kproto object
+run_stability <- function(kp, cfg) {
+
+  #1.1 Compose the output path
+  stab_file <- file.path(prelim_dir, sprintf("stability_%s_%s_k2_nb%d.rds", cfg, scaling_method, params$n_boot))
+
+  #1.2 Return the cached object if it exists and overwrite is not requested
+  if (file.exists(stab_file) && isFALSE(params$overwrite)) {
+    log_event("STAB_SKIP", cfg, basename(stab_file))
+    return(readRDS(stab_file))
+  }
+
+  #1.3 Strip row names from the embedded data since stability_kproto() trips over them
+  if (!is.null(rownames(kp$data))) {
+    rownames(kp$data) <- NULL
+  }
+
+  #1.4 Build the call safely, since the bootstrap arg name varies across clustMixType versions
+  stab_formals <- names(formals(clustMixType::stability_kproto))
+  stab_args <- list(
+    object = kp,
+    method = c("rand", "jaccard"),
+    nstart = params$stab_nstart,
+    verbose = FALSE
+  )
+  if ("B" %in% stab_formals) {
+    stab_args$B <- params$n_boot
+  } else if ("nboot" %in% stab_formals) {
+    stab_args$nboot <- params$n_boot
+  } else {
+    log_event("STAB_WARN", cfg, "unknown_boot_arg", "default_used")
+  }
+
+  #1.5 Run the bootstrap stability analysis
+  log_event("STAB_START", cfg, glue("B={params$n_boot}"))
+  boot_res <- tryCatch(
+    do.call(clustMixType::stability_kproto, stab_args),
+    error = function(e) stop(glue("stability_kproto() failed for {cfg}: {conditionMessage(e)}"))
+  )
+
+  #1.6 Persist the raw result and log completion
+  saveRDS(boot_res, stab_file)
+  log_event("STAB_DONE", cfg, glue("B={params$n_boot}"), glue("saved={basename(stab_file)}"))
+
+  boot_res
+}
+
+#2. Run stability for all configurations at k = 2
+stability_results <- purrr::imap(kp_lists, ~ run_stability(.x$k2, .y))
+
+#3. Unpack the stability output into tidy per bootstrap tables
+boot_tbls <- purrr::imap_dfr(stability_results, function(boot_res, cfg) {
+  bt <- as.data.frame(boot_res[[2]])
+  colnames(bt) <- c("B", "Rand", "Jaccard")
+  bt$config <- cfg
+  bt
+})
+
+#4. Assemble the decision table
+agreement_tbl <- purrr::imap_dfr(kp_lists, function(kp_list, cfg) {
+
+  #4.1 Pull the k = 2 fit, aligned labels, and bootstrap results
+  kp2 <- kp_list$k2
+  lab <- aligned_k2[[cfg]]
+  overall_vec <- stability_results[[cfg]][[1]]
+  bt <- boot_tbls %>% filter(config == cfg)
+
+  #4.2 Compute reassignment against the base, using aligned labels
+  reassigned_base <- sum(lab != base_labels)
+
+  #4.3 Return a one row tibble with the decision metrics
+  tibble(
+    config = cfg,
+    n_features = ncol(configs[[cfg]]),
+    lambda = lambda_used[[cfg]],
+    gower_silhouette = metrics_by_k$gower_silhouette[metrics_by_k$config == cfg & metrics_by_k$k == 2],
+    ari_vs_anchor = mclust::adjustedRandIndex(as.integer(lab), as.integer(anchor_labels)),
+    ari_vs_base = mclust::adjustedRandIndex(as.integer(lab), as.integer(base_labels)),
+    pct_reassigned_vs_base = 100 * reassigned_base / length(lab),
+    overall_Jacc = unname(overall_vec["J"]),
+    mean_Jacc = mean(bt$Jaccard, na.rm = TRUE),
+    sd_Jacc = sd(bt$Jaccard, na.rm = TRUE),
+    n_higher_risk = sum(lab == "Higher-risk"),
+    n_lower_risk = sum(lab == "Lower-risk")
+  )
+})
+
+#5. Attach the per-configuration optimal k and readable labels
+agreement_tbl <- agreement_tbl %>%
+  left_join(
+    metrics_by_k %>%
+      group_by(config) %>%
+      slice_max(gower_silhouette, n = 1, with_ties = FALSE) %>%
+      dplyr::select(config, k_opt = k),
+    by = "config"
+  ) %>%
+  left_join(config_meta, by = "config") %>%
+  mutate(k2_optimal = k_opt == 2)
+
+#6. Write and print the decision tables
+#6.1 Write the full decision table to CSV
+readr::write_csv(agreement_tbl, file.path(prelim_dir, glue("decision_summary_{scaling_method}_nb{params$n_boot}.csv")))
+
+#6.2 Print the full detail table
+agreement_tbl %>%
+  dplyr::select(-varies_from_base) %>%
+  knitr::kable(caption = "Full detail: all agreement and stability metrics", digits = 3) %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+```
+
+## Decision Aid
+
+```{r decision aid, warning = FALSE, message = FALSE, echo = FALSE}
+
+## Compact decision aid across configurations ##
+
+#1. Create a helper returning the effect size of one feature under a given label vector
+#1.1 Numeric features return Cohen's d, binary features return an odds ratio
+feature_separation <- function(var, labels, data) {
+
+  #1.1.1 Build a temporary frame with the aligned labels
+  tmp <- data.frame(cluster = labels, value = data[[var]])
+  tmp <- tmp[!is.na(tmp$value), ]
+
+  #1.1.2 Branch on variable type
+  if (is.factor(tmp$value) || length(unique(tmp$value)) <= 2) {
+
+    #1.1.2.1 Order the outcome so endorsement is the first column, giving odds of endorsement in higher vs lower risk
+    vv <- factor(as.character(tmp$value), levels = c("1", "0"))
+    tab <- table(tmp$cluster, vv)
+    if (any(dim(tab) < 2) || any(tab == 0)) return(tibble(variable = var, metric = "OR", estimate = NA_real_, d_equivalent = NA_real_))
+    orr <- as.numeric(effectsize::oddsratio(tab)$Odds_ratio)
+    tibble(variable = var, metric = "OR", estimate = orr,
+           d_equivalent = as.numeric(effectsize::oddsratio_to_d(orr)))
+
+  } else {
+
+    #1.1.2.2 Numeric features get Cohen's d, oriented higher-risk minus lower-risk
+    dd <- as.numeric(effectsize::cohens_d(value ~ cluster, data = tmp)$Cohens_d)
+    tibble(variable = var, metric = "d", estimate = dd, d_equivalent = dd)
+  }
+}
+
+#2. Compute separation for the features each configuration introduces
+separation_tbl <- purrr::imap_dfr(config_introduces, function(vars, cfg) {
+  if (length(vars) == 0) return(tibble(config = cfg, variable = NA_character_, metric = NA_character_, estimate = NA_real_, d_equivalent = NA_real_))
+  purrr::map_dfr(vars, ~ feature_separation(.x, aligned_k2[[cfg]], risk_variable_data)) %>%
+    mutate(config = cfg)
+})
+
+#3. Print the per-feature separation detail
+separation_tbl %>%
+  filter(!is.na(variable)) %>%
+  dplyr::select(config, variable, metric, estimate) %>%
+  knitr::kable(
+    caption = "Separation of newly introduced features, under each configuration's own cluster labels",
+    digits = 3) %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+#4. Collapse separation into a compact per-configuration summary string
+separation_summary <- separation_tbl %>%
+  filter(!is.na(variable)) %>%
+  group_by(config) %>%
+  summarise(
+    feature_separation = paste0(sprintf("%s=%.2f", metric, estimate), collapse = "; "),
+    .groups = "drop"
+  )
+
+#5. Build the headline decision aid
+decision_aid <- agreement_tbl %>%
+  left_join(separation_summary, by = "config") %>%
+  mutate(
+    delta_sil_vs_base = gower_silhouette - gower_silhouette[config == params$base_config],
+    feature_separation = tidyr::replace_na(feature_separation, "none added")
+  ) %>%
+  dplyr::select(
+    Config = config,
+    `What varies` = varies_from_base,
+    `N feat` = n_features,
+    `k opt` = k_opt,
+    `k=2 best?` = k2_optimal,
+    `ARI vs base` = ari_vs_base,
+    `% moved vs base` = pct_reassigned_vs_base,
+    `Silhouette` = gower_silhouette,
+    `D sil vs base` = delta_sil_vs_base,
+    `Mean Jaccard` = mean_Jacc,
+    `Higher-risk n` = n_higher_risk,
+    `New feature separation` = feature_separation
+  )
+
+#6. Write and print the decision aid
+#6.1 Write the decision aid to CSV
+readr::write_csv(decision_aid, file.path(prelim_dir, glue("decision_aid_{scaling_method}_nb{params$n_boot}.csv")))
+
+#6.2 Print the decision aid
+decision_aid %>%
+  knitr::kable(
+    caption = glue("DECISION AID: what each candidate change does, relative to the base configuration ({params$base_config})"),
+    digits = 3) %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+
+#7. Print a one line per configuration narrative summary
+cat("\n---- Summary ----\n")
+for (i in seq_len(nrow(agreement_tbl))) {
+  r <- agreement_tbl[i, ]
+  cat(glue(
+    "{r$config}: {r$n_features} features | k_opt={r$k_opt} | ARI vs base={round(r$ari_vs_base, 3)} | ",
+    "{round(r$pct_reassigned_vs_base, 2)}% moved | silhouette={round(r$gower_silhouette, 3)} | ",
+    "Jaccard={round(r$mean_Jacc, 3)} | clusters {r$n_higher_risk}/{r$n_lower_risk}\n\n"
+  ))
+}
+
+```
+
+## Feature Separation Profiles
+
+For each selected configuration, every feature in that configuration is ranked by how strongly it separates the two clusters, under that configuration's own labels. Odds ratios are converted to a Cohen's d equivalent via `effectsize::oddsratio_to_d()` so numeric and binary features can be ranked on a common scale.
+
+```{r separation profiles, warning = FALSE, message = FALSE, results = 'asis', echo = FALSE}
+
+## Rank every feature within selected configurations by cluster separation ##
+
+#1. Restrict to configurations requested via params, that actually exist
+profile_configs <- intersect(params$profile_configs, names(configs))
+
+#2. Compute the full separation profile for each requested configuration
+profile_tbl <- purrr::map_dfr(profile_configs, function(cfg) {
+  purrr::map_dfr(config_feats[[cfg]], ~ feature_separation(.x, aligned_k2[[cfg]], risk_variable_data)) %>%
+    mutate(config = cfg) %>%
+    arrange(desc(abs(d_equivalent))) %>%
+    mutate(rank = row_number())
+})
+
+#3. Print one ranked table per configuration
+for (cfg in profile_configs) {
+  print(
+    profile_tbl %>%
+      filter(config == cfg) %>%
+      dplyr::select(rank, variable, metric, estimate, d_equivalent) %>%
+      knitr::kable(
+        caption = glue("Feature separation profile: {cfg} ({config_meta$varies_from_base[config_meta$config == cfg]})"),
+        digits = 3) %>%
+      kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+  )
+}
+
+#4. Plot the profiles side by side for visual comparison
+#4.1 Generate the profile plot
+profile_plot <- profile_tbl %>%
+  ggplot(aes(x = abs(d_equivalent), y = reorder(variable, abs(d_equivalent)))) +
+  geom_col(fill = "grey55") +
+  facet_wrap(~ config, scales = "free_y") +
+  labs(x = "Absolute separation (Cohen's d equivalent)", y = NULL,
+       title = "Feature separation by configuration") +
+  theme_minimal(base_size = 10)
+
+#4.2 Print the profile plot
+print(profile_plot)
+
+#5. Write the profile table to CSV
+readr::write_csv(profile_tbl, file.path(prelim_dir, glue("separation_profiles_{scaling_method}.csv")))
+
+```
+
+## Descriptives for the Reviewer Response
+
+Computed under the `r params$descriptive_config` configuration, with labels aligned so the higher-risk profile is always listed first.
+
+```{r descriptives, warning = FALSE, message = FALSE, echo = FALSE}
+
+## Cluster descriptives for the reviewer response ##
+
+#1. Attach the selected configuration's aligned cluster labels to the unscaled data
+descriptive_data <- risk_variable_data %>%
+  mutate(cluster = aligned_k2[[params$descriptive_config]])
+
+#2. Create a helper returning mean, SD, and Cohen's d by cluster for a numeric variable
+summarise_numeric_by_cluster <- function(data, var) {
+
+  #2.1 Compute Cohen's d with CI via the effectsize package
+  d <- effectsize::cohens_d(stats::reformulate("cluster", response = var), data = data)
+
+  #2.2 Compute per cluster mean and SD, then attach the effect size
+  data %>%
+    group_by(cluster) %>%
+    summarise(summary = sprintf("%.2f ± %.2f", mean(.data[[var]], na.rm = TRUE), sd(.data[[var]], na.rm = TRUE)),
+              .groups = "drop") %>%
+    tidyr::pivot_wider(names_from = cluster, values_from = summary) %>%
+    mutate(variable = var, effect = "Cohen's d", estimate = d$Cohens_d, ci_low = d$CI_low, ci_high = d$CI_high) %>%
+    dplyr::select(variable, everything())
+}
+
+#3. Create a helper returning endorsement and odds ratio by cluster for a binary variable
+summarise_binary_by_cluster <- function(data, var) {
+
+  #3.1 Order the outcome so the odds ratio reflects endorsement in higher vs lower risk
+  vv <- factor(as.character(data[[var]]), levels = c("1", "0"))
+  tab <- table(data$cluster, vv)
+
+  #3.2 Guard against empty cells, which make the odds ratio undefined
+  if (any(tab == 0)) {
+    est <- NA_real_; lo <- NA_real_; hi <- NA_real_
+  } else {
+    orr <- effectsize::oddsratio(tab)
+    est <- orr$Odds_ratio; lo <- orr$CI_low; hi <- orr$CI_high
+  }
+
+  #3.3 Compute per cluster endorsement counts and percentages
+  data %>%
+    group_by(cluster) %>%
+    summarise(summary = sprintf("%d (%.1f%%)",
+                                sum(.data[[var]] == 1, na.rm = TRUE),
+                                100 * mean(.data[[var]] == 1, na.rm = TRUE)),
+              .groups = "drop") %>%
+    tidyr::pivot_wider(names_from = cluster, values_from = summary) %>%
+    mutate(variable = var, effect = "Odds ratio", estimate = est, ci_low = lo, ci_high = hi) %>%
+    dplyr::select(variable, everything())
+}
+
+#4. Summarise all numeric candidate features by cluster
+purrr::map_dfr(
+  c(feats_bas4, "cbcl_dp_raw_sum", "cbcl_dp_pc1", "mh_p_cbcl__synd__anxdep_tscore", feats_cbcl,
+    "ACE_index_sum_score", "ACE_index_reduced", "sds_total", sdsc_subscales),
+  ~ summarise_numeric_by_cluster(descriptive_data, .x)
+) %>%
+  knitr::kable(
+    caption = "Numeric candidate features by cluster (SDSC subscales descriptive only, not clustered)",
+    digits = 3) %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+#5. Summarise the binary candidate features by cluster
+purrr::map_dfr(
+  c(feats_fhx, feats_abuse, "cbcl_dysregulation_binary"),
+  ~ summarise_binary_by_cluster(descriptive_data, .x)
+) %>%
+  knitr::kable(
+    caption = "Binary candidate features by cluster (NA odds ratio indicates an empty cell)",
+    digits = 3) %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+```
+
+**How to read this run:**
+
+- Compare `cbcl_dp_rawsum` and `cbcl_dp_pc1` against `cbcl3_bin`. All three replace four CBCL features with one. If the two continuous versions hold *k* = 2 with stability near the base while the binary does not, the `cbcl3_bin` collapse was caused by dichotomization rather than by feature reduction. If the continuous versions also degrade, feature count is doing some of the work.
+- Compare `cbcl_dp_rawsum` and `cbcl_dp_pc1` against each other. If their raw sum to PC1 correlation is above roughly 0.97, expect near-identical partitions and treat them as one option.
+- The **Feature Separation Profiles** for the two DP configurations show whether a single DP variable still dominates the geometry the way the four separate scales do.
+- Bootstrap replicates remain at `r params$n_boot`; rerun the chosen configuration at `n_boot = 1000` before reporting externally.
