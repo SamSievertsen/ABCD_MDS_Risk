@@ -27,6 +27,25 @@ options(scipen = 999, digits = 8)
 # Read in raw data generated in DEAP
 raw_data <- read.csv("../../../data/data_raw/dataset.csv")
 
+# Load the shared clustering feature definitions (single source of truth for the complete-case sample)
+source("../1_clustering/cluster_configs.R")
+
+# Fail early and informatively if any raw column required by the revision derivations is absent
+required_raw_cols <- c(
+  "mh_p_cbcl__synd__anxdep_sum", "mh_p_cbcl__synd__anxdep_nm",
+  "mh_p_cbcl__synd__attn_sum", "mh_p_cbcl__synd__aggr_sum",
+  "mh_y_bisbas__bas__rr_sum__v01", "mh_y_bisbas__bas__dr_sum",
+  "mh_y_bisbas__bis_sum__v01", "mh_y_bisbas__bas__fs_sum",
+  "ph_p_sds__dims_sum", "ph_p_sds__sbd_sum", "ph_p_sds__da_sum",
+  "ph_p_sds__swtd_sum", "ph_p_sds__does_sum", "ph_p_sds__hyphy_sum",
+  "mh_p_famhx__halluc_001", "mh_p_famhx__hosp_001",
+  "fc_y_fes__confl_005", "fc_p_fes__confl_005"
+)
+missing_raw_cols <- setdiff(required_raw_cols, names(raw_data))
+if (length(missing_raw_cols) > 0) {
+  stop("dataset.csv is missing required columns: ", paste(missing_raw_cols, collapse = ", "))
+}
+
 ```
 
 ## Risk Variable Data Wrangling
@@ -197,10 +216,137 @@ calculate_sds_total <- function(data) {
 #2.5.3 Apply the SDSC score calculation function to the baseline data
 raw_data_baseline_clean <- calculate_sds_total(raw_data_baseline_clean)
 
+#2.6 Family (first-degree relative) history of psychosis ("saw visions or heard voices or thought people were spying on them or plotting against them")
+raw_data_baseline_clean <- raw_data_baseline_clean %>%
+  mutate(
+    family_history_psychosis = case_when(
+      
+      #2.6.1 Assign 1 if any first-degree relative has a history of psychosis
+      replace_na(mh_p_famhx__halluc__fath_001 == 1, FALSE) |
+        replace_na(mh_p_famhx__halluc__moth_001 == 1, FALSE) |
+        replace_na(mh_p_famhx__halluc__full__young_001 == 1, FALSE) |
+        replace_na(mh_p_famhx__halluc__full__young_002 == 1, FALSE) |
+        replace_na(mh_p_famhx__halluc__full__young_003 == 1, FALSE) |
+        replace_na(mh_p_famhx__halluc__full__young_004 == 1, FALSE) |
+        replace_na(mh_p_famhx__halluc__full__young_005 == 1, FALSE) |
+        replace_na(mh_p_famhx__halluc__full__old_001 == 1, FALSE) |
+        replace_na(mh_p_famhx__halluc__full__old_002 == 1, FALSE) |
+        replace_na(mh_p_famhx__halluc__full__old_003 == 1, FALSE) |
+        replace_na(mh_p_famhx__halluc__full__old_004 == 1, FALSE) |
+        replace_na(mh_p_famhx__halluc__full__old_005 == 1, FALSE) ~ 1,
+      
+      #2.6.2 Assign 0 if "mh_p_famhx__halluc_001" (any relative) is 1 but no first-degree relative has a history of psychosis
+      mh_p_famhx__halluc_001 == 1 ~ 0,
+      
+      #2.6.3 Assign 0 if "mh_p_famhx__halluc_001" is 0
+      mh_p_famhx__halluc_001 == 0 ~ 0,
+      
+      #2.6.4 Otherwise, assign NA
+      TRUE ~ NA_real_
+    )
+  )
+
+#2.7 Family (first-degree relative) history of psychiatric hospitalization ("hospitalized because of emotional or mental problems, or drug or alcohol problems")
+raw_data_baseline_clean <- raw_data_baseline_clean %>%
+  mutate(
+    family_history_hospitalization = case_when(
+      
+      #2.7.1 Assign 1 if any first-degree relative has a history of psychiatric hospitalization
+      replace_na(mh_p_famhx__hosp__fath_001 == 1, FALSE) |
+        replace_na(mh_p_famhx__hosp__moth_001 == 1, FALSE) |
+        replace_na(mh_p_famhx__hosp__full__young_001 == 1, FALSE) |
+        replace_na(mh_p_famhx__hosp__full__young_002 == 1, FALSE) |
+        replace_na(mh_p_famhx__hosp__full__young_003 == 1, FALSE) |
+        replace_na(mh_p_famhx__hosp__full__young_004 == 1, FALSE) |
+        replace_na(mh_p_famhx__hosp__full__young_005 == 1, FALSE) |
+        replace_na(mh_p_famhx__hosp__full__old_001 == 1, FALSE) |
+        replace_na(mh_p_famhx__hosp__full__old_002 == 1, FALSE) |
+        replace_na(mh_p_famhx__hosp__full__old_003 == 1, FALSE) |
+        replace_na(mh_p_famhx__hosp__full__old_004 == 1, FALSE) |
+        replace_na(mh_p_famhx__hosp__full__old_005 == 1, FALSE) ~ 1,
+      
+      #2.7.2 Assign 0 if "mh_p_famhx__hosp_001" (any relative) is 1 but no first-degree relative has a history of hospitalization
+      mh_p_famhx__hosp_001 == 1 ~ 0,
+      
+      #2.7.3 Assign 0 if "mh_p_famhx__hosp_001" is 0
+      mh_p_famhx__hosp_001 == 0 ~ 0,
+      
+      #2.7.4 Otherwise, assign NA
+      TRUE ~ NA_real_
+    )
+  )
+
+#2.8 Abuse indicators separated from the ACE composite
+raw_data_baseline_clean <- raw_data_baseline_clean %>%
+  mutate(
+    
+    #2.8.1 Physical abuse: ACE_7, set to NA if either constituent KSADS item is missing (same rule as the published composite)
+    abuse_physical = if_else(
+      rowSums(across(c(ksads_ptsd_raw_762_p, ksads_ptsd_raw_763_p), ~ . %in% c(NA, "", 999, 7, 777))) >= 1,
+      NA_real_, ACE_7),
+    
+    #2.8.2 Sexual abuse: ACE_9, set to NA if either constituent KSADS item is missing
+    abuse_sexual = if_else(
+      rowSums(across(c(ksads_ptsd_raw_767_p, ksads_ptsd_raw_768_p), ~ . %in% c(NA, "", 999, 7, 777))) >= 1,
+      NA_real_, ACE_9),
+    
+    #2.8.3 Emotional abuse proxy ("family members often criticize each other"), collapsed across reporters as for bullying
+    abuse_emotional = case_when(
+      fc_y_fes__confl_005 == 1 | fc_p_fes__confl_005 == 1 ~ 1,
+      is.na(fc_y_fes__confl_005) & is.na(fc_p_fes__confl_005) ~ NA_real_,
+      fc_y_fes__confl_005 == "" & fc_p_fes__confl_005 == "" ~ NA_real_,
+      TRUE ~ 0)
+  )
+
+#2.9 ACE composites excluding abuse
+raw_data_baseline_clean <- raw_data_baseline_clean %>%
+  mutate(
+    
+    #2.9.1 Count missing raw items among the non-abuse ACE components only (ACE_1 to ACE_6, ACE_8)
+    ACE_index_nonabuse_n_missing = rowSums(
+      across(c(
+        mh_p_famhx__troub_001, 
+        fc_y_crpbi__cg1_005, 
+        mh_p_famhx__suic_001, 
+        mh_p_famhx__dep_001, 
+        mh_p_famhx__alc_001, 
+        mh_p_famhx__drg_001, 
+        ksads_ptsd_raw_766_p, 
+        fc_y_fes__confl_006, 
+        fc_y_fes__confl_003,
+        ab_p_demo__marital__slf_001, 
+        fc_y_pm_001, 
+        fc_y_pm_003
+      ), ~ . %in% c(NA, "", 999, 7, 777))),
+    
+    #2.9.2 Primary: 7-factor non-abuse composite, NA if any constituent raw item is missing
+    ACE_index_nonabuse_sum_score = if_else(
+      ACE_index_nonabuse_n_missing >= 1, NA_real_,
+      ACE_1 + ACE_2 + ACE_3 + ACE_4 + ACE_5 + ACE_6 + ACE_8),
+    
+    #2.9.3 Fallback: 8-factor composite adding the emotional abuse proxy; physical and sexual abuse remain separate
+    ACE_index_nonabuse_emo_sum_score = ACE_index_nonabuse_sum_score + abuse_emotional
+  )
+
 #3. Retain columns of interest for risk clustering
 cat("Retaining columns of interest for validation & clustering", "\n")
 raw_data_baseline_clean_trim <- raw_data_baseline_clean %>% 
-  dplyr::select(c(participant_id, session_id, ab_g_dyn__design_site, ab_g_dyn__visit_age, ab_g_stc__cohort_ethnrace__meim, ab_g_stc__cohort_sex, ab_g_stc__design_id__fam, mh_p_cbcl__dsm__dep_tscore, mh_p_cbcl__dsm__dep_nm, mh_p_cbcl__dsm__anx_tscore, mh_p_cbcl__dsm__anx_nm, mh_p_cbcl__synd__attn_tscore, mh_p_cbcl__synd__attn_nm, mh_p_cbcl__synd__aggr_tscore, mh_p_cbcl__synd__aggr_nm, mh_p_gbi_sum, mh_y_upps__nurg_sum, mh_y_upps__nurg_nm, mh_y_upps__purg_sum, mh_y_upps__purg_nm, le_l_coi__addr1__coi__total__national_zscore, fc_p_nsc__ns_mean, fc_p_nsc__ns_nm, sds_total, family_history_depression, family_history_mania, bullying, nc_y_nihtb__lswmt__uncor_score, nc_y_nihtb__lswmt__agecor_score, nc_y_nihtb__flnkr__uncor_score, nc_y_nihtb__flnkr__agecor_score, nc_y_nihtb__pttcp__uncor_score, nc_y_nihtb__pttcp__agecor_score, ACE_1, ACE_2, ACE_3, ACE_4, ACE_5, ACE_6, ACE_7, ACE_8, ACE_9, ACE_index_sum_score, ACE_index_sum_score_n_missing))
+  dplyr::select(c(participant_id, session_id, ab_g_dyn__design_site, ab_g_dyn__visit_age, ab_g_stc__cohort_ethnrace__meim, ab_g_stc__cohort_sex, ab_g_stc__design_id__fam, mh_p_cbcl__dsm__dep_tscore, mh_p_cbcl__dsm__dep_nm, mh_p_cbcl__dsm__anx_tscore, mh_p_cbcl__dsm__anx_nm, mh_p_cbcl__synd__attn_tscore, mh_p_cbcl__synd__attn_nm, mh_p_cbcl__synd__aggr_tscore, mh_p_cbcl__synd__aggr_nm, mh_p_gbi_sum, mh_y_upps__nurg_sum, mh_y_upps__nurg_nm, mh_y_upps__purg_sum, mh_y_upps__purg_nm, le_l_coi__addr1__coi__total__national_zscore, fc_p_nsc__ns_mean, fc_p_nsc__ns_nm, sds_total, family_history_depression, family_history_mania, bullying, nc_y_nihtb__lswmt__uncor_score, nc_y_nihtb__lswmt__agecor_score, nc_y_nihtb__flnkr__uncor_score, nc_y_nihtb__flnkr__agecor_score, nc_y_nihtb__pttcp__uncor_score, nc_y_nihtb__pttcp__agecor_score, ACE_1, ACE_2, ACE_3, ACE_4, ACE_5, ACE_6, ACE_7, ACE_8, ACE_9, ACE_index_sum_score, ACE_index_sum_score_n_missing,
+                
+                #3.1 Revision additions: CBCL dysregulation profile raw syndrome sums and their missingness counts
+                mh_p_cbcl__synd__anxdep_sum, mh_p_cbcl__synd__anxdep_nm, mh_p_cbcl__synd__attn_sum, mh_p_cbcl__synd__aggr_sum,
+                
+                #3.2 Revision additions: BIS/BAS (validated sums; computed by ABCD only when no items are missing)
+                mh_y_bisbas__bas__rr_sum__v01, mh_y_bisbas__bas__dr_sum, mh_y_bisbas__bis_sum__v01, mh_y_bisbas__bas__fs_sum,
+                
+                #3.3 Revision additions: family history of psychosis and psychiatric hospitalization
+                family_history_psychosis, family_history_hospitalization,
+                
+                #3.4 Revision additions: abuse indicators and non-abuse ACE composites
+                abuse_physical, abuse_sexual, abuse_emotional, ACE_index_nonabuse_sum_score, ACE_index_nonabuse_emo_sum_score, ACE_index_nonabuse_n_missing,
+                
+                #3.5 Revision additions: SDSC subscales (descriptive only; not clustered)
+                ph_p_sds__dims_sum, ph_p_sds__sbd_sum, ph_p_sds__da_sum, ph_p_sds__swtd_sum, ph_p_sds__does_sum, ph_p_sds__hyphy_sum))
 
 ```
 
@@ -278,7 +424,19 @@ raw_data_baseline_clean_trim <- raw_data_baseline_clean_trim %>%
     mh_y_upps__purg_sum = if_else(mh_y_upps__purg_nm >= 1, NA_real_, mh_y_upps__purg_sum),
     
     #2.7 Neighborhood Safety Score
-    fc_p_nsc__ns_mean = if_else(fc_p_nsc__ns_nm >= 1, NA_real_, fc_p_nsc__ns_mean)
+    fc_p_nsc__ns_mean = if_else(fc_p_nsc__ns_nm >= 1, NA_real_, fc_p_nsc__ns_mean),
+    
+    #2.8 CBCL Anxious/Depressed raw syndrome sum
+    mh_p_cbcl__synd__anxdep_sum = if_else(mh_p_cbcl__synd__anxdep_nm >= 1, NA_real_, as.numeric(mh_p_cbcl__synd__anxdep_sum)),
+    
+    #2.9 CBCL Attention Problems raw syndrome sum (shares the missingness count with its T-score)
+    mh_p_cbcl__synd__attn_sum = if_else(mh_p_cbcl__synd__attn_nm >= 1, NA_real_, as.numeric(mh_p_cbcl__synd__attn_sum)),
+    
+    #2.10 CBCL Aggressive Behavior raw syndrome sum (shares the missingness count with its T-score)
+    mh_p_cbcl__synd__aggr_sum = if_else(mh_p_cbcl__synd__aggr_nm >= 1, NA_real_, as.numeric(mh_p_cbcl__synd__aggr_sum)),
+    
+    #2.11 CBCL dysregulation profile raw sum, per Giampetruzzi et al. (2026); NA if any constituent sum is NA
+    cbcl_dp_raw_sum = mh_p_cbcl__synd__anxdep_sum + mh_p_cbcl__synd__attn_sum + mh_p_cbcl__synd__aggr_sum
   )
 
 ```
@@ -301,13 +459,45 @@ This section validates and trims the data to be used for risk clustering by:
 
 #1. Create a dataframe containing only ordered variables of interest to risk group clustering
 cat("Creating a dataframe containing columns of interest to the clustering process", "\n")
+#1.1 Identifier and demographic columns, required for every analysis
+cols_id_demo <- c("participant_id", "session_id", "site", "age", "race_ethnicity", "sex", "family_id")
+
+#1.2 Columns retained for description and continuity with the submitted analysis, but not required to be complete
+#1.2.1 The 4 CBCL T-scores and 9-factor ACE composite from the submitted 17-feature solution, plus SDSC subscales
+cols_descriptive <- c(
+  "mh_p_cbcl__dsm__dep_tscore", "mh_p_cbcl__dsm__anx_tscore",
+  "mh_p_cbcl__synd__attn_tscore", "mh_p_cbcl__synd__aggr_tscore",
+  "ACE_index_sum_score",
+  "ph_p_sds__dims_sum", "ph_p_sds__sbd_sum", "ph_p_sds__da_sum",
+  "ph_p_sds__swtd_sum", "ph_p_sds__does_sum", "ph_p_sds__hyphy_sum"
+)
+
+#1.3 Assemble the dataframe: identifiers, every clustering feature across all configurations, then descriptive columns
 risk_variable_data <- raw_data_baseline_clean_trim %>% 
-  dplyr::select(c(participant_id, session_id, site, age, race_ethnicity, sex, family_id, mh_p_cbcl__dsm__dep_tscore, mh_p_cbcl__dsm__anx_tscore, mh_p_cbcl__synd__attn_tscore, mh_p_cbcl__synd__aggr_tscore, mh_p_gbi_sum, mh_y_upps__nurg_sum, mh_y_upps__purg_sum, le_l_coi__addr1__coi__total__national_zscore, fc_p_nsc__ns_mean, sds_total, family_history_depression, family_history_mania, bullying, nc_y_nihtb__lswmt__uncor_score, nc_y_nihtb__flnkr__uncor_score, nc_y_nihtb__pttcp__uncor_score, ACE_index_sum_score))
+  dplyr::select(all_of(c(cols_id_demo, feats_all_configs, cols_descriptive)))
 
 #2. Retain only subjects with complete data in columns of interest
+#2.1 Completeness is required on identifiers/demographics and the union of all configuration features, so the primary,
+#    backup, and fallback configurations are clustered on identical participants; descriptive columns may be missing
 cat("Creating a copy of the data which only contains subjects who have complete data (i.e., can be clustered)", "\n")
+cols_required <- c(cols_id_demo, feats_all_configs)
 risk_variable_data_clean <- risk_variable_data %>% 
-  filter(complete.cases(.) & !if_any(everything(), ~ . == ""))
+  filter(if_all(all_of(cols_required), ~ !is.na(.)) & !if_any(all_of(cols_required), ~ . %in% ""))
+
+#2.2 Report the analytic sample size and exclusions
+cat(sprintf("Analytic sample: %d of %d baseline participants retained (%d excluded, %.1f%%)\n",
+            nrow(risk_variable_data_clean), nrow(risk_variable_data),
+            nrow(risk_variable_data) - nrow(risk_variable_data_clean),
+            100 * (nrow(risk_variable_data) - nrow(risk_variable_data_clean)) / nrow(risk_variable_data)))
+
+#2.3 Report per-feature missingness in the unfiltered data, to identify which features drive exclusion
+risk_variable_data %>%
+  summarise(across(all_of(feats_all_configs), ~ sum(is.na(.) | . %in% ""))) %>%
+  tidyr::pivot_longer(everything(), names_to = "Feature", values_to = "N Missing") %>%
+  mutate(`Percent Missing` = round(100 * `N Missing` / nrow(risk_variable_data), 2)) %>%
+  arrange(desc(`N Missing`)) %>%
+  kable(caption = "Baseline missingness across all revision clustering features") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
 
 #3. Create a function ("validate_cluster_vars") to verify all derived clustering variables
 cat("Cross checking (using a distinct function) whether any secondary variables created herein were done so correctly", "\n")
@@ -446,6 +636,86 @@ validate_cluster_vars <- function(raw_clean, final_data) {
       sum(raw_clean[[v]] != final_data[[v]], na.rm = TRUE)})
     )
   
+  #3.7.3 Revision additions: family history of psychosis and hospitalization, recomputed from raw items
+  first_degree_any <- function(data, stem) {
+    cols <- c(sprintf("mh_p_famhx__%s__fath_001", stem), sprintf("mh_p_famhx__%s__moth_001", stem),
+              sprintf("mh_p_famhx__%s__full__young_%03d", stem, 1:5), sprintf("mh_p_famhx__%s__full__old_%03d", stem, 1:5))
+    Reduce(`|`, lapply(cols, function(cc) replace_na(data[[cc]] == 1, FALSE)))
+  }
+  expected_fhp <- case_when(
+    first_degree_any(raw_clean, "halluc") ~ 1,
+    raw_clean$mh_p_famhx__halluc_001 %in% c(0, 1) ~ 0,
+    TRUE ~ NA_real_)
+  expected_fhh <- case_when(
+    first_degree_any(raw_clean, "hosp") ~ 1,
+    raw_clean$mh_p_famhx__hosp_001 %in% c(0, 1) ~ 0,
+    TRUE ~ NA_real_)
+  
+  #3.7.4 Revision additions: abuse indicators, recomputed from raw items
+  miss_codes <- c(NA, "", 999, 7, 777)
+  expected_phys <- with(raw_clean, if_else(
+    ksads_ptsd_raw_762_p %in% miss_codes | ksads_ptsd_raw_763_p %in% miss_codes, NA_real_,
+    as.numeric(ksads_ptsd_raw_762_p == 1 | ksads_ptsd_raw_763_p == 1)))
+  expected_sex <- with(raw_clean, if_else(
+    ksads_ptsd_raw_767_p %in% miss_codes | ksads_ptsd_raw_768_p %in% miss_codes, NA_real_,
+    as.numeric(ksads_ptsd_raw_767_p == 1 | ksads_ptsd_raw_768_p == 1)))
+  expected_emo <- with(raw_clean, case_when(
+    fc_y_fes__confl_005 == 1 | fc_p_fes__confl_005 == 1 ~ 1,
+    is.na(fc_y_fes__confl_005) & is.na(fc_p_fes__confl_005) ~ NA_real_,
+    fc_y_fes__confl_005 == "" & fc_p_fes__confl_005 == "" ~ NA_real_,
+    TRUE ~ 0))
+  
+  #3.7.5 Revision additions: non-abuse ACE composites, recomputed from the independently computed ACE components above
+  nonabuse_items <- c("mh_p_famhx__troub_001", "fc_y_crpbi__cg1_005", "mh_p_famhx__suic_001", "mh_p_famhx__dep_001",
+                      "mh_p_famhx__alc_001", "mh_p_famhx__drg_001", "ksads_ptsd_raw_766_p", "fc_y_fes__confl_006",
+                      "fc_y_fes__confl_003", "ab_p_demo__marital__slf_001", "fc_y_pm_001", "fc_y_pm_003")
+  nonabuse_missing <- rowSums(sapply(nonabuse_items, function(cc) raw_clean[[cc]] %in% miss_codes)) >= 1
+  expected_ace_nonabuse <- if_else(
+    nonabuse_missing, NA_real_,
+    rowSums(ace_components[, c("ACE_1", "ACE_2", "ACE_3", "ACE_4", "ACE_5", "ACE_6", "ACE_8")]))
+  expected_ace_nonabuse_emo <- expected_ace_nonabuse + expected_emo
+  
+  #3.7.6 Revision additions: CBCL raw syndrome sums under the number-missing rule, and the dysregulation profile raw sum
+  expected_anxdep <- if_else(raw_clean$mh_p_cbcl__synd__anxdep_nm >= 1, NA_real_, as.numeric(raw_clean$mh_p_cbcl__synd__anxdep_sum))
+  expected_attn <- if_else(raw_clean$mh_p_cbcl__synd__attn_nm >= 1, NA_real_, as.numeric(raw_clean$mh_p_cbcl__synd__attn_sum))
+  expected_aggr <- if_else(raw_clean$mh_p_cbcl__synd__aggr_nm >= 1, NA_real_, as.numeric(raw_clean$mh_p_cbcl__synd__aggr_sum))
+  expected_dp <- expected_anxdep + expected_attn + expected_aggr
+  
+  #3.7.7 Count mismatches, and separately count disagreement in missingness, which != with na.rm would otherwise hide
+  count_mismatch <- function(expected, observed) {
+    sum(expected != observed, na.rm = TRUE) + sum(is.na(expected) != is.na(observed))
+  }
+  mismatches_revision <- tibble(
+    Variable = c("family_history_psychosis", "family_history_hospitalization",
+                 "abuse_physical", "abuse_sexual", "abuse_emotional",
+                 "ACE_index_nonabuse_sum_score", "ACE_index_nonabuse_emo_sum_score",
+                 "mh_p_cbcl__synd__anxdep_sum", "mh_p_cbcl__synd__attn_sum", "mh_p_cbcl__synd__aggr_sum",
+                 "cbcl_dp_raw_sum"),
+    Mismatches = c(
+      count_mismatch(expected_fhp, final_data$family_history_psychosis),
+      count_mismatch(expected_fhh, final_data$family_history_hospitalization),
+      count_mismatch(expected_phys, final_data$abuse_physical),
+      count_mismatch(expected_sex, final_data$abuse_sexual),
+      count_mismatch(expected_emo, final_data$abuse_emotional),
+      count_mismatch(expected_ace_nonabuse, final_data$ACE_index_nonabuse_sum_score),
+      count_mismatch(expected_ace_nonabuse_emo, final_data$ACE_index_nonabuse_emo_sum_score),
+      count_mismatch(expected_anxdep, final_data$mh_p_cbcl__synd__anxdep_sum),
+      count_mismatch(expected_attn, final_data$mh_p_cbcl__synd__attn_sum),
+      count_mismatch(expected_aggr, final_data$mh_p_cbcl__synd__aggr_sum),
+      count_mismatch(expected_dp, final_data$cbcl_dp_raw_sum))
+  )
+  
+  #3.7.8 Revision additions: BIS/BAS are carried through unchanged from the raw export
+  bas_vars <- c("mh_y_bisbas__bas__rr_sum__v01", "mh_y_bisbas__bas__dr_sum", "mh_y_bisbas__bis_sum__v01", "mh_y_bisbas__bas__fs_sum")
+  mismatches_bas <- tibble(
+    Variable = bas_vars,
+    Mismatches = sapply(bas_vars, function(v) count_mismatch(raw_clean[[v]], final_data[[v]])))
+  
+  #3.7.9 Structural check: the 9-factor published composite must equal the non-abuse composite plus the two abuse indicators
+  structural_ace <- count_mismatch(
+    final_data$ACE_index_sum_score,
+    final_data$ACE_index_nonabuse_sum_score + final_data$abuse_physical + final_data$abuse_sexual)
+  
   #3.8 Combine all mismatch counts into a single summary
   mismatch_summary <- bind_rows(
     tibble(Variable = "family_history_depression", Mismatches = mismatches_fhd),
@@ -454,7 +724,10 @@ validate_cluster_vars <- function(raw_clean, final_data) {
     tibble(Variable = "ACE_index_sum_score", Mismatches = mismatches_ace),
     tibble(Variable = "sds_total", Mismatches = mismatches_sds),
     mismatches_cont,
-    mismatches_direct
+    mismatches_direct,
+    mismatches_revision,
+    mismatches_bas,
+    tibble(Variable = "ACE 9-factor = nonabuse + physical + sexual", Mismatches = structural_ace)
   )
   
   #3.9 Return the mismatch summary
@@ -471,12 +744,16 @@ validation_results <- validate_cluster_vars(
 kable(validation_results) %>%
   kable_styling(bootstrap_options = c("striped","hover","condensed","responsive"))
 
-#3.12 Optionally, assert that all mismatches are zero
+#3.12 Assert that all mismatches are zero, halting the render otherwise so no unverified data reach clustering
 if (all(validation_results$Mismatches == 0)) {
   cat("All derived variables match expected values.\n")
 } else {
-  cat("Some mismatches detected; inspect 'validation_results' for details.\n")
+  stop("Derivation mismatches detected: ",
+       paste(validation_results$Variable[validation_results$Mismatches > 0], collapse = ", "))
 }
+
+#3.13 Confirm every configuration's features are present in the cleaned data
+stopifnot(all(feats_all_configs %in% names(risk_variable_data_clean)))
 
 #4. Summarize final cleaned dataset
 cat("Summarizing the properties of the final dataset via EDA functions from skimr", "\n")
