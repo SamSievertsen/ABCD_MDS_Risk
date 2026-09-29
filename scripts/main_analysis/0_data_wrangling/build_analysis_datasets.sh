@@ -36,7 +36,7 @@ export R_PARALLEL_BACKEND_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 
 # Establish paths
 REPO="/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk"
-IMG="/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.7.sif"
+IMG="/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.9.sif"
 RMD="build_analysis_datasets.Rmd"
 
 # Ensure log dir exists
@@ -46,7 +46,8 @@ mkdir -p "${REPO}/slurm_logs"
 export APPTAINER_CACHEDIR="/home/exacloud/gscratch/NagelLab/staff/sam/.apptainer_cache"
 mkdir -p "${APPTAINER_CACHEDIR}"
 
-# Set parameter knobs (can also override at submit time: SCALING_METHOD=..., etc.)
+# Set parameter knobs (can also override at submit time: CONFIG=..., SCALING_METHOD=..., etc.)
+: "${CONFIG:=fallback_emo_ace}"
 : "${SCALING_METHOD:=z_score}"
 : "${K_VALUE:=2}"
 : "${OVERWRITE:=false}"
@@ -62,6 +63,7 @@ echo "Date: $(date -Iseconds)"
 echo "Host: $(hostname)"
 echo "Apptainer: $(apptainer --version || true)"
 echo "Repo: ${REPO}"
+echo "Config: ${CONFIG}"
 if command -v git >/dev/null 2>&1; then
   if git -C "${REPO}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     echo "Git commit: $(git -C "${REPO}" rev-parse HEAD)"
@@ -73,6 +75,7 @@ fi
 srun apptainer exec \
   --cleanenv \
   -B "${REPO}:${REPO}" \
+  --env CONFIG="${CONFIG}" \
   --env SCALING_METHOD="${SCALING_METHOD}" \
   --env K_VALUE="${K_VALUE}" \
   --env OVERWRITE="${OVERWRITE}" \
@@ -95,7 +98,9 @@ waves_vec <- trimws(waves_vec)
 # Render the script
 rmarkdown::render(
   input  = "build_analysis_datasets.Rmd",
+  output_file = paste0("build_analysis_datasets_", Sys.getenv("CONFIG"), ".html"),
   params = list(
+    config = Sys.getenv("CONFIG"),
     scaling_method = Sys.getenv("SCALING_METHOD"),
     k_value = as.integer(Sys.getenv("K_VALUE")),
     overwrite = tolower(Sys.getenv("OVERWRITE")) %in% c("true","1","t","yes","y"),

@@ -1,11 +1,12 @@
 ---
-title: "Build Analysis Datasets: Person-Period Rows + Cluster Labels"
+title: "Build Analysis Datasets: Person-Period Rows + Cluster Labels (`r params$config`)"
 author: "Sam A. Sievertsen"
 date: "`r Sys.Date()`"
 output:
   html_document:
     self_contained: true
 params:
+  config: "fallback_emo_ace"
   scaling_method: "z_score"
   k_value: 2
   overwrite: false
@@ -27,7 +28,7 @@ knitr::opts_chunk$set(echo = TRUE, cache = FALSE, message = TRUE, warning = TRUE
 
 ## Load packages, data, & set env ##
 
-# Read in required packages safely & quietly
+# Read in required packages
 suppressPackageStartupMessages({
   library(dplyr); 
   library(tidyr); 
@@ -49,32 +50,47 @@ raw_dir <- file.path(REPO, "data", "data_raw")
 analysis_dir <- file.path(proc_dir, "analysis_datasets")
 dir.create(analysis_dir, recursive = TRUE, showWarnings = FALSE)
 
-# Establish paths to inputs
-outcome_file <- file.path(proc_dir, "outcome_variable_data.csv")
-kproto_file <- file.path(proc_dir, "kproto_results", sprintf("kproto_%s.rds", params$scaling_method))
+# Load the shared clustering configuration definitions and verify the requested configuration exists
+source(file.path(REPO, "scripts/main_analysis/1_clustering/cluster_configs.R"))
+if (!params$config %in% names(cluster_configs)) stop("Unknown config: ", params$config)
 
-# Establish paths to outputs
-lab_csv <- file.path(analysis_dir, sprintf("cluster_labels_k%d_%s.csv", params$k_value, params$scaling_method))
-bd_rds <- file.path(analysis_dir, sprintf("bd_person_period_k%d_%s.rds",  params$k_value, params$scaling_method))
+# Establish paths to inputs, with the kproto fit namespaced by configuration so no other feature set's fit is reused
+outcome_file <- file.path(proc_dir, "outcome_variable_data.csv")
+kproto_file <- file.path(proc_dir, "kproto_results", sprintf("kproto_%s_%s.rds", params$config, params$scaling_method))
+risk_file <- file.path(proc_dir, "risk_variable_data.csv")
+
+# Establish paths to outputs, namespaced by configuration so the submitted analysis's datasets are never loaded or overwritten
+tag <- sprintf("%s_k%d_%s", params$config, params$k_value, params$scaling_method)
+lab_csv <- file.path(analysis_dir, sprintf("cluster_labels_%s.csv", tag))
+orient_csv <- file.path(analysis_dir, sprintf("cluster_orientation_%s.csv", tag))
+bd_rds <- file.path(analysis_dir, sprintf("bd_person_period_%s.rds", tag))
 bd_csv <- sub("\\.rds$", ".csv", bd_rds)
-su_rds <- file.path(analysis_dir, sprintf("suic_person_period_k%d_%s.rds", params$k_value, params$scaling_method))
+su_rds <- file.path(analysis_dir, sprintf("suic_person_period_%s.rds", tag))
 su_csv <- sub("\\.rds$", ".csv", su_rds)
-su_bd_rds <- file.path(analysis_dir, sprintf("nested_suic_person_period_k%d_%s.rds", params$k_value, params$scaling_method))
+su_bd_rds <- file.path(analysis_dir, sprintf("nested_suic_person_period_%s.rds", tag))
 su_bd_csv <- sub("\\.rds$", ".csv", su_bd_rds)
-bd_panel_rds <- file.path(analysis_dir, sprintf("bd_panel_k%d_%s.rds", params$k_value, params$scaling_method))
+bd_panel_rds <- file.path(analysis_dir, sprintf("bd_panel_%s.rds", tag))
 bd_panel_csv <- sub("\\.rds$", ".csv", bd_panel_rds)
-su_panel_rds <- file.path(analysis_dir, sprintf("suic_panel_k%d_%s.rds", params$k_value, params$scaling_method))
+su_panel_rds <- file.path(analysis_dir, sprintf("suic_panel_%s.rds", tag))
 su_panel_csv <- sub("\\.rds$", ".csv", su_panel_rds)
-su_bd_panel_rds <- file.path(analysis_dir, sprintf("nested_suic_panel_k%d_%s.rds", params$k_value, params$scaling_method))
+su_bd_panel_rds <- file.path(analysis_dir, sprintf("nested_suic_panel_%s.rds", tag))
 su_bd_panel_csv <- sub("\\.rds$", ".csv", su_bd_panel_rds)
 
 # Read in inputs
 out_df <- readr::read_csv(outcome_file, show_col_types = FALSE)
+risk_df <- readr::read_csv(risk_file, show_col_types = FALSE)
 kp_list <- readRDS(kproto_file)
-k_vals <- 2:8
-pos <- match(params$k_value, k_vals)
-stopifnot(is.finite(pos), pos >= 1, pos <= length(k_vals))
-kp <- kp_list[[pos]]
+
+# Confirm the cached fit belongs to this exact configuration before using its labels
+fp <- attr(kp_list, "fingerprint")
+if (is.null(fp) || !identical(fp$config, params$config) || !identical(fp$features, cluster_configs[[params$config]])) {
+  stop("kproto cache fingerprint does not match config ", params$config)
+}
+
+# Select the requested k by name (list elements are named k2 to k8)
+kp_name <- paste0("k", params$k_value)
+stopifnot(kp_name %in% names(kp_list))
+kp <- kp_list[[kp_name]]
 
 # Establish ID's, and assessment waves as factors
 wave_levels <- params$waves
@@ -94,8 +110,10 @@ Utility functions to standardize dataset construction. We a) extract stable clus
 
 ## 1. Establish helper functions for creating analysis ready data ##
 
-#1.1 Extract participant_id from kproto$data (rownames preferred)
-get_cluster_labels <- function(kp, k_value) {
+#1.1 Extract participant_id from kproto$data (rownames preferred), orienting labels by content rather than raw cluster number
+#1.1.0 kproto numbers clusters arbitrarily; C1 is always the cluster with the highest mean CBCL dysregulation profile raw sum
+#      (i.e., the higher-risk group at k = 2), preserving the submitted analysis's convention for every downstream contrast
+get_cluster_labels <- function(kp, k_value, orient_df) {
   dat <- as.data.frame(kp$data)
   
   #1.1.1 Try rownames of the kp obj first
@@ -107,8 +125,24 @@ get_cluster_labels <- function(kp, k_value) {
     stop("Could not infer participant_id for cluster labels from kproto$data. ",
          "Ensure rownames carry IDs or participant_id is a column.")
   }
-  cl <- factor(kp$cluster, levels = seq_len(k_value), labels = paste0("C", seq_len(k_value)))
-  tibble(participant_id = as.character(ids), cluster = cl)
+  
+  #1.1.2 Rank raw clusters by descending mean dysregulation profile raw sum, and relabel them C1 to Ck in that order
+  dp <- orient_df$cbcl_dp_raw_sum[match(as.character(ids), as.character(orient_df$participant_id))]
+  if (anyNA(dp)) stop("cbcl_dp_raw_sum unavailable for some clustered participants; cannot orient labels")
+  raw_means <- tapply(dp, kp$cluster, mean)
+  raw_order <- as.integer(names(sort(raw_means, decreasing = TRUE)))
+  stopifnot(length(raw_order) == k_value)
+  cl <- factor(paste0("C", match(kp$cluster, raw_order)), levels = paste0("C", seq_len(k_value)))
+  
+  #1.1.3 Return labels plus the raw-to-oriented mapping for provenance
+  list(
+    labels = tibble(participant_id = as.character(ids), cluster = cl),
+    orientation = tibble(
+      oriented_cluster = paste0("C", seq_len(k_value)),
+      raw_cluster = raw_order,
+      n = as.integer(table(kp$cluster)[as.character(raw_order)]),
+      mean_cbcl_dp_raw_sum = as.numeric(raw_means[as.character(raw_order)]))
+  )
 }
 
 #1.2 Ensure (id, session) grid is as expected and keep original values
@@ -197,25 +231,31 @@ left_join_guard <- function(x, y, by) {
 
 ## 2. Extract Cluster Labels from Chosen k Solution
 
-Pull participant-level cluster assignments for the requested k, recover IDs from 'kproto$data` (rownames preferred), label clusters C1…Ck, and persist to disk (with caching). Freezing labels here provides a single source of truth for downstream models and provenance
+Pull participant-level cluster assignments for the requested configuration and k, recover IDs from `kproto$data` (rownames preferred), label clusters C1…Ck in descending order of mean CBCL dysregulation profile raw sum (so C1 is always the higher-risk group, independent of kproto's arbitrary numbering), and persist to disk (with caching). Freezing labels here provides a single source of truth for downstream models and provenance
 
 ``` {r cluster labels, warning = FALSE}
 
 ## 2. Extract cluster labels for chosen k ##
 
-#2.1 Extract labels
-labels_tbl <- get_cluster_labels(kp, params$k_value)
+#2.1 Extract content-oriented labels and the raw-to-oriented mapping
+label_out <- get_cluster_labels(kp, params$k_value, risk_df)
+labels_tbl <- label_out$labels
 
-#2.2 Save (skip/overwrite logic)
+#2.2 Save (skip/overwrite logic), verifying any cached file agrees with the current fit so stale labels can never be reused
 if (file.exists(lab_csv) && isFALSE(params$overwrite)) {
-  message("Cluster label file exists; loading cached: ", basename(lab_csv))
-  labels_tbl <- readr::read_csv(lab_csv, show_col_types = FALSE)
+  message("Cluster label file exists; verifying against the current fit: ", basename(lab_csv))
+  cached_tbl <- readr::read_csv(lab_csv, show_col_types = FALSE)
+  if (!identical(as.character(cached_tbl$participant_id), labels_tbl$participant_id) ||
+      !identical(as.character(cached_tbl$cluster), as.character(labels_tbl$cluster))) {
+    stop("Cached ", basename(lab_csv), " disagrees with the current fit; rerun with overwrite = TRUE if intended")
+  }
 } else {
   readr::write_csv(labels_tbl, lab_csv)
 }
+readr::write_csv(label_out$orientation, orient_csv)
 
-#2.3 Quick check
-labels_tbl %>% count(cluster, name = "n") %>% arrange(cluster)
+#2.3 Quick check: oriented cluster sizes and the mapping from raw kproto cluster numbers
+label_out$orientation
 
 ```
 
