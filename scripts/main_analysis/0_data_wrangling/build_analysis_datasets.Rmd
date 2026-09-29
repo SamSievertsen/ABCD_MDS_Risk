@@ -9,7 +9,7 @@ params:
   config: "fallback_emo_ace"
   scaling_method: "z_score"
   k_value: 2
-  overwrite: false
+  overwrite: true
   baseline_wave: "ses-00A"
   start_wave: "ses-02A"
   waves: ["ses-00A","ses-02A","ses-04A","ses-06A"]
@@ -28,7 +28,7 @@ knitr::opts_chunk$set(echo = TRUE, cache = FALSE, message = TRUE, warning = TRUE
 
 ## Load packages, data, & set env ##
 
-# Read in required packages
+# Read in required packages safely & quietly
 suppressPackageStartupMessages({
   library(dplyr); 
   library(tidyr); 
@@ -203,9 +203,11 @@ make_person_period <- function(df, status_col, baseline_wave, start_wave_cut) {
   core <- core %>%
     filter(as.integer(end_wave) >= start_cut_idx)
 
-  #1.3.6 Exclude at-risk time only if baseline-positive (coalesce NA baseline to 0 here)
+  #1.3.6 Exclude all person-time once a participant has been positive at any prior assessment, baseline included
+  #      (i.e., baseline-positive participants contribute no at-risk intervals, and intervals after a first onset are removed);
+  #      the onset interval itself is retained with event = 1, and NA prior statuses are treated as not positive, as above
   core <- core %>%
-    filter(!(start_wave == baseline_wave & dplyr::coalesce(baseline_status, 0L) == 1L))
+    filter(!ever_pos_prior)
 
   #1.3.7 Return analysis-ready person-period rows
   core %>%
@@ -695,16 +697,21 @@ knitr::kable(sizes_tbl_pre, caption = "8.1A Dataset sizes (pre-filter)")
 #8.2 Determine the presence of any person-period invariants (pre-filter)
 #8.2.1 Create a helper function to assess this
 pp_one_onset <- function(pp) {
-  if (!nrow(pp)) return(tibble::tibble(n_subjects = 0, n_multi_onsets = 0, n_with_event_NA = 0))
+  if (!nrow(pp)) return(tibble::tibble(n_subjects = 0, n_multi_onsets = 0, n_rows_after_onset = 0, n_with_event_NA = 0))
   pp %>%
     dplyr::group_by(participant_id, outcome) %>%
+    dplyr::arrange(end_wave, .by_group = TRUE) %>%
     dplyr::summarise(
       n_onsets = sum(event == 1L, na.rm = TRUE),
+      
+      #8.2.1.0 Rows occurring after this participant's onset for this outcome, which must not remain in the risk set
+      n_after_onset = sum(dplyr::lag(cumsum(dplyr::coalesce(event, 0L)), default = 0L) > 0L),
       any_na = any(is.na(event)),
       .groups = "drop") %>%
     dplyr::summarise(
       n_subjects = dplyr::n(),
       n_multi_onsets = sum(n_onsets > 1L),
+      n_rows_after_onset = sum(n_after_onset),
       n_with_event_NA = sum(any_na),
       .groups = "drop")
 }
@@ -719,8 +726,9 @@ knitr::kable(pp_su_chk, caption = "8.2.2 Suicidality person-period (pre-filter):
 pp_baseline_viol <- function(pp, baseline_wave) {
   if (!nrow(pp))
     return(0L)
-  sum(pp$start_wave == baseline_wave &
-        dplyr::coalesce(pp$baseline_status, 0L) == 1L)
+  
+  #8.2.3.0 Count baseline-positive rows across ALL intervals, not only those starting at baseline
+  sum(dplyr::coalesce(pp$baseline_status, 0L) == 1L)
 }
 #8.2.3.1 Check the PP BD/suicidality data for no baseline duplicates
 bd_baseline_viol <- pp_baseline_viol(bd_pp, params$baseline_wave)
@@ -769,12 +777,8 @@ panel_wave_summary_ppaligned <- function(panel_df, baseline_col) {
         }
       },
 
-      #8.2.4.1.1.4 Seed the *first row only* with baseline; otherwise use prior_pos_raw (coalesced)
-      ever_prior_pos = dplyr::if_else(
-        dplyr::row_number() == 1L,
-        seed_baseline,
-        dplyr::coalesce(prior_pos_raw, FALSE)
-      ),
+      #8.2.4.1.1.4 Seed every row with baseline positivity, so baseline-positive participants are never at risk (matching the PP rule)
+      ever_prior_pos = seed_baseline | dplyr::coalesce(prior_pos_raw, FALSE),
 
       #8.2.4.1.1.5 Determine "at risk" = not previously positive at/before prior wave
       at_risk = !ever_prior_pos,
@@ -1222,17 +1226,20 @@ rollup_tbl <- tibble::tibble(
              "PP one-onset violations (BD, post)", "PP one-onset violations (Suic, post)",
              "Baseline-at-risk violations (BD, post)", "Baseline-at-risk violations (Suic, post)",
              "Parity mismatches present (BD, post)", "Parity mismatches present (Suic, post)"),
-  Value  = c(pp_bd_chk$n_multi_onsets, pp_su_chk$n_multi_onsets,
+  Value  = c(pp_bd_chk$n_multi_onsets + pp_bd_chk$n_rows_after_onset, pp_su_chk$n_multi_onsets + pp_su_chk$n_rows_after_onset,
              bd_baseline_viol, su_baseline_viol,
              sum(dplyr::coalesce(bd_parity_pre$diff_onsets, 0) != 0), 
              sum(dplyr::coalesce(su_parity_pre$diff_onsets, 0) != 0),
-             pp_bd_chk_post$n_multi_onsets, pp_su_chk_post$n_multi_onsets,
+             pp_bd_chk_post$n_multi_onsets + pp_bd_chk_post$n_rows_after_onset,
+             pp_su_chk_post$n_multi_onsets + pp_su_chk_post$n_rows_after_onset,
              bd_baseline_viol_post,        su_baseline_viol_post,
              sum(dplyr::coalesce(bd_parity_post$diff_onsets, 0) != 0),
              sum(dplyr::coalesce(su_parity_post$diff_onsets, 0) != 0))
 )
 
-#8.6.8.1 Print the compact roll-up summary as a table
+#8.6.8.1 One-onset violations now include both multiple onsets and any rows remaining after an onset
+
+#8.6.8.2 Print the compact roll-up summary as a table
 knitr::kable(rollup_tbl, caption = "8.6.8 Roll-up of key validation checks (pre vs post)")
 
 #8.6.9 Debug parity mismatches (anonymized)
@@ -1262,8 +1269,7 @@ debug_parity <- function(parity_tbl, panel_df, pp_df, outcome_map = NULL, baseli
         seed_baseline = if (!is.null(baseline_col) && baseline_col %in% names(cur_data()))
           dplyr::coalesce(dplyr::first(.data[[baseline_col]] == 1L), FALSE) 
             else FALSE,
-        ever_prior_pos= dplyr::if_else(dplyr::row_number()==1L, 
-          seed_baseline, dplyr::coalesce(prior_pos_raw, FALSE)),
+        ever_prior_pos = seed_baseline | dplyr::coalesce(prior_pos_raw, FALSE),
         at_risk = !ever_prior_pos,
         onset = at_risk & is_pos) %>%
       dplyr::ungroup() %>%
