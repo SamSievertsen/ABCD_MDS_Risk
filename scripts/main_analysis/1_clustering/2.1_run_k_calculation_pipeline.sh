@@ -8,14 +8,15 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-# Run from this script's directory so the relative sbatch paths resolve
-cd "$(dirname "${BASH_SOURCE[0]}")"
+# Run from the clustering scripts directory so the relative sbatch paths resolve,
+# regardless of whether this launcher is invoked with bash or sbatch
+cd "/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk/scripts/main_analysis/1_clustering"
 
 # Configurations to run: arguments if given, otherwise primary, backup, and emotional-abuse fallback concurrently
 if [[ $# -gt 0 ]]; then
   CONFIGS=("$@")
 else
-  CONFIGS=(primary backup_cbcl3raw fallback_emo_ace)
+  CONFIGS=(fallback_emo_ace backup_cbcl3raw_emo_ace)
 fi
 
 # Submit an independent dependency chain per configuration, so configurations run concurrently

@@ -1,0 +1,313 @@
+---
+title: "k = 2 Solution Diagnostics Across Revision Configurations"
+author: "Sam A. Sievertsen"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    self_contained: true
+params:
+  scaling_method: "z_score"
+  legacy_anchor_file: "kproto_z_score.rds"
+---
+
+```{r global, include = FALSE}
+
+# Set global env variables
+knitr::opts_chunk$set(echo = TRUE, cache = FALSE, message = TRUE, warning = TRUE, results = "markup", comment = "")
+
+```
+
+```{r environment, echo = FALSE, include = FALSE, warning = FALSE}
+
+# Load necessary packages + environment
+library(knitr)
+library(kableExtra)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(purrr)
+library(clustMixType)
+library(mclust)
+library(effectsize)
+library(glue)
+library(here)
+
+# Set numerical options
+options(scipen = 999, digits = 8)
+
+# List project repository location and load the shared configuration definitions and silhouette helpers
+REPO <- here()
+source(file.path(REPO, "scripts/main_analysis/1_clustering/cluster_configs.R"))
+source(file.path(REPO, "scripts/main_analysis/1_clustering/silhouette_helpers.R"))
+
+# Paths
+kproto_dir <- file.path(REPO, "data/data_processed", "kproto_results")
+diag_dir <- file.path(REPO, "data/data_processed", "validation_results", "k2_diagnostics")
+dir.create(diag_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Read in the unscaled risk variable data, used for orientation and feature profiles
+risk_variable_data <- read.csv(file.path(REPO, "data/data_processed", "risk_variable_data.csv"))
+
+```
+
+## Purpose
+
+All three revision configurations selected *k* = 2, but they differ materially in how the sample is partitioned, and in each the smaller cluster has a negative mean silhouette width. This report asks four questions of the cached *k* = 2 fits, none of which require refitting:
+
+  1. **Does the emotional abuse proxy drive the primary partition?** Primary and fallback differ only in whether emotional abuse is a standalone binary or folded into the ACE composite
+
+  2. **How much do the configurations agree** with one another and with the published 17-feature solution?
+
+  3. **Are the negative silhouette widths misassignments, or a consequence of unequal cluster dispersion?** The mean Huang distance from participant *i* to cluster *C* decomposes exactly into (distance to C's centroid) + (C's internal numeric spread) + (a categorical frequency term), whereas k-prototypes assigns by distance to the prototype alone. A participant can therefore be correctly assigned to a diffuse cluster yet have a(i) > b(i)
+
+  4. **Was this already true of the published solution?**
+
+```{r load, warning = FALSE}
+
+## Load the k = 2 fits ##
+
+#1. Load each revision configuration with a cache, validating its fingerprint
+fits <- list()
+for (cfg in names(cluster_configs)) {
+  f <- file.path(kproto_dir, sprintf("kproto_%s_%s.rds", cfg, params$scaling_method))
+  if (!file.exists(f)) { cat("No cache for", cfg, "; skipping\n"); next }
+  kl <- readRDS(f)
+  fp <- attr(kl, "fingerprint")
+  if (is.null(fp) || !identical(fp$features, cluster_configs[[cfg]])) stop("Fingerprint mismatch for ", cfg)
+  fits[[cfg]] <- kl$k2
+}
+
+#2. Load the published 17-feature anchor solution, if present, for comparison
+legacy_path <- file.path(kproto_dir, params$legacy_anchor_file)
+if (file.exists(legacy_path)) {
+  anchor_k2 <- readRDS(legacy_path)$k2
+  n_shared <- sum(rownames(anchor_k2$data) %in% risk_variable_data$participant_id)
+  if (n_shared == 0) {
+    cat("Published anchor rows are not keyed by participant_id; anchor comparisons skipped\n")
+  } else {
+    fits[["published_anchor"]] <- anchor_k2
+    cat("Loaded published anchor from", basename(legacy_path), "(", n_shared, "participants shared with the revision sample )\n")
+  }
+} else {
+  cat("Published anchor not found at", legacy_path, "; anchor comparisons skipped\n")
+}
+
+#3. Orient every solution so the cluster with the higher mean CBCL dysregulation profile raw sum is labelled higher-risk
+orient <- function(kp) {
+  ids <- rownames(kp$data)
+  dp <- risk_variable_data$cbcl_dp_raw_sum[match(ids, risk_variable_data$participant_id)]
+  means <- tapply(dp, kp$cluster, mean, na.rm = TRUE)
+  higher <- as.integer(names(which.max(means)))
+  tibble(participant_id = ids, raw_cluster = kp$cluster,
+         risk_group = factor(ifelse(kp$cluster == higher, "Higher-risk", "Lower-risk"), levels = c("Higher-risk", "Lower-risk")))
+}
+labels <- purrr::map(fits, orient)
+
+```
+
+## 1. Solution Overview
+
+```{r overview, warning = FALSE}
+
+## Size, silhouette, and per-group silhouette for every solution ##
+
+#1. Compute individual widths (exact closed form, verified identical to kproto2silhouette to ~1e-15 on these data)
+sils <- purrr::map(fits, silhouette_exact_huang)
+
+#2. Summarize by oriented risk group
+overview <- purrr::imap_dfr(fits, function(kp, cfg) {
+  s <- sils[[cfg]][, "sil_width"]; g <- labels[[cfg]]$risk_group
+  tibble(
+    Config = cfg,
+    `N` = length(g),
+    `N feat` = ncol(kp$data),
+    lambda = mean(kp$lambda),
+    `Higher-risk n` = sum(g == "Higher-risk"),
+    `Higher-risk %` = 100 * mean(g == "Higher-risk"),
+    `Mean silhouette` = mean(s),
+    `Higher-risk mean width` = mean(s[g == "Higher-risk"]),
+    `Higher-risk % negative` = 100 * mean(s[g == "Higher-risk"] < 0),
+    `Lower-risk mean width` = mean(s[g == "Lower-risk"]),
+    `Lower-risk % negative` = 100 * mean(s[g == "Lower-risk"] < 0)
+  )
+})
+
+#3. Print
+overview %>%
+  kable(caption = "k = 2 solutions, oriented so the higher-risk group has the higher mean CBCL dysregulation profile raw sum", digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+
+```
+
+## 2. Agreement Across Solutions
+
+Adjusted Rand index on shared participants, and the share of each row solution's higher-risk group that is also higher-risk in the column solution.
+
+```{r agreement, warning = FALSE}
+
+## Pairwise ARI and higher-risk overlap ##
+
+#1. Pairwise ARI on the participants shared by each pair
+cfgs <- names(labels)
+ari <- matrix(NA_real_, length(cfgs), length(cfgs), dimnames = list(cfgs, cfgs))
+overlap <- ari
+for (a in cfgs) for (b in cfgs) {
+  m <- inner_join(labels[[a]], labels[[b]], by = "participant_id", suffix = c(".a", ".b"))
+  ari[a, b] <- adjustedRandIndex(m$risk_group.a, m$risk_group.b)
+  overlap[a, b] <- 100 * mean(m$risk_group.b[m$risk_group.a == "Higher-risk"] == "Higher-risk")
+}
+
+#2. Print ARI
+round(ari, 3) %>%
+  kable(caption = "Adjusted Rand index between k = 2 solutions (shared participants)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+#3. Print higher-risk overlap
+round(overlap, 1) %>%
+  kable(caption = "% of the ROW solution's higher-risk group that is also higher-risk in the COLUMN solution") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+```
+
+## 3. What Separates the Groups
+
+Every feature in the union of all configurations, plus the four CBCL T-scores from the submitted solution, profiled under each solution's own labels. Binary features are converted to a Cohen's *d* equivalent (`effectsize::oddsratio_to_d()`) so all features rank on one scale. Positive values are elevated in the higher-risk group.
+
+```{r profiles, warning = FALSE}
+
+## Feature separation under each solution ##
+
+#1. Features to profile
+profile_feats <- unique(c(feats_all_configs, "mh_p_cbcl__dsm__dep_tscore", "mh_p_cbcl__dsm__anx_tscore",
+                          "mh_p_cbcl__synd__attn_tscore", "mh_p_cbcl__synd__aggr_tscore"))
+
+#2. Create a helper returning a d-equivalent separation for one feature under one solution's labels
+separation <- function(var, lab) {
+  v <- risk_variable_data[[var]][match(lab$participant_id, risk_variable_data$participant_id)]
+  ok <- !is.na(v); v <- v[ok]; g <- lab$risk_group[ok]
+  if (var %in% feats_categorical) {
+    tab <- table(g, factor(v, levels = c(1, 0)))
+    if (any(tab == 0)) return(NA_real_)
+    as.numeric(effectsize::oddsratio_to_d(effectsize::oddsratio(tab)$Odds_ratio))
+  } else {
+    as.numeric(effectsize::cohens_d(v ~ g)$Cohens_d)
+  }
+}
+
+#3. Build the profile matrix and rank features within each solution
+profile <- purrr::map_dfc(labels, function(lab) purrr::map_dbl(profile_feats, separation, lab = lab))
+profile <- bind_cols(tibble(feature = profile_feats), profile)
+ranks <- profile %>% mutate(across(-feature, ~ rank(-abs(.x), na.last = "keep"), .names = "rank_{.col}"))
+
+#4. Print the profile, sorted by the primary solution if present
+sort_col <- if ("primary" %in% names(profile)) "primary" else names(profile)[2]
+profile %>%
+  arrange(desc(abs(.data[[sort_col]]))) %>%
+  kable(caption = glue("Separation (d-equivalent, higher-risk minus lower-risk) of each feature under each k = 2 solution; sorted by {sort_col}"), digits = 2) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 11)
+
+#5. Emotional abuse specifically: prevalence by group and its rank within each solution
+emo <- purrr::imap_dfr(labels, function(lab, cfg) {
+  v <- risk_variable_data$abuse_emotional[match(lab$participant_id, risk_variable_data$participant_id)]
+  tibble(Config = cfg,
+         `Higher-risk % endorsed` = 100 * mean(v[lab$risk_group == "Higher-risk"] == 1, na.rm = TRUE),
+         `Lower-risk % endorsed` = 100 * mean(v[lab$risk_group == "Lower-risk"] == 1, na.rm = TRUE),
+         `Rank among features` = ranks[[paste0("rank_", cfg)]][ranks$feature == "abuse_emotional"],
+         `Is a clustering feature` = if (cfg %in% names(cluster_configs)) "abuse_emotional" %in% cluster_configs[[cfg]] else FALSE)
+})
+emo %>%
+  kable(caption = "Emotional abuse proxy (FES 'family members often criticize each other', either reporter) by risk group", digits = 1) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+#6. Write the profile to CSV
+write.csv(profile, file.path(diag_dir, "k2_feature_profiles.csv"), row.names = FALSE)
+
+```
+
+## 4. Why Are Silhouette Widths Negative in the Smaller Group?
+
+For each participant, a(i) and b(i) are the mean Huang distances to their own and the nearest other cluster. Each decomposes exactly as *centroid distance + that cluster's numeric spread + a categorical frequency term*. Two tests:
+
+- **Assignment check:** among participants with negative widths, the share who are nonetheless closer to their own k-prototypes prototype than to the other (i.e., correctly assigned by the algorithm's own criterion)
+- **Spread-removed check:** the share of widths that remain negative after subtracting each cluster's numeric spread constant from a(i) and b(i). If negatives largely vanish, they reflect the higher-risk group's greater dispersion rather than misassignment
+
+```{r decomposition, warning = FALSE}
+
+## Decompose silhouette widths into centroid distance and cluster spread ##
+
+#1. Create a helper computing the decomposition for one solution
+decompose <- function(kp, lab, s_ref) {
+  stopifnot(length(table(kp$cluster)) == 2)
+  x <- kp$data; cl <- kp$cluster; lambda <- kp$lambda
+  numvars <- vapply(x, is.numeric, logical(1)); catvars <- vapply(x, is.factor, logical(1))
+  w_num <- if (length(lambda) == 1) rep(1, sum(numvars)) else lambda[numvars]
+  w_cat <- if (length(lambda) == 1) rep(lambda, sum(catvars)) else lambda[catvars]
+  X <- as.matrix(x[, numvars, drop = FALSE]); n <- nrow(x); K <- length(table(cl))
+  full <- matrix(0, n, K); spread_num <- numeric(K); spread_cat <- numeric(K)
+  for (i in seq_len(K)) {
+    m <- which(cl == i); Xc <- X[m, , drop = FALSE]; mu <- colMeans(Xc)
+    spread_num[i] <- sum(w_num * colMeans(sweep(Xc, 2, mu)^2))
+    cat_term <- numeric(n)
+    for (jj in seq_along(which(catvars))) {
+      v <- x[[which(catvars)[jj]]]; f <- tabulate(as.integer(v[m]), nlevels(v)) / length(m)
+      cat_term <- cat_term + w_cat[jj] * (1 - f[as.integer(v)])
+    }
+    spread_cat[i] <- mean(cat_term[m])
+    full[, i] <- colSums(w_num * (t(X) - mu)^2) + spread_num[i] + cat_term
+  }
+  own <- cbind(seq_len(n), cl); oth <- cbind(seq_len(n), 3 - cl)
+  a <- full[own]; b <- full[oth]
+  s <- (b - a) / pmax(a, b)
+  stopifnot(max(abs(s - s_ref)) < 1e-10)  # the decomposition must reproduce the verified widths exactly
+  s_nospread <- ((b - spread_num[3 - cl]) - (a - spread_num[cl])) / pmax(a - spread_num[cl], b - spread_num[3 - cl])
+  correct <- kp$dists[own] < kp$dists[oth]
+  g <- lab$risk_group
+  purrr::map_dfr(c("Higher-risk", "Lower-risk"), function(grp) {
+    idx <- g == grp; ci <- unique(cl[idx])
+    tibble(
+      `Risk group` = grp, n = sum(idx),
+      `Numeric spread` = spread_num[ci], `Categorical spread` = spread_cat[ci],
+      `% negative` = 100 * mean(s[idx] < 0),
+      `% of negatives correctly assigned` = if (any(idx & s < 0)) 100 * mean(correct[idx & s < 0]) else NA_real_,
+      `% negative, spread removed` = 100 * mean(s_nospread[idx] < 0))
+  })
+}
+
+#2. Run and print for every solution, checking each decomposition against the verified widths
+decomp <- purrr::imap_dfr(fits, ~ mutate(decompose(.x, labels[[.y]], sils[[.y]][, "sil_width"]), Config = .y, .before = 1))
+decomp %>%
+  kable(caption = "Silhouette decomposition by risk group (spread = mean within-cluster distance to centroid)", digits = 2) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 12)
+
+write.csv(decomp, file.path(diag_dir, "k2_silhouette_decomposition.csv"), row.names = FALSE)
+
+```
+
+## 5. Summary
+
+```{r summary, echo = FALSE, results = "asis"}
+
+## Auto-generated summary of the diagnostic questions ##
+if (all(c("primary", "fallback_emo_ace") %in% names(labels))) {
+  e <- emo %>% filter(Config == "primary")
+  cat(glue(
+    "- **Emotional abuse in the primary:** endorsed by {round(e$`Higher-risk % endorsed`, 1)}% of the higher-risk vs ",
+    "{round(e$`Lower-risk % endorsed`, 1)}% of the lower-risk group, ranking #{e$`Rank among features`} of {nrow(profile)} features. ",
+    "Primary vs fallback ARI = {round(ari['primary', 'fallback_emo_ace'], 3)}\n\n"))
+}
+pct_correct <- decomp$`% of negatives correctly assigned`
+if (all(is.na(pct_correct))) {
+  cat("- **Negative widths:** no solution has negative silhouette widths\n\n")
+} else {
+  cat(glue(
+    "- **Negative widths:** across solutions, {round(min(pct_correct, na.rm = TRUE), 1)}% to ",
+    "{round(max(pct_correct, na.rm = TRUE), 1)}% of negative-width participants are correctly ",
+    "assigned by the k-prototypes criterion\n\n"))
+}
+if ("published_anchor" %in% names(labels)) {
+  pa <- overview %>% filter(Config == "published_anchor")
+  cat(glue("- **Published anchor:** higher-risk mean width = {round(pa$`Higher-risk mean width`, 3)}, ",
+           "{round(pa$`Higher-risk % negative`, 1)}% negative\n"))
+}
+
+```
