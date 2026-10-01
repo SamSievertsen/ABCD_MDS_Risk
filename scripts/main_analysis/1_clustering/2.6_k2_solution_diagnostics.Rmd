@@ -200,7 +200,7 @@ profile <- bind_cols(tibble(feature = profile_feats), profile)
 ranks <- profile %>% mutate(across(-feature, ~ rank(-abs(.x), na.last = "keep"), .names = "rank_{.col}"))
 
 #4. Print the profile, sorted by the primary solution if present
-sort_col <- if ("primary" %in% names(profile)) "primary" else names(profile)[2]
+sort_col <- if (primary_config %in% names(profile)) primary_config else names(profile)[2]
 profile %>%
   arrange(desc(abs(.data[[sort_col]]))) %>%
   kable(caption = glue("Separation (d-equivalent, higher-risk minus lower-risk) of each feature under each k = 2 solution; sorted by {sort_col}"), digits = 2) %>%
@@ -288,12 +288,23 @@ write.csv(decomp, file.path(diag_dir, "k2_silhouette_decomposition.csv"), row.na
 ```{r summary, echo = FALSE, results = "asis"}
 
 ## Auto-generated summary of the diagnostic questions ##
-if (all(c("primary", "fallback_emo_ace") %in% names(labels))) {
+#1. Adopted primary, read from the roles defined in cluster_configs.R
+if (primary_config %in% names(labels)) {
+  po <- overview %>% filter(Config == primary_config)
+  top3 <- profile %>% transmute(feature, v = .data[[primary_config]]) %>% arrange(desc(abs(v))) %>% slice(1:3)
+  cat(glue(
+    "- **Adopted primary ({primary_config}):** higher-risk n = {po$`Higher-risk n`} ({round(po$`Higher-risk %`, 1)}%), ",
+    "mean silhouette = {round(po$`Mean silhouette`, 3)}; strongest separators: ",
+    "{paste(sprintf('%s (%.2f)', top3$feature, top3$v), collapse = ', ')}\n\n"))
+}
+
+#2. The emotional abuse contingency: the superseded standalone specification versus the adopted primary
+if (all(c("primary", primary_config) %in% names(labels))) {
   e <- emo %>% filter(Config == "primary")
   cat(glue(
-    "- **Emotional abuse in the primary:** endorsed by {round(e$`Higher-risk % endorsed`, 1)}% of the higher-risk vs ",
-    "{round(e$`Lower-risk % endorsed`, 1)}% of the lower-risk group, ranking #{e$`Rank among features`} of {nrow(profile)} features. ",
-    "Primary vs fallback ARI = {round(ari['primary', 'fallback_emo_ace'], 3)}\n\n"))
+    "- **Superseded specification (emotional abuse as a standalone feature):** endorsed by {round(e$`Higher-risk % endorsed`, 1)}% of the ",
+    "higher-risk vs {round(e$`Lower-risk % endorsed`, 1)}% of the lower-risk group, ranking #{e$`Rank among features`} of {nrow(profile)} features; ",
+    "ARI vs the adopted primary = {round(ari['primary', primary_config], 3)}\n\n"))
 }
 pct_correct <- decomp$`% of negatives correctly assigned`
 if (all(is.na(pct_correct))) {

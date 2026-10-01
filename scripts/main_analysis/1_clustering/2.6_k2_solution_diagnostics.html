@@ -11,7 +11,7 @@
 
 <meta name="author" content="Sam A. Sievertsen" />
 
-<meta name="date" content="2026-09-29" />
+<meta name="date" content="2026-09-30" />
 
 <title>k = 2 Solution Diagnostics Across Revision Configurations</title>
 
@@ -582,7 +582,7 @@ pre code {
 
 <h1 class="title toc-ignore">k = 2 Solution Diagnostics Across Revision Configurations</h1>
 <h4 class="author">Sam A. Sievertsen</h4>
-<h4 class="date">2026-09-29</h4>
+<h4 class="date">2026-09-30</h4>
 
 </div>
 
@@ -1192,14 +1192,14 @@ profile &lt;- bind_cols(tibble(feature = profile_feats), profile)
 ranks &lt;- profile %&gt;% mutate(across(-feature, ~ rank(-abs(.x), na.last = &quot;keep&quot;), .names = &quot;rank_{.col}&quot;))
 
 #4. Print the profile, sorted by the primary solution if present
-sort_col &lt;- if (&quot;primary&quot; %in% names(profile)) &quot;primary&quot; else names(profile)[2]
+sort_col &lt;- if (primary_config %in% names(profile)) primary_config else names(profile)[2]
 profile %&gt;%
   arrange(desc(abs(.data[[sort_col]]))) %&gt;%
   kable(caption = glue(&quot;Separation (d-equivalent, higher-risk minus lower-risk) of each feature under each k = 2 solution; sorted by {sort_col}&quot;), digits = 2) %&gt;%
   kable_styling(bootstrap_options = c(&quot;striped&quot;, &quot;hover&quot;, &quot;condensed&quot;, &quot;responsive&quot;), font_size = 11)</code></pre>
 <table class="table table-striped table-hover table-condensed table-responsive" style="font-size: 11px; margin-left: auto; margin-right: auto;">
 <caption style="font-size: initial !important;">
-Separation (d-equivalent, higher-risk minus lower-risk) of each feature under each k = 2 solution; sorted by primary
+Separation (d-equivalent, higher-risk minus lower-risk) of each feature under each k = 2 solution; sorted by fallback_emo_ace
 </caption>
 <thead>
 <tr>
@@ -1226,42 +1226,22 @@ published_anchor
 <tbody>
 <tr>
 <td style="text-align:left;">
-abuse_emotional
+bullying
 </td>
 <td style="text-align:right;">
-1.55
+0.49
 </td>
 <td style="text-align:right;">
-1.18
+0.58
 </td>
 <td style="text-align:right;">
-0.54
+1.44
 </td>
 <td style="text-align:right;">
-0.55
+1.34
 </td>
 <td style="text-align:right;">
-0.53
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-ACE_index_nonabuse_emo_sum_score
-</td>
-<td style="text-align:right;">
-0.98
-</td>
-<td style="text-align:right;">
-1.27
-</td>
-<td style="text-align:right;">
-1.07
-</td>
-<td style="text-align:right;">
-1.03
-</td>
-<td style="text-align:right;">
-0.87
+0.91
 </td>
 </tr>
 <tr>
@@ -1286,22 +1266,22 @@ cbcl_dp_raw_sum
 </tr>
 <tr>
 <td style="text-align:left;">
-mh_y_upps__purg_sum
+family_history_depression
+</td>
+<td style="text-align:right;">
+0.36
+</td>
+<td style="text-align:right;">
+1.17
+</td>
+<td style="text-align:right;">
+1.27
+</td>
+<td style="text-align:right;">
+1.20
 </td>
 <td style="text-align:right;">
 0.84
-</td>
-<td style="text-align:right;">
-0.56
-</td>
-<td style="text-align:right;">
-0.59
-</td>
-<td style="text-align:right;">
-0.51
-</td>
-<td style="text-align:right;">
-0.42
 </td>
 </tr>
 <tr>
@@ -1346,22 +1326,22 @@ mh_p_cbcl__synd__attn_sum
 </tr>
 <tr>
 <td style="text-align:left;">
-mh_y_bisbas__bas__dr_sum
+mh_p_cbcl__synd__attn_tscore
 </td>
 <td style="text-align:right;">
-0.78
+0.74
 </td>
 <td style="text-align:right;">
-0.43
+1.26
 </td>
 <td style="text-align:right;">
-0.50
+1.17
 </td>
 <td style="text-align:right;">
-0.42
+1.51
 </td>
 <td style="text-align:right;">
-0.28
+2.24
 </td>
 </tr>
 <tr>
@@ -1386,26 +1366,6 @@ mh_p_cbcl__synd__aggr_tscore
 </tr>
 <tr>
 <td style="text-align:left;">
-mh_y_upps__nurg_sum
-</td>
-<td style="text-align:right;">
-0.75
-</td>
-<td style="text-align:right;">
-0.55
-</td>
-<td style="text-align:right;">
-0.53
-</td>
-<td style="text-align:right;">
-0.51
-</td>
-<td style="text-align:right;">
-0.47
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
 mh_p_gbi_sum
 </td>
 <td style="text-align:right;">
@@ -1426,62 +1386,22 @@ mh_p_gbi_sum
 </tr>
 <tr>
 <td style="text-align:left;">
-mh_y_bisbas__bas__fs_sum
+ACE_index_nonabuse_emo_sum_score
 </td>
 <td style="text-align:right;">
-0.74
+0.98
 </td>
 <td style="text-align:right;">
-0.40
-</td>
-<td style="text-align:right;">
-0.46
-</td>
-<td style="text-align:right;">
-0.38
-</td>
-<td style="text-align:right;">
-0.22
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-mh_p_cbcl__synd__attn_tscore
-</td>
-<td style="text-align:right;">
-0.74
-</td>
-<td style="text-align:right;">
-1.26
-</td>
-<td style="text-align:right;">
-1.17
-</td>
-<td style="text-align:right;">
-1.51
-</td>
-<td style="text-align:right;">
-2.24
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-sds_total
-</td>
-<td style="text-align:right;">
-0.71
-</td>
-<td style="text-align:right;">
-1.08
+1.27
 </td>
 <td style="text-align:right;">
 1.07
 </td>
 <td style="text-align:right;">
-1.19
+1.03
 </td>
 <td style="text-align:right;">
-1.72
+0.87
 </td>
 </tr>
 <tr>
@@ -1506,142 +1426,22 @@ mh_p_cbcl__dsm__dep_tscore
 </tr>
 <tr>
 <td style="text-align:left;">
-le_l_coi__addr1__coi__total__national_zscore
+sds_total
 </td>
 <td style="text-align:right;">
--0.66
+0.71
 </td>
 <td style="text-align:right;">
--0.49
-</td>
-<td style="text-align:right;">
--0.61
-</td>
-<td style="text-align:right;">
--0.45
-</td>
-<td style="text-align:right;">
--0.38
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-mh_y_bisbas__bas__rr_sum__v01
-</td>
-<td style="text-align:right;">
-0.61
-</td>
-<td style="text-align:right;">
-0.30
-</td>
-<td style="text-align:right;">
-0.37
-</td>
-<td style="text-align:right;">
-0.29
-</td>
-<td style="text-align:right;">
-0.17
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-fc_p_nsc__ns_mean
-</td>
-<td style="text-align:right;">
--0.58
-</td>
-<td style="text-align:right;">
--0.52
-</td>
-<td style="text-align:right;">
--0.61
-</td>
-<td style="text-align:right;">
--0.51
-</td>
-<td style="text-align:right;">
--0.45
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-abuse_physical
-</td>
-<td style="text-align:right;">
-0.57
-</td>
-<td style="text-align:right;">
-0.75
-</td>
-<td style="text-align:right;">
-0.76
-</td>
-<td style="text-align:right;">
-0.72
-</td>
-<td style="text-align:right;">
-0.77
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-mh_p_cbcl__synd__anxdep_sum
-</td>
-<td style="text-align:right;">
-0.57
+1.08
 </td>
 <td style="text-align:right;">
 1.07
 </td>
 <td style="text-align:right;">
-0.94
+1.19
 </td>
 <td style="text-align:right;">
-1.26
-</td>
-<td style="text-align:right;">
-1.95
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-family_history_psychosis
-</td>
-<td style="text-align:right;">
-0.57
-</td>
-<td style="text-align:right;">
-0.90
-</td>
-<td style="text-align:right;">
-0.90
-</td>
-<td style="text-align:right;">
-0.81
-</td>
-<td style="text-align:right;">
-0.75
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-mh_p_cbcl__dsm__anx_tscore
-</td>
-<td style="text-align:right;">
-0.56
-</td>
-<td style="text-align:right;">
-1.00
-</td>
-<td style="text-align:right;">
-0.92
-</td>
-<td style="text-align:right;">
-1.20
-</td>
-<td style="text-align:right;">
-2.02
+1.72
 </td>
 </tr>
 <tr>
@@ -1666,82 +1466,62 @@ ACE_index_nonabuse_sum_score
 </tr>
 <tr>
 <td style="text-align:left;">
-nc_y_nihtb__lswmt__uncor_score
+mh_p_cbcl__synd__anxdep_sum
 </td>
 <td style="text-align:right;">
--0.51
+0.57
 </td>
 <td style="text-align:right;">
--0.40
+1.07
 </td>
 <td style="text-align:right;">
--0.49
+0.94
 </td>
 <td style="text-align:right;">
--0.45
+1.26
 </td>
 <td style="text-align:right;">
--0.39
+1.95
 </td>
 </tr>
 <tr>
 <td style="text-align:left;">
-family_history_mania
+mh_p_cbcl__dsm__anx_tscore
 </td>
 <td style="text-align:right;">
-0.51
+0.56
 </td>
 <td style="text-align:right;">
-0.88
+1.00
 </td>
 <td style="text-align:right;">
-0.84
+0.92
 </td>
 <td style="text-align:right;">
-0.82
+1.20
 </td>
 <td style="text-align:right;">
-0.74
+2.02
 </td>
 </tr>
 <tr>
 <td style="text-align:left;">
-mh_y_bisbas__bis_sum__v01
+family_history_psychosis
 </td>
 <td style="text-align:right;">
-0.49
+0.57
 </td>
 <td style="text-align:right;">
-0.29
+0.90
 </td>
 <td style="text-align:right;">
-0.34
+0.90
 </td>
 <td style="text-align:right;">
-0.28
+0.81
 </td>
 <td style="text-align:right;">
-0.19
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-bullying
-</td>
-<td style="text-align:right;">
-0.49
-</td>
-<td style="text-align:right;">
-0.58
-</td>
-<td style="text-align:right;">
-1.44
-</td>
-<td style="text-align:right;">
-1.34
-</td>
-<td style="text-align:right;">
-0.91
+0.75
 </td>
 </tr>
 <tr>
@@ -1766,6 +1546,66 @@ family_history_hospitalization
 </tr>
 <tr>
 <td style="text-align:left;">
+family_history_mania
+</td>
+<td style="text-align:right;">
+0.51
+</td>
+<td style="text-align:right;">
+0.88
+</td>
+<td style="text-align:right;">
+0.84
+</td>
+<td style="text-align:right;">
+0.82
+</td>
+<td style="text-align:right;">
+0.74
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+abuse_physical
+</td>
+<td style="text-align:right;">
+0.57
+</td>
+<td style="text-align:right;">
+0.75
+</td>
+<td style="text-align:right;">
+0.76
+</td>
+<td style="text-align:right;">
+0.72
+</td>
+<td style="text-align:right;">
+0.77
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+fc_p_nsc__ns_mean
+</td>
+<td style="text-align:right;">
+-0.58
+</td>
+<td style="text-align:right;">
+-0.52
+</td>
+<td style="text-align:right;">
+-0.61
+</td>
+<td style="text-align:right;">
+-0.51
+</td>
+<td style="text-align:right;">
+-0.45
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
 abuse_sexual
 </td>
 <td style="text-align:right;">
@@ -1786,42 +1626,162 @@ abuse_sexual
 </tr>
 <tr>
 <td style="text-align:left;">
-family_history_depression
+le_l_coi__addr1__coi__total__national_zscore
 </td>
 <td style="text-align:right;">
-0.36
+-0.66
 </td>
 <td style="text-align:right;">
-1.17
+-0.49
 </td>
 <td style="text-align:right;">
-1.27
+-0.61
 </td>
 <td style="text-align:right;">
-1.20
+-0.45
 </td>
 <td style="text-align:right;">
-0.84
+-0.38
 </td>
 </tr>
 <tr>
 <td style="text-align:left;">
-nc_y_nihtb__pttcp__uncor_score
+mh_y_upps__purg_sum
 </td>
 <td style="text-align:right;">
--0.36
+0.84
 </td>
 <td style="text-align:right;">
--0.28
+0.56
 </td>
 <td style="text-align:right;">
--0.31
+0.59
 </td>
 <td style="text-align:right;">
--0.27
+0.51
 </td>
 <td style="text-align:right;">
--0.23
+0.42
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+abuse_emotional
+</td>
+<td style="text-align:right;">
+1.55
+</td>
+<td style="text-align:right;">
+1.18
+</td>
+<td style="text-align:right;">
+0.54
+</td>
+<td style="text-align:right;">
+0.55
+</td>
+<td style="text-align:right;">
+0.53
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+mh_y_upps__nurg_sum
+</td>
+<td style="text-align:right;">
+0.75
+</td>
+<td style="text-align:right;">
+0.55
+</td>
+<td style="text-align:right;">
+0.53
+</td>
+<td style="text-align:right;">
+0.51
+</td>
+<td style="text-align:right;">
+0.47
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+mh_y_bisbas__bas__dr_sum
+</td>
+<td style="text-align:right;">
+0.78
+</td>
+<td style="text-align:right;">
+0.43
+</td>
+<td style="text-align:right;">
+0.50
+</td>
+<td style="text-align:right;">
+0.42
+</td>
+<td style="text-align:right;">
+0.28
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+nc_y_nihtb__lswmt__uncor_score
+</td>
+<td style="text-align:right;">
+-0.51
+</td>
+<td style="text-align:right;">
+-0.40
+</td>
+<td style="text-align:right;">
+-0.49
+</td>
+<td style="text-align:right;">
+-0.45
+</td>
+<td style="text-align:right;">
+-0.39
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+mh_y_bisbas__bas__fs_sum
+</td>
+<td style="text-align:right;">
+0.74
+</td>
+<td style="text-align:right;">
+0.40
+</td>
+<td style="text-align:right;">
+0.46
+</td>
+<td style="text-align:right;">
+0.38
+</td>
+<td style="text-align:right;">
+0.22
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+mh_y_bisbas__bas__rr_sum__v01
+</td>
+<td style="text-align:right;">
+0.61
+</td>
+<td style="text-align:right;">
+0.30
+</td>
+<td style="text-align:right;">
+0.37
+</td>
+<td style="text-align:right;">
+0.29
+</td>
+<td style="text-align:right;">
+0.17
 </td>
 </tr>
 <tr>
@@ -1842,6 +1802,46 @@ nc_y_nihtb__flnkr__uncor_score
 </td>
 <td style="text-align:right;">
 -0.27
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+mh_y_bisbas__bis_sum__v01
+</td>
+<td style="text-align:right;">
+0.49
+</td>
+<td style="text-align:right;">
+0.29
+</td>
+<td style="text-align:right;">
+0.34
+</td>
+<td style="text-align:right;">
+0.28
+</td>
+<td style="text-align:right;">
+0.19
+</td>
+</tr>
+<tr>
+<td style="text-align:left;">
+nc_y_nihtb__pttcp__uncor_score
+</td>
+<td style="text-align:right;">
+-0.36
+</td>
+<td style="text-align:right;">
+-0.28
+</td>
+<td style="text-align:right;">
+-0.31
+</td>
+<td style="text-align:right;">
+-0.27
+</td>
+<td style="text-align:right;">
+-0.23
 </td>
 </tr>
 </tbody>
@@ -2324,7 +2324,8 @@ NA
 <div id="summary" class="section level2">
 <h2>5. Summary</h2>
 <ul>
-<li><strong>Emotional abuse in the primary:</strong> endorsed by 79.8% of the higher-risk vs 19.1% of the lower-risk group, ranking #1 of 31 features. Primary vs fallback ARI = 0.235</li>
+<li><strong>Adopted primary (fallback_emo_ace):</strong> higher-risk n = 2071 (22.9%), mean silhouette = 0.317; strongest separators: bullying (1.44), cbcl_dp_raw_sum (1.42), family_history_depression (1.27)</li>
+<li><strong>Superseded specification (emotional abuse as a standalone feature):</strong> endorsed by 79.8% of the higher-risk vs 19.1% of the lower-risk group, ranking #1 of 31 features; ARI vs the adopted primary = 0.235</li>
 <li><strong>Negative widths:</strong> across solutions, 100% to 100% of negative-width participants are correctly assigned by the k-prototypes criterion</li>
 <li><strong>Published anchor:</strong> higher-risk mean width = 0.026, 48% negative</li>
 </ul>
