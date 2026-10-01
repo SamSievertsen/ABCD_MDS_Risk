@@ -11,7 +11,7 @@
 
 <meta name="author" content="Sam A. Sievertsen" />
 
-<meta name="date" content="2026-09-29" />
+<meta name="date" content="2026-10-01" />
 
 <title>Build Analysis Datasets: Person-Period Rows + Cluster Labels (fallback_emo_ace)</title>
 
@@ -358,7 +358,7 @@ pre code {
 
 <h1 class="title toc-ignore">Build Analysis Datasets: Person-Period Rows + Cluster Labels (fallback_emo_ace)</h1>
 <h4 class="author">Sam A. Sievertsen</h4>
-<h4 class="date">2026-09-29</h4>
+<h4 class="date">2026-10-01</h4>
 
 </div>
 
@@ -369,8 +369,9 @@ pre code {
 <pre class="r"><code>## 1. Establish helper functions for creating analysis ready data ##
 
 #1.1 Extract participant_id from kproto$data (rownames preferred), orienting labels by content rather than raw cluster number
-#1.1.0 kproto numbers clusters arbitrarily; C1 is always the cluster with the highest mean CBCL dysregulation profile raw sum
-#      (i.e., the higher-risk group at k = 2), preserving the submitted analysis&#39;s convention for every downstream contrast
+#1.1.0 kproto numbers clusters arbitrarily; clusters are relabelled C1 to Ck in ASCENDING order of mean CBCL dysregulation
+#      profile raw sum, so at k = 2 C1 is always the lower-risk reference and C2 the higher-risk group; this reproduces the
+#      submitted analysis&#39;s data coding, which every downstream model uses (reference = C1; contrasts = C2 vs C1)
 get_cluster_labels &lt;- function(kp, k_value, orient_df) {
   dat &lt;- as.data.frame(kp$data)
   
@@ -384,11 +385,11 @@ get_cluster_labels &lt;- function(kp, k_value, orient_df) {
          &quot;Ensure rownames carry IDs or participant_id is a column.&quot;)
   }
   
-  #1.1.2 Rank raw clusters by descending mean dysregulation profile raw sum, and relabel them C1 to Ck in that order
+  #1.1.2 Rank raw clusters by ascending mean dysregulation profile raw sum, and relabel them C1 to Ck in that order
   dp &lt;- orient_df$cbcl_dp_raw_sum[match(as.character(ids), as.character(orient_df$participant_id))]
   if (anyNA(dp)) stop(&quot;cbcl_dp_raw_sum unavailable for some clustered participants; cannot orient labels&quot;)
   raw_means &lt;- tapply(dp, kp$cluster, mean)
-  raw_order &lt;- as.integer(names(sort(raw_means, decreasing = TRUE)))
+  raw_order &lt;- as.integer(names(sort(raw_means, decreasing = FALSE)))
   stopifnot(length(raw_order) == k_value)
   cl &lt;- factor(paste0(&quot;C&quot;, match(kp$cluster, raw_order)), levels = paste0(&quot;C&quot;, seq_len(k_value)))
   
@@ -489,7 +490,7 @@ left_join_guard &lt;- function(x, y, by) {
 </div>
 <div id="extract-cluster-labels-from-chosen-k-solution" class="section level2">
 <h2>2. Extract Cluster Labels from Chosen k Solution</h2>
-<p>Pull participant-level cluster assignments for the requested configuration and k, recover IDs from <code>kproto$data</code> (rownames preferred), label clusters C1…Ck in descending order of mean CBCL dysregulation profile raw sum (so C1 is always the higher-risk group, independent of kproto’s arbitrary numbering), and persist to disk (with caching). Freezing labels here provides a single source of truth for downstream models and provenance</p>
+<p>Pull participant-level cluster assignments for the requested configuration and k, recover IDs from <code>kproto$data</code> (rownames preferred), label clusters C1…Ck in ascending order of mean CBCL dysregulation profile raw sum (so C1 is always the lower-risk reference and C2 the higher-risk group at k = 2, independent of kproto’s arbitrary numbering, matching the submitted data coding), and persist to disk (with caching). Freezing labels here provides a single source of truth for downstream models and provenance</p>
 <pre class="r"><code>## 2. Extract cluster labels for chosen k ##
 
 #2.1 Extract content-oriented labels and the raw-to-oriented mapping
@@ -514,8 +515,8 @@ label_out$orientation</code></pre>
 <pre><code># A tibble: 2 × 4
   oriented_cluster raw_cluster     n mean_cbcl_dp_raw_sum
   &lt;chr&gt;                  &lt;int&gt; &lt;int&gt;                &lt;dbl&gt;
-1 C1                         2  2071                16.7 
-2 C2                         1  6969                 5.92</code></pre>
+1 C1                         1  6969                 5.92
+2 C2                         2  2071                16.7 </code></pre>
 </div>
 <div id="merge-cluster-labels-from-chosen-k-solution-to-outcome-data" class="section level2">
 <h2>3. Merge Cluster Labels from Chosen k Solution to Outcome Data</h2>
