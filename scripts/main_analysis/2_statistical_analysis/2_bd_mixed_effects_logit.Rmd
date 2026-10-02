@@ -1,5 +1,5 @@
 ---
-title: "2. BD Mixed-Effects Logit"
+title: "2. BD Mixed-Effects Logit: `r params$config`"
 author: "Sam A. Sievertsen"
 output:
   html_document:
@@ -11,9 +11,12 @@ output:
 params:
   repo: !r getwd()
   data_dir: "data/data_processed/analysis_datasets/"
-  out_dir: "results/main_analysis/2_bd_mixed_logit"
-  bd_panel_rds: "bd_panel_k2_z_score.rds"
-  bd_panel_csv: "bd_panel_k2_z_score.csv"
+  out_dir: "results/main_analysis/2_statistical_analysis/2_bd_mixed_logit"
+  config: "fallback_emo_ace"
+  scaling_method: "z_score"
+  k_value: 2
+  bd_panel_rds: ""
+  bd_panel_csv: ""
   outcomes: !r c("bipolar_I","bipolar_II","bd_nos","any_bsd")
   response_var: "status"
   link_primary: "logit"
@@ -24,7 +27,7 @@ params:
   k_age: 6
   mgcv_gamma: 1.6
   bam_discrete: !r TRUE
-  do_gamm: !r TRUE
+  do_gamm: !r FALSE
   do_gee_interaction: !r TRUE
 ---
 
@@ -80,19 +83,31 @@ theme_set(theme_bw())
 
 ```{r data, warning = FALSE, echo = params$show_code}
 
-#2.1 Paths and output directories
+#2.1 Paths and output directories, namespaced by configuration so the submitted analysis's results are never overwritten
+#    (this also prevents the embedding step below from picking up figures left by an earlier run)
 REPO <- params$repo
 DATA_DIR <- file.path(REPO, params$data_dir)
-OUT_DIR <- file.path(REPO, params$out_dir)
+OUT_DIR <- file.path(REPO, params$out_dir, params$config)
 dir.create(file.path(OUT_DIR, "csv"), recursive = TRUE, showWarnings = FALSE)
 dir.create(file.path(OUT_DIR, "figures"), recursive = TRUE, showWarnings = FALSE)
 dir.create(file.path(OUT_DIR, "rds"), recursive = TRUE, showWarnings = FALSE)
 dir.create(file.path(OUT_DIR, "pred_csv"), recursive = TRUE, showWarnings = FALSE)
 
 #2.2 Load z-scored BD panel dataset
-#2.2.1 Set paths for panel data
-rds_path <- file.path(DATA_DIR, params$bd_panel_rds)
-csv_path <- file.path(DATA_DIR, params$bd_panel_csv)
+#2.2.1 Set paths for panel data, deriving the configuration-namespaced names written by build_analysis_datasets.Rmd unless given
+tag <- sprintf("%s_k%d_%s", params$config, as.integer(params$k_value), params$scaling_method)
+rds_path <- file.path(DATA_DIR, if (nzchar(params$bd_panel_rds)) params$bd_panel_rds else sprintf("bd_panel_%s.rds", tag))
+csv_path <- file.path(DATA_DIR, if (nzchar(params$bd_panel_csv)) params$bd_panel_csv else sprintf("bd_panel_%s.csv", tag))
+if (!file.exists(rds_path) && !file.exists(csv_path)) stop("Panel data not found for config ", params$config, ": ", basename(rds_path))
+
+#2.2.1.1 Confirm the label coding every contrast below assumes: C1 = lower-risk reference, C2 = higher-risk
+orient_file <- file.path(DATA_DIR, sprintf("cluster_orientation_%s.csv", tag))
+if (!file.exists(orient_file)) stop("Cluster orientation file not found: ", basename(orient_file))
+orient <- readr::read_csv(orient_file, show_col_types = FALSE)
+if (!isTRUE(orient$mean_cbcl_dp_raw_sum[orient$oriented_cluster == "C2"] >
+            orient$mean_cbcl_dp_raw_sum[orient$oriented_cluster == "C1"])) {
+  stop("Cluster coding check failed: C2 must be the higher-risk group (higher mean CBCL dysregulation profile sum)")
+}
 
 #2.2.2 Load in panel darta dynamically
 if (file.exists(rds_path)) {
@@ -232,7 +247,8 @@ or_by_wave_emm <- function(fit, df, model, outcome) {
     wave = as.character(tb$wave),
     OR = exp(tb$estimate),
     CI_low  = exp(ci$low),
-    CI_high = exp(ci$high)
+    CI_high = exp(ci$high),
+    p = if ("p.value" %in% names(tb)) tb$p.value else NA_real_
   )
 }
 
@@ -651,21 +667,40 @@ write_csv(summary_tbl, file.path(OUT_DIR, "csv", "summary_table.csv"))
 for (oc in params$outcomes) {
   cat(glue("## {oc}\n\n"))
   
-  #5.1.1 Forest plot of ORs
-  f_png <- file.path(OUT_DIR, "figures", glue("{oc}_GEE_EXC_cluster_OR_by_wave.png"))
-  if (file.exists(f_png)) {
-    cat("**Forest (OR by wave)**\n\n")
-    knitr::include_graphics(f_png); cat("\n\n")
-  } else {
-    cat(glue("_Forest figure not found:_ `{basename(f_png)}`\n\n"))
+  #5.1.0 Embed a saved figure as Markdown, which pandoc inlines into the self-contained HTML
+  #      (knitr::include_graphics() renders only as a chunk's visible result, so inside this loop it was silently discarded)
+  embed_png <- function(path, label) {
+    if (file.exists(path)) {
+      cat(glue("**{label}**\n\n"))
+      cat(sprintf("![](%s)\n\n", path))
+    } else {
+      cat(glue("_{label} figure not found:_ `{basename(path)}`\n\n"))
+    }
+  }
+  
+  #5.1.1 Forest plots: cluster-by-wave interaction model (manuscript estimates), then the main-effects model
+  embed_png(file.path(OUT_DIR, "figures", glue("{oc}_GEE_EXC_INT_cluster_OR_by_wave.png")),
+            "Forest: timepoint-specific ORs, cluster-by-wave interaction (GEE, exchangeable)")
+  embed_png(file.path(OUT_DIR, "figures", glue("{oc}_GEE_EXC_cluster_OR_by_wave.png")),
+            "Forest: main-effects model (GEE, exchangeable)")
+  
+  #5.1.1.1 Timepoint-specific OR tables from the interaction models (exchangeable primary, AR1 sensitivity)
+  for (m in c("GEE_EXC_INT", "GEE_AR1_INT")) {
+    or_csv <- file.path(OUT_DIR, "csv", glue("{oc}_{m}_cluster_OR_by_wave.csv"))
+    if (file.exists(or_csv)) {
+      print(knitr::kable(readr::read_csv(or_csv, show_col_types = FALSE), digits = 3,
+                         caption = glue("{oc}: C2 vs C1 odds ratios by wave ({m})")))
+      cat("\n\n")
+    } else {
+      cat(glue("_OR table not found:_ `{basename(or_csv)}`\n\n"))
+    }
   }
   
   #5.1.2 GAMM age curves
   a_png <- file.path(OUT_DIR, "figures", glue("{oc}_GAMM_age_curves.png"))
   if (isTRUE(params$do_gamm)) {
     if (file.exists(a_png)) {
-      cat("**GAMM age curve**\n\n")
-      knitr::include_graphics(a_png); cat("\n\n")
+      embed_png(a_png, "GAMM age curve")
     } else {
       note_path <- file.path(OUT_DIR, "pred_csv", glue("{oc}_GAMM_prediction_note.csv"))
       if (file.exists(note_path)) {
@@ -695,8 +730,10 @@ sum_disp <- summary_tbl %>%
   tidyr::unnest_wider(glmmTMB_cluster, names_sep = "_glmmTMB_") %>%
   tidyr::unnest_wider(GEE_EXC_cluster, names_sep = "_GEE_EXC_") %>%
   tidyr::unnest_wider(GEE_AR1_cluster, names_sep = "_GEE_AR1_") %>%
+  #5.2.2.1 unnest_wider() names these columns <model>_cluster_<model>_<stat>; the original starts_with("OR_") etc. matched none
   dplyr::select(outcome, n_rows, n_ids, GLMM_singular, GLMM_phi, GLMM_AUC, glmmTMB_AUC, GEE_EXC_AUC, GEE_AR1_AUC,
-         starts_with("term_"), starts_with("OR_"), starts_with("CI_low_"), starts_with("CI_high_"), starts_with("p_"))
+         matches("_cluster_.*_(OR|CI_low|CI_high|p)$")) %>%
+  dplyr::rename_with(~ sub("^(GLMM|glmmTMB|GEE_EXC|GEE_AR1)_cluster_\\1_", "\\1_", .x))
 
 #5.2.3 Print the summary table
 print(knitr::kable(sum_disp))

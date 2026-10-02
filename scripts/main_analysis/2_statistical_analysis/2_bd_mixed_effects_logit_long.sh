@@ -18,7 +18,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 REPO="/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk"
-IMG="/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.7.sif"
+IMG="/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.9.sif"
 
 export APPTAINER_CACHEDIR="/home/exacloud/gscratch/NagelLab/staff/sam/.apptainer_cache"
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK}
@@ -26,6 +26,11 @@ export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export BLIS_NUM_THREADS=1
 export LANG=C.UTF-8 LC_ALL=C.UTF-8
+
+# Allow param overrides at submit time (e.g., CONFIG=backup_cbcl3raw_emo_ace DO_GAMM=false sbatch 2_bd_mixed_effects_logit_long.sh)
+export CONFIG="${CONFIG:-fallback_emo_ace}"
+export DO_GAMM="${DO_GAMM:-false}"
+echo "Config: ${CONFIG} | do_gamm: ${DO_GAMM}"
 
 RMD_DIR="${REPO}/scripts/main_analysis/2_statistical_analysis"
 cd "${RMD_DIR}"
@@ -37,12 +42,12 @@ perl -CSDA -pe 's/\x{2018}|\x{2019}/\x27/g; s/\x{201C}|\x{201D}/\x22/g; s/\x{201
 apptainer exec -B "${REPO}:${REPO}" "${IMG}" Rscript - <<'EOF'
 rmarkdown::render(
   input = "2_bd_mixed_effects_logit.Rmd",
+  output_file = paste0("2_bd_mixed_effects_logit_", Sys.getenv("CONFIG"), ".html"),
   params = list(
     repo = "/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk",
     data_dir = "data/data_processed/analysis_datasets/",
-    out_dir = "results/main_analysis/2_bd_mixed_logit",
-    bd_panel_rds = "bd_panel_k2_z_score.rds",
-    bd_panel_csv = "bd_panel_k2_z_score.csv",
+    out_dir = "results/main_analysis/2_statistical_analysis/2_bd_mixed_logit",
+    config = Sys.getenv("CONFIG"),
     outcomes = c("bipolar_I","bipolar_II","bd_nos","any_bsd"),
     response_var = "status",
     link_primary = "logit",
@@ -53,7 +58,7 @@ rmarkdown::render(
     k_age = 6,
     bam_discrete = TRUE,
     mgcv_gamma = 1.4,
-    do_gamm = TRUE,
+    do_gamm = tolower(Sys.getenv("DO_GAMM")) %in% c("true", "1", "t", "yes", "y"),
     do_gee_interaction = TRUE),
   encoding = "UTF-8",
   quiet = FALSE
