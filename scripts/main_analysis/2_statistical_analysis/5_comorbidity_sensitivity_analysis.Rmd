@@ -1,5 +1,5 @@
 ---
-title: "5. Comorbidity Sensitivity Analysis (GEE)"
+title: "5. Comorbidity Sensitivity Analysis (GEE): `r params$config`"
 author: "Sam A. Sievertsen"
 output:
   html_document:
@@ -10,12 +10,17 @@ output:
     df_print: paged
 params:
   
+  # Clustering configuration whose labels are analyzed (panel and outputs are namespaced by it)
+  config: "fallback_emo_ace"
+  scaling_method: "z_score"
+  k_value: 2
+
   # Core paths
-  analysis_panel_rds: "data/data_processed/analysis_datasets/bd_panel_k2_z_score.rds"
+  data_dir: "data/data_processed/analysis_datasets"
   supplementary_dx_csv: "data/data_processed/supplementary_outcome_variable_data.csv"
 
-  # Output directory
-  out_dir: "results/5_comorbidity_sensitivity_analysis"
+  # Output directory (a subfolder named for the configuration is created inside it)
+  out_dir: "results/main_analysis/2_statistical_analysis/5_comorbidity_sensitivity_analysis"
 
   # Waves
   analytic_waves: ["ses-02A", "ses-04A", "ses-06A"]
@@ -52,6 +57,8 @@ Goal: test whether baseline-derived *BD risk clusters* carry unique BD-specific 
 
 Primary approach: marginal logistic GEE (geepack::geeglm), `cluster x wave`, with your existing covariates and (optionally) baseline-status adjustment. We keep the same “GEE-by-wave ORs” workflow via emmeans as your prior scripts.
 
+Disorder-specific models (Reviewer 1, comment 4): the same occurrence GEE is fit separately for each comorbidity set (ADHD, anxiety disorders, depressive disorders, PTSD, ODD/CD), and a stacked GEE across BSD and all five sets formally tests whether the cluster effect for BSD differs from the cluster effect for each comorbidity (ratios of odds ratios).
+
 > Note on sparse cells: BSD-only at ses-02A is extremely rare (n~3). The script includes a guardrail to drop wave(s) with very low event counts *for that outcome only* (default threshold = 5), and refactors the wave reference level for sparse outcomes (default = ses-04A).
 
 ```{r environment, echo = FALSE, message = FALSE, warning = FALSE}
@@ -81,10 +88,20 @@ has_multgee <- requireNamespace("multgee", quietly = TRUE)
 
 ```{r read_data, echo = FALSE, warning = FALSE}
 
-#1.1 List paths
-panel_path <- here::here(params$analysis_panel_rds)
+#1.1 List paths (panel and outputs namespaced by clustering configuration)
+tag <- sprintf("%s_k%d_%s", params$config, as.integer(params$k_value), params$scaling_method)
+panel_path <- here::here(params$data_dir, sprintf("bd_panel_%s.rds", tag))
+orient_path <- here::here(params$data_dir, sprintf("cluster_orientation_%s.csv", tag))
 supp_path <- here::here(params$supplementary_dx_csv)
-out_dir <- here::here(params$out_dir)
+out_dir <- here::here(params$out_dir, params$config)
+
+#1.1.1 Confirm the label coding assumed below: C1 = lower-risk, C2 = higher-risk
+if (!file.exists(orient_path)) stop("Cluster orientation file not found: ", orient_path)
+orient <- readr::read_csv(orient_path, show_col_types = FALSE)
+if (!isTRUE(orient$mean_cbcl_dp_raw_sum[orient$oriented_cluster == "C2"] >
+            orient$mean_cbcl_dp_raw_sum[orient$oriented_cluster == "C1"])) {
+  stop("Cluster coding check failed: C2 must be the higher-risk group (higher mean CBCL dysregulation profile sum)")
+}
 
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 dir.create(file.path(out_dir, "tables"), recursive = TRUE, showWarnings = FALSE)
@@ -105,7 +122,34 @@ if (length(missing_req_panel) > 0) {
 #1.3 Read supplementary dx (analytic waves only are present in this csv)
 if (!file.exists(supp_path)) stop("Missing supplementary dx csv: ", supp_path)
 supp <- readr::read_csv(supp_path, show_col_types = FALSE) %>%
-  rename(wave = session_id)
+  rename(wave = session_id) %>%
+  
+  #1.3.0 Drop any cluster column carried in this file; labels come only from the configuration-namespaced panel
+  dplyr::select(-dplyr::any_of("cluster"))
+
+#1.3.1 Disorder-specific comorbidity sets (Reviewer 1, comment 4), following the Supplemental Methods groupings
+#      - A set is positive if any component is positive, negative only if every component is observed and negative, else NA
+#      - Separation anxiety is excluded from the anxiety set because it is not assessed after Year-2, so the set means the
+#        same thing at every wave; ODD/CD is restricted to Year-2 and Year-4 because ODD is not assessed at Year-6
+disorder_sets <- list(
+  adhd = list(components = c("dx_adhd"), waves = NULL),
+  anxiety = list(components = c("dx_gad", "dx_socanx", "dx_panic", "dx_ocd"), waves = NULL),
+  depressive = list(components = c("dx_dmdd", "dx_mdd", "dx_pdd"), waves = NULL),
+  ptsd = list(components = c("dx_ptsd"), waves = NULL),
+  odd_cd = list(components = c("dx_odd", "dx_cd"), waves = c("ses-00A", "ses-02A", "ses-04A"))
+)
+missing_components <- setdiff(unlist(lapply(disorder_sets, `[[`, "components")), names(supp))
+if (length(missing_components) > 0) stop("Supplementary dx csv is missing components: ", paste(missing_components, collapse = ", "))
+
+#1.3.2 Build each set as dx_set_<name>, so the baseline extraction below also creates baseline_dx_set_<name>
+for (nm in names(disorder_sets)) {
+  comp <- as.matrix(supp[, disorder_sets[[nm]]$components, drop = FALSE])
+  any_pos <- rowSums(comp == 1, na.rm = TRUE) > 0
+  all_obs <- rowSums(is.na(comp)) == 0
+  val <- dplyr::case_when(any_pos ~ 1, all_obs ~ 0, TRUE ~ NA_real_)
+  if (!is.null(disorder_sets[[nm]]$waves)) val[!(supp$wave %in% disorder_sets[[nm]]$waves)] <- NA_real_
+  supp[[paste0("dx_set_", nm)]] <- val
+}
 
 req_supp <- c("participant_id", "wave", "any_bsd", "dx_other_any", "dx_group4")
 missing_req_supp <- setdiff(req_supp, names(supp))
@@ -302,6 +346,16 @@ dat_bsdplus_vs_otheronly <- make_dxgroup4_pair(dat_an, "BSD + other Dx", "Other 
 dat_bsdonly_vs_otheronly <- make_dxgroup4_pair(dat_an, "BSD only", "Other Dx only (no BSD)")
 dat_bsdplus_vs_bsdonly   <- make_dxgroup4_pair(dat_an, "BSD + other Dx", "BSD only")
 
+#3.4 Disorder-specific comorbidity outcomes, each adjusted for its own baseline status (parallels dat_any_bsd)
+make_set_outcome <- function(df, nm) {
+  df %>%
+    mutate(
+      status = .data[[paste0("dx_set_", nm)]],
+      baseline_status = .data[[paste0("baseline_dx_set_", nm)]])
+}
+disorder_outcomes <- setNames(lapply(names(disorder_sets), function(nm) make_set_outcome(dat_an, nm)),
+                              paste0("set_", names(disorder_sets)))
+
 outcome_list <- list(
   any_bsd = dat_any_bsd,
   dx_other_any = dat_other_any,
@@ -312,6 +366,7 @@ outcome_list <- list(
   bsd_only_vs_other_only = dat_bsdonly_vs_otheronly,
   bsd_plus_vs_bsd_only = dat_bsdplus_vs_bsdonly
 )
+outcome_list <- c(outcome_list, disorder_outcomes)
 
 #3.5 Quick event-count diagnostic per outcome
 event_diag <- imap_dfr(outcome_list, function(df, nm) {
@@ -493,7 +548,11 @@ fit_gee <- function(df, outcome_name, wave_ref) {
   df0 <- df0 %>%
     dplyr::select(all_of(model_vars)) %>%
     tidyr::drop_na() %>%
-    as.data.frame()
+    as.data.frame() %>%
+    
+    #4.5.4.0 Drop factor levels emptied by the complete-case filter (e.g., an outcome not assessed at one wave);
+    #        geeglm() refuses factors with unused levels
+    droplevels()
 
   #4.5.4.1 Hard-stops for degenerate situations (post complete-case)
   if (nrow(df0) == 0) stop("[", outcome_name, "] No complete-case rows after drop_na().")
@@ -809,6 +868,136 @@ save_fig(p_prob_pub, "GEE_PredProb_KeyOutcomes.png", width = 7.2, height = 4.2, 
 
 readr::write_csv(prob_tables,
                  file.path(out_dir, "tables", "gee_predicted_prob_by_wave.csv"))
+```
+
+## 5.5 Disorder-Specific Comorbidity Models (Reviewer 1, Comment 4)
+
+Cluster odds ratios (Higher- vs Lower-Risk) by wave for BSD and each comorbidity set, each from its own occurrence GEE with the same covariates and its own baseline status.
+
+```{r disorder_specific, echo = FALSE, warning = FALSE, fig.width = 7.2, fig.height = 5.4}
+
+#5.5.1 Disorder-specific ORs from the separate models (primary estimates for each disorder)
+dis_labs <- c(any_bsd = "BSD", set_adhd = "ADHD", set_anxiety = "Anxiety", set_depressive = "Depressive",
+              set_ptsd = "PTSD", set_odd_cd = "ODD/CD")
+dis_or <- or_tables %>%
+  dplyr::filter(outcome %in% names(dis_labs)) %>%
+  dplyr::mutate(disorder = factor(dplyr::recode(outcome, !!!dis_labs), levels = unname(dis_labs)),
+                wave_pretty = factor(dplyr::recode(as.character(wave), !!!wave_labs), levels = unname(wave_labs)))
+
+knitr::kable(dis_or %>% dplyr::select(disorder, wave, or, or_lcl, or_ucl, p) %>% dplyr::arrange(disorder, wave),
+             caption = "Disorder-specific GEE: cluster OR (Higher- vs Lower-Risk) by wave", digits = 3) %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+readr::write_csv(dis_or, file.path(out_dir, "tables", "gee_or_by_wave_disorder_specific.csv"))
+
+#5.5.2 Forest plot, matching the salient-comparison style (log axis, since disorder ORs span a wide range)
+p_dis <- ggplot2::ggplot(dis_or, ggplot2::aes(x = or, y = 0)) +
+  ggplot2::geom_vline(xintercept = 1, linetype = 2, linewidth = 0.4, color = "grey40") +
+  ggplot2::geom_segment(ggplot2::aes(x = or_lcl, xend = or_ucl, y = 0, yend = 0), linewidth = ci_linewidth) +
+  ggplot2::geom_point(size = dot_size, color = dot_color) +
+  ggplot2::scale_x_log10(breaks = c(0.5, 1, 2, 5, 10, 20)) +
+  ggplot2::scale_y_continuous(NULL, breaks = NULL, limits = c(-0.05, 0.05), expand = ggplot2::expansion(mult = 0)) +
+  ggplot2::facet_grid(rows = ggplot2::vars(disorder), cols = ggplot2::vars(wave_pretty), switch = "y") +
+  ggplot2::labs(title = "Higher- vs Lower-Risk Cluster: Odds Ratios by Disorder and Wave",
+                x = "Odds Ratio (Higher-Risk vs Lower-Risk), log scale") +
+  jamafy_forest()
+print(p_dis)
+save_fig(p_dis, "GEE_OR_DisorderSpecific_Forest.png", width = 7.2, height = 5.4, dpi = 720)
+
+```
+
+## 5.6 Stacked Specificity Test
+
+A single GEE over long data (one row per participant x wave x disorder, for BSD and the five comorbidity sets), clustered by participant. Each disorder x wave cell has its own intercept and its own cluster coefficient, and covariates (sex, age, baseline status of that disorder) are estimated separately per disorder, so the cell-specific cluster effects parallel the separate models but share one robust covariance. That joint covariance is what allows the cluster effect for BSD to be compared formally with the cluster effect for each comorbidity, as a ratio of odds ratios (ROR > 1: the cluster difference is larger for BSD). An independence working correlation is used, as is standard when stacking distinct outcomes; inference rests on the robust (sandwich) covariance.
+
+```{r stacked_specificity, echo = FALSE, warning = FALSE, results = "asis"}
+
+#5.6.1 Long data: one row per participant x wave x disorder
+stack_map <- c(BSD = "any_bsd", ADHD = "set_adhd", Anxiety = "set_anxiety", Depressive = "set_depressive",
+               PTSD = "set_ptsd", `ODD/CD` = "set_odd_cd")
+stk_covars <- params$covars[params$covars %in% names(dat_an)]
+stk <- purrr::imap_dfr(stack_map, function(oc, lab) {
+  outcome_list[[oc]] %>%
+    dplyr::select(participant_id, wave, cluster, dplyr::all_of(stk_covars), status, baseline_status) %>%
+    dplyr::mutate(disorder = lab)
+}) %>%
+  tidyr::drop_na() %>%
+  dplyr::mutate(
+    disorder = factor(disorder, levels = names(stack_map)),
+    wave = droplevels(factor(wave)),
+    cell = droplevels(interaction(disorder, wave, sep = "@", lex.order = TRUE)),
+    hr = as.integer(cluster == "Higher-Risk"),
+    participant_id = factor(participant_id)) %>%
+  dplyr::arrange(participant_id, wave, disorder) %>%
+  as.data.frame()
+
+#5.6.2 Disorder-specific covariate columns (numeric indicators x disorder, so no column duplicates the cell intercepts)
+cov_cols <- character(0)
+for (v in c(stk_covars, if (isTRUE(params$include_baseline_status)) "baseline_status")) {
+  X <- if (is.numeric(stk[[v]])) matrix(stk[[v]], ncol = 1, dimnames = list(NULL, v)) else
+    stats::model.matrix(stats::as.formula(paste("~", v)), stk)[, -1, drop = FALSE]
+  for (j in seq_len(ncol(X))) for (d in levels(stk$disorder)) {
+    nm <- make.names(paste0(colnames(X)[j], "__", d))
+    stk[[nm]] <- X[, j] * as.integer(stk$disorder == d)
+    cov_cols <- c(cov_cols, nm)
+  }
+}
+
+#5.6.3 Fit: cell intercepts + cell-specific cluster coefficients + disorder-specific covariates
+fml_stk <- stats::as.formula(paste("status ~ 0 + cell + cell:hr +", paste(cov_cols, collapse = " + ")))
+stk_fit <- tryCatch(
+  geepack::geeglm(fml_stk, id = participant_id, data = stk, family = binomial(), corstr = "independence", std.err = "san.se"),
+  error = function(e) e)
+
+if (inherits(stk_fit, "error")) {
+  cat("\n[Stacked GEE] FAILED:", conditionMessage(stk_fit), "\n")
+} else {
+  saveRDS(stk_fit, file.path(out_dir, "rds", "stacked_specificity_gee.rds"))
+  b <- coef(stk_fit); V <- as.matrix(vcov(stk_fit))
+  cl_idx <- grep(":hr$", names(b))
+  cl_cell <- sub("^cell", "", sub(":hr$", "", names(b)[cl_idx]))
+  cl_tbl <- tibble::tibble(term = names(b)[cl_idx], cell = cl_cell,
+                           disorder = sub("@.*$", "", cl_cell), wave = sub("^.*@", "", cl_cell),
+                           log_or = unname(b[cl_idx]), se = sqrt(diag(V)[cl_idx]))
+  
+  #5.6.4 Cell-specific cluster ORs from the stacked model
+  stk_or <- cl_tbl %>% dplyr::mutate(or = exp(log_or), or_lcl = exp(log_or - 1.959964 * se), or_ucl = exp(log_or + 1.959964 * se),
+                                     p = 2 * stats::pnorm(-abs(log_or / se)))
+  knitr::kable(stk_or %>% dplyr::select(disorder, wave, or, or_lcl, or_ucl, p), digits = 3,
+               caption = "Stacked GEE: cluster OR (Higher- vs Lower-Risk) by disorder and wave") %>%
+    kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% print()
+  
+  #5.6.5 Ratios of odds ratios: BSD vs each comorbidity, within wave (Wald, robust covariance)
+  ror_rows <- list(); omni_rows <- list()
+  for (w in unique(cl_tbl$wave)) {
+    bsd_term <- cl_tbl$term[cl_tbl$disorder == "BSD" & cl_tbl$wave == w]
+    if (length(bsd_term) != 1) next
+    others <- cl_tbl %>% dplyr::filter(wave == w, disorder != "BSD")
+    L <- matrix(0, nrow = nrow(others), ncol = length(b), dimnames = list(others$disorder, names(b)))
+    for (i in seq_len(nrow(others))) { L[i, bsd_term] <- 1; L[i, others$term[i]] <- -1 }
+    est <- as.numeric(L %*% b); se <- sqrt(diag(L %*% V %*% t(L)))
+    ror_rows[[w]] <- tibble::tibble(wave = w, comparison = paste("BSD vs", others$disorder),
+                                    ror = exp(est), ror_lcl = exp(est - 1.959964 * se), ror_ucl = exp(est + 1.959964 * se),
+                                    p = 2 * stats::pnorm(-abs(est / se))) %>%
+      
+      #5.6.5.0 Holm adjustment across the comparisons within this wave
+      dplyr::mutate(p_holm = stats::p.adjust(p, method = "holm"))
+    
+    #5.6.5.1 Omnibus within wave: is the cluster effect equal across all disorders?
+    chi2 <- as.numeric(t(L %*% b) %*% solve(L %*% V %*% t(L)) %*% (L %*% b))
+    omni_rows[[w]] <- tibble::tibble(wave = w, chi_sq = chi2, df = nrow(L), p = stats::pchisq(chi2, nrow(L), lower.tail = FALSE))
+  }
+  ror_tbl <- dplyr::bind_rows(ror_rows); omni_tbl <- dplyr::bind_rows(omni_rows)
+  
+  knitr::kable(omni_tbl, digits = 3, caption = "Stacked GEE: omnibus test that the cluster effect is equal across BSD and all comorbidity sets, by wave") %>%
+    kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% print()
+  knitr::kable(ror_tbl, digits = 3, caption = "Stacked GEE: ratio of cluster ORs, BSD vs each comorbidity set (ROR > 1: larger cluster difference for BSD; p_holm adjusts within wave)") %>%
+    kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>% print()
+  
+  readr::write_csv(stk_or, file.path(out_dir, "tables", "stacked_gee_or_by_disorder_wave.csv"))
+  readr::write_csv(ror_tbl, file.path(out_dir, "tables", "stacked_gee_ror_bsd_vs_comorbidity.csv"))
+  readr::write_csv(omni_tbl, file.path(out_dir, "tables", "stacked_gee_omnibus_by_wave.csv"))
+}
+
 ```
 
 ## 6. Optional: Nominal Multinomial GEE for dx_group4 (if available)
