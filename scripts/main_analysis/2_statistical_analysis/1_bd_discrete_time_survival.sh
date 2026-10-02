@@ -7,8 +7,8 @@
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=sievertsen@ohsu.edu
 
-#SBATCH --account=basic
-#SBATCH --partition=basic
+#SBATCH --account=NagelLab
+#SBATCH --partition=interactive
 
 #SBATCH --time=23:59:00
 #SBATCH --nodes=1
@@ -26,7 +26,7 @@ IFS=$'\n\t'
 
 # Paths & env
 REPO="/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk"
-IMG="/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.7.sif"
+IMG="/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.9.sif"
 export APPTAINER_CACHEDIR="/home/exacloud/gscratch/NagelLab/staff/${USER}/.apptainer_cache"
 
 # Thread caps for numeric stability/repro
@@ -37,13 +37,14 @@ export LANG=C.UTF-8 LC_ALL=C.UTF-8
 LOGDIR="${REPO}/slurm_logs/$(date +%F)"
 mkdir -p "${LOGDIR}"
 export DETAILED_LOG="${LOGDIR}/${SLURM_JOB_NAME}_${SLURM_JOB_ID}.log"
-echo "$(date +'%F %T')|JOB_START|${SLURM_JOB_NAME}" >> "${DETAILED_LOG}"
+echo "$(date +'%F %T')|JOB_START|${SLURM_JOB_NAME}|config=${CONFIG:-fallback_emo_ace}" >> "${DETAILED_LOG}"
 
 # Establish the location of the Rmd
 RMD_DIR="${REPO}/scripts/main_analysis/2_statistical_analysis"
 RMD_FILE="1_bd_discrete_time_survival.Rmd"
 
-# Allow param overrides at submit time
+# Allow param overrides at submit time (e.g., CONFIG=backup_cbcl3raw_emo_ace sbatch 1_bd_discrete_time_survival.sh)
+CONFIG="${CONFIG:-fallback_emo_ace}"
 K_VALUE="${K_VALUE:-2}"
 LINK_PRIMARY="${LINK_PRIMARY:-logit}"
 WAVE_REF="${WAVE_REF:-ses-04A}"
@@ -63,12 +64,12 @@ fi
 apptainer exec -B "${REPO}:${REPO}" "${IMG}" Rscript - <<EOF
 rmarkdown::render(
   input = "${RMD_FILE}",
+  output_file = "1_bd_discrete_time_survival_${CONFIG}.html",
   params = list(
     repo = "${REPO}",
     data_dir = "data/data_processed/analysis_datasets/",
-    out_dir = "results/main_analysis/1_bd_survival",
-    bd_pp_rds = "bd_person_period_k2_z_score.rds",
-    bd_pp_csv = "bd_person_period_k2_z_score.csv",
+    out_dir = "results/main_analysis/2_statistical_analysis/1_bd_survival",
+    config = "${CONFIG}",
     k_value = as.integer("${K_VALUE}"),
     link_primary= "${LINK_PRIMARY}",
     ages_pred = ${AGES_R},

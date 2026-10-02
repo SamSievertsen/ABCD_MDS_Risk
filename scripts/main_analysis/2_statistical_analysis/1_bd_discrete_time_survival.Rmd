@@ -1,5 +1,5 @@
 ---
-title: "1. BD Discrete-Time Survival (First Onset)"
+title: "1. BD Discrete-Time Survival (First Onset): `r params$config`"
 output:
   html_document:
     toc: true
@@ -8,9 +8,11 @@ output:
 params:
   repo: !r Sys.getenv("REPO", unset = here::here())
   data_dir: "data/data_processed/analysis_datasets/"
-  out_dir: "results/main_analysis/1_bd_survival"
-  bd_pp_rds: "bd_person_period_k2_z_score.rds"
-  bd_pp_csv: "bd_person_period_k2_z_score.csv"
+  out_dir: "results/main_analysis/2_statistical_analysis/1_bd_survival"
+  config: "fallback_emo_ace"
+  scaling_method: "z_score"
+  bd_pp_rds: ""
+  bd_pp_csv: ""
   k_value: 2
   run_influence: false
   seed: 123
@@ -88,8 +90,27 @@ emmeans::emm_options(infer = c(TRUE, TRUE))
 # Establish paths to repo and data (I/O)
 REPO <- params$repo
 DATA_DIR <- file.path(REPO, params$data_dir)
-OUT_DIR <- file.path(REPO, params$out_dir)
+
+# Namespace outputs by configuration so the submitted analysis's results are never overwritten
+OUT_DIR <- file.path(REPO, params$out_dir, params$config)
 dir.create(OUT_DIR, recursive = TRUE, showWarnings = FALSE)
+
+# Derive the configuration-namespaced dataset names written by build_analysis_datasets.Rmd, unless given explicitly
+tag <- sprintf("%s_k%d_%s", params$config, as.integer(params$k_value), params$scaling_method)
+bd_pp_rds <- if (nzchar(params$bd_pp_rds)) params$bd_pp_rds else sprintf("bd_person_period_%s.rds", tag)
+bd_pp_csv <- if (nzchar(params$bd_pp_csv)) params$bd_pp_csv else sprintf("bd_person_period_%s.csv", tag)
+if (!file.exists(file.path(DATA_DIR, bd_pp_rds)) && !file.exists(file.path(DATA_DIR, bd_pp_csv))) {
+  stop("Person-period data not found for config ", params$config, ": ", bd_pp_rds)
+}
+
+# Confirm the label coding every contrast below assumes: C1 = lower-risk reference, C2 = higher-risk
+orient_file <- file.path(DATA_DIR, sprintf("cluster_orientation_%s.csv", tag))
+if (!file.exists(orient_file)) stop("Cluster orientation file not found: ", basename(orient_file))
+orient <- readr::read_csv(orient_file, show_col_types = FALSE)
+if (!isTRUE(orient$mean_cbcl_dp_raw_sum[orient$oriented_cluster == "C2"] >
+            orient$mean_cbcl_dp_raw_sum[orient$oriented_cluster == "C1"])) {
+  stop("Cluster coding check failed: C2 must be the higher-risk group (higher mean CBCL dysregulation profile sum)")
+}
 
 # Create a helper function to read in BD person-period data - prefer RDS; fallback to csv
 read_pp <- function(rds_path, csv_path) {
@@ -97,8 +118,8 @@ read_pp <- function(rds_path, csv_path) {
 }
 
 # Load person-period BD data
-bd_pp <- read_pp(file.path(DATA_DIR, params$bd_pp_rds),
-  file.path(DATA_DIR, params$bd_pp_csv)) %>%
+bd_pp <- read_pp(file.path(DATA_DIR, bd_pp_rds),
+  file.path(DATA_DIR, bd_pp_csv)) %>%
   mutate(
     participant_id = as.character(participant_id),
     family_id = factor(as.character(family_id)),
@@ -119,6 +140,37 @@ bd_pp_model <- bd_pp %>%
   filter(event %in% c(0L,1L)) %>%
   filter(!is.na(cluster)) %>%
   filter(!is.na(age_mid), !is.na(sex), !is.na(site_factor), !is.na(family_id))
+
+## Baseline age: the between-person age term ##
+
+# Between-person age is measured at baseline, before any follow-up. The person-mean of interval ages is not used, because
+# the risk set ends at first onset, so a person's mean interval age partly reflects when (or whether) they had onset
+# (i.e., it carries outcome information). Time since baseline is carried by the interval indicators (end_wave).
+risk_age <- readr::read_csv(file.path(REPO, "data/data_processed/risk_variable_data.csv"), show_col_types = FALSE) %>%
+  dplyr::select(participant_id, age_baseline = age)
+n_rows_pre_age <- nrow(bd_pp_model)
+bd_pp_model <- bd_pp_model %>%
+  dplyr::left_join(risk_age, by = "participant_id") %>%
+  dplyr::filter(!is.na(age_baseline))
+if (nrow(bd_pp_model) != n_rows_pre_age) message("Rows dropped for missing baseline age: ", n_rows_pre_age - nrow(bd_pp_model))
+
+# Center baseline age at the participant-level mean, and derive time since baseline at each interval midpoint
+BASE_AGE_MEAN <- mean(dplyr::distinct(bd_pp_model, participant_id, age_baseline)$age_baseline)
+bd_pp_model <- bd_pp_model %>%
+  dplyr::mutate(
+    age_base_c = age_baseline - BASE_AGE_MEAN,
+    age_within_base = age_mid - age_baseline)
+
+# Median time since baseline per interval, used to translate a current age at a fixed interval into baseline age
+TSB_BY_WAVE <- bd_pp_model %>%
+  dplyr::group_by(end_wave) %>%
+  dplyr::summarise(tsb = median(age_within_base, na.rm = TRUE), .groups = "drop")
+age_to_base_c <- function(ages, wave) {
+  ages - TSB_BY_WAVE$tsb[as.character(TSB_BY_WAVE$end_wave) == as.character(wave)] - BASE_AGE_MEAN
+}
+base_c_to_age <- function(base_c, wave) {
+  base_c + BASE_AGE_MEAN + TSB_BY_WAVE$tsb[as.character(TSB_BY_WAVE$end_wave) == as.character(wave)]
+}
 
 # Conduct a sanity check of the dataset size (unique ID's and number of observations)
 sizes_tbl <- tibble(
@@ -163,7 +215,7 @@ if (bad_dt > 0) {
   bd_pp_model <- bd_pp_model %>% dplyr::filter(is.finite(dt_years), is.finite(log_dt))
 }
 
-# Get descriptive event counts (post-filter; by outcome x wave x cluster)
+# Get descriptive event counts (post-filter, but BEFORE the any-BSD baseline exclusion below; by outcome x wave x cluster)
 onset_counts <- bd_pp_model %>%
   group_by(outcome, end_wave, cluster) %>%
   summarise(events = sum(event == 1L, na.rm = TRUE),
@@ -178,7 +230,7 @@ knitr::kable(onset_counts, caption = "Event counts by outcome x wave x cluster")
 ## Do a post-filter missingness summary of the model covariates ##
 
 # Create a list of relevant covariates
-covars <- c("cluster","age_mid_between","age_mid_cwc","baseline_status",
+covars <- c("cluster","age_base_c","age_within_base","baseline_status",
             "sex","site_factor","end_wave","participant_id","family_id")
 
 # Create a missingness table for the post-filter covariate data
@@ -294,6 +346,19 @@ aud <- bd_pp_model %>%
   summarise(post_onset_rows = max(0L, sum(had_onset) - 1L), .groups = "drop")
 message("Any post-onset rows remain? ", any(aud$post_onset_rows > 0))
 
+# Event counts on the model-ready risk set (after baseline exclusion and censoring); these are the counts the models use
+#   (the earlier "Event counts" table precedes the any-BSD baseline exclusion, so its subtype rows include excluded youth)
+onset_counts_model <- bd_pp_model %>%
+  group_by(outcome, end_wave, cluster) %>%
+  summarise(events = sum(event == 1L, na.rm = TRUE),
+    intervals = n(), .groups = "drop") %>%
+  arrange(outcome, end_wave, cluster)
+
+# Save model-ready counts to disk and show in HTML
+readr::write_csv(onset_counts_model, file.path(OUT_DIR, "bd_dth_onset_counts_model_ready.csv"))
+knitr::kable(onset_counts_model, caption = "Event counts by outcome x wave x cluster (model-ready risk set; use for Table 1)") %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped","hover","condensed","responsive"))
+
 # Establish empirical wave-median ages for plotting/prediction
 wave_age_medians <- bd_pp_model %>%
   dplyr::group_by(end_wave) %>%
@@ -345,31 +410,29 @@ Estimate discrete-time hazards with a logit link for first-onset bipolar outcome
 
 **How we handle age (critical for interpretation)**
 
--   Our build steps created:
+-   Each youth's current age decomposes into their age at baseline plus time since baseline:
 
-    -   `age_mid`: midpoint age for each interval
-    -   `age_mid_cwc`: within-person centered age = `age_mid` person_mean(age_mid)\` (captures aging within individuals)
-    -   `age_mid_between`: between-person age = `person_mean(age_mid)` grand_mean(age_mid)\` (captures older vs younger people on average)
+    -   `age_base_c`: between-person age = baseline age, grand-mean centered at the participant level (captures older vs younger youths)
+    -   Time since baseline: carried flexibly by the interval indicators (`end_wave`), which also set the baseline hazard
+    -   `age_within_base`: interval midpoint age minus baseline age (i.e., time since baseline at each interval midpoint)
 
--   Best practice in longitudinal models is to include both pieces (within & between) to avoid conflating them. This is the within-between (Mundlak/hybrid) decomposition
+-   This preserves the within-between (Mundlak/hybrid) logic, but measures the between-person component at baseline. The person-mean of interval ages is not used: because the risk set ends at first onset, a person's mean interval age partly reflects when (or whether) they had onset, so it carries outcome information. In a hazard model, covariates must be determined by information available at or before the time at risk (Kalbfleisch & Prentice, 2002); baseline age satisfies this by construction
 
-    -   Interpretation:
+    -   Interpretation of `age_base_c`: difference in hazard for youths who were older vs younger at enrollment, at the same time since baseline
 
-        -   `age_mid_cwc` -\> change in hazard as the same person ages across waves (holding their average age constant)
-        -   `age_mid_between` -\> difference in hazard for people who are on average older vs younger in this sample
-
-    -   We originally interacted cluster x age_mid_between to ask: do cluster differences widen or narrow at older average ages? We evaluated cluster x age_mid_between; it was unstable/non-significant and was dropped for parsimony and better diagnostics
+    -   We originally interacted cluster x between-person age to ask whether cluster differences widen or narrow with age; it was unstable/non-significant and was dropped for parsimony and better diagnostics
     
-> In practice here, age_mid_cwc is highly collinear with the wave baseline-hazard indicators given only three intervals (VIF ~15), so our primary model includes age_mid_between plus wave indicators; we include orthogonalized within-person age (age_mid_cwc_orth) only as a sensitivity analysis too though (see below section)
+> Within-person age is nearly collinear with the interval indicators given only three intervals (VIF ~15), so the primary model includes baseline age plus interval indicators; orthogonalized within-person age (`age_mid_cwc_orth`, i.e., `age_within_base` residualized on the interval indicators, capturing visit-timing variation within an interval) is included only as a sensitivity analysis
 
 **Model we fit per outcome**
 
 -   Primary marginal DTH model (pooled logistic):
-    -   `event ~ cluster + sex + end_wave + age_mid_between`
+    -   `event ~ cluster + sex + end_wave + age_base_c`
     -   Inference: participant-clustered robust SEs (CR2 primary via `clubSandwich`; HC1 secondary via `sandwich`)
 -   Sensitivity models:
     -   Linear time: replace `end_wave` with `wave_num` (1 df)
-    -   Within-person age robustness: include `age_mid_cwc_orth` (within-person midpoint age residualized on wave indicators to avoid collinearity/identifiability issues)
+    -   Within-person age robustness: include `age_mid_cwc_orth` (time since baseline at the interval midpoint, residualized on the interval indicators to avoid collinearity/identifiability issues)
+    -   Supplementary proportionality check: `event ~ cluster * end_wave + sex + age_base_c`, testing whether the cluster effect differs across intervals (joint CR2 Wald test) and reporting interval-specific cluster ORs
     -   cloglog + offset(log_dt): event \~ ... with binomial(link="cloglog") + offset(log_dt)
     -   Mixed-effects diagnostics only: glmer(... + (1\|participant_id)) at nAGQ=0 to compute ICC; nAGQ=1 and allFit() used to document optimizer dependence / instability (not used for primary inference)
 
@@ -394,18 +457,18 @@ Multiple others for QC and plotting
 #1.1 Build DTH formula, where wave FE (end_wave) = flexible baseline hazard; and formula includes within- and between-person age components
 #1.1 Build DTH formulas (primary GLM + sensitivities)
 build_formula_primary <- function() {
-  stats::as.formula("event ~ cluster + sex + end_wave + age_mid_between")
+  stats::as.formula("event ~ cluster + sex + end_wave + age_base_c")
 }
 
 build_formula_lin_time <- function() {
-  stats::as.formula("event ~ cluster + sex + wave_num + age_mid_between")
+  stats::as.formula("event ~ cluster + sex + wave_num + age_base_c")
 }
 
 build_formula_within_orth <- function() {
-  stats::as.formula("event ~ cluster + sex + end_wave + age_mid_between + age_mid_cwc_orth")
+  stats::as.formula("event ~ cluster + sex + end_wave + age_base_c + age_mid_cwc_orth")
 }
 
-#1.1.1 Decide if we should simplify (drop cluster:age_mid_between) based on diagnostics
+#1.1.1 Decide if we should simplify (drop cluster:age_base_c) based on diagnostics
 needs_simplify <- function(fit, data) {
   di <- try(diag_report(fit), silent = TRUE)
   if (inherits(di, "try-error")) return(FALSE)
@@ -531,8 +594,9 @@ tidy_glm_cr2 <- function(fit, cluster_var) {
       SE = if (!is.na(secol)) .data[[secol]] else NA_real_,
       df = if (!is.na(dfcol)) .data[[dfcol]] else NA_real_,
       OR = exp(estimate),
-      CI_lo = if (!is.na(cilocol)) exp(.data[[cilocol]]) else NA_real_,
-      CI_hi = if (!is.na(cihicol)) exp(.data[[cihicol]]) else NA_real_,
+      #1.4.1.5 coef_test() returns no CI columns, so build 95% CIs from the CR2 SE and Satterthwaite df (normal if df unavailable)
+      CI_lo = if (!is.na(cilocol)) exp(.data[[cilocol]]) else exp(estimate - stats::qt(0.975, df = dplyr::coalesce(df, Inf)) * SE),
+      CI_hi = if (!is.na(cihicol)) exp(.data[[cihicol]]) else exp(estimate + stats::qt(0.975, df = dplyr::coalesce(df, Inf)) * SE),
       p.value = if (!is.na(pcol)) .data[[pcol]] else NA_real_)
 }
 
@@ -602,7 +666,7 @@ pred_grid_by_age <- function(fit, data, ages = ages_pred_vec, wave_ref = params$
     age_between_vals <- ages - grand_mean
     newdat <- do.call(rbind, lapply(seq_len(k), function(i) {
       expand.grid(cluster = levels(data$cluster),
-        age_mid_between = age_between_vals[i],
+        age_base_c = 0,
         age_mid_cwc = 0,
         sex = levels(data$sex)[1],
         end_wave = factor(end_waves_vec[i], levels = levels(data$end_wave)))
@@ -610,7 +674,7 @@ pred_grid_by_age <- function(fit, data, ages = ages_pred_vec, wave_ref = params$
     newdat$age_years <- rep(ages, each = length(levels(data$cluster)))
   } else {
     newdat <- expand.grid(cluster = levels(data$cluster),
-      age_mid_between = age_between_vals,
+      age_base_c = age_to_base_c(ages, wave_ref),
       age_mid_cwc = 0,
       sex = levels(data$sex)[1],
       end_wave = factor(wave_ref, levels = levels(data$end_wave)))
@@ -667,7 +731,7 @@ cluster_contrasts_by_age <- function(fit, data, ages = ages_pred_vec, wave_ref =
 
   #1.9.1.1 Start with both age-within variants and both wave codings; we'll keep only what the model uses.
   ref_list <- list(
-    age_mid_between = age_between_vals,
+    age_base_c = age_to_base_c(ages, wave_ref),
     age_mid_cwc = 0,
     baseline_status = 0,
     end_wave = factor(wave_ref, levels = levels(data$end_wave)),
@@ -691,13 +755,13 @@ cluster_contrasts_by_age <- function(fit, data, ages = ages_pred_vec, wave_ref =
   }
 
   #1.9.1.4 EMMs on the linear predictor; contrasts -> ORs via exp()
-  em <- emmeans::emmeans(fit, ~ cluster | age_mid_between, at = ref_list)
+  em <- emmeans::emmeans(fit, ~ cluster | age_base_c, at = ref_list)
   ct <- emmeans::contrast(em, method = "revpairwise", adjust = "none")
   sm <- summary(ct, infer = c(TRUE, TRUE)) |> tibble::as_tibble()
   ci <- emm_ci_cols(sm)
   sm |>
     dplyr::mutate(
-      age_years = round(age_mid_between + grand_mean, 2),
+      age_years = round(base_c_to_age(age_base_c, wave_ref), 2),
       OR = exp(estimate),
       CI_lo = exp(.data[[ci$lo]]),
       CI_hi = exp(.data[[ci$hi]])) |>
@@ -721,7 +785,7 @@ cluster_contrasts_by_wave_aligned <- function(fit, data) {
     a <- ages_by_wave$age_med[i]
     at <- list(
       cluster = levels(data$cluster),
-      age_mid_between = a - grand_mean,
+      age_base_c = 0,
       age_mid_cwc = 0,
       baseline_status = 0,
       end_wave = factor(w, levels = waves),
@@ -771,11 +835,11 @@ keep_terms <- function(df) {
     dplyr::filter(
       !grepl("^(Intercept)$", term),
       grepl("^cluster", term) |
-      grepl("^age_mid_between$", term) |
+      grepl("^age_base_c$", term) |
       grepl("^age_mid_cwc$", term) |
       grepl("^baseline_status$", term) |
       grepl("^sex", term) |
-      grepl("^cluster.*:age_mid_between$", term)
+      grepl("^cluster.*:age_base_c$", term)
     )
 }
 
@@ -925,7 +989,7 @@ cumrisk_by_wave_ci <- function(fit, data, B = 500) {
   nd <- expand.grid(
     end_wave = factor(levels(data$end_wave), levels = levels(data$end_wave)),
     cluster = factor(levels(data$cluster),  levels = levels(data$cluster)),
-    age_mid_between = 0,
+    age_base_c = 0,
     age_mid_cwc     = 0,
     sex = sex_ref) %>%
     dplyr::arrange(cluster, end_wave)
@@ -1001,7 +1065,47 @@ cumrisk_by_wave_ci <- function(fit, data, B = 500) {
     }
   }
 
-  #1.19.5 GLM fallback: point estimates, NA CIs
+  #1.19.5 GLM: simulation-based CIs, drawing ALL coefficients jointly from the participant-clustered CR2 covariance
+  #      (each draw yields a full cumulative-risk curve, so intervals respect the correlation across intervals); the same
+  #      draws give the cluster risk difference (RD) and risk ratio (RR) at each wave, saved as an attribute and to CSV
+  sim_res <- try({
+    if (anyNA(coef(fit))) stop("aliased coefficients")
+    idx <- as.integer(rownames(model.frame(fit)))
+    V <- as.matrix(clubSandwich::vcovCR(fit, cluster = data$participant_id[idx], type = "CR2"))
+    X <- stats::model.matrix(stats::delete.response(stats::terms(fit)), data = nd, xlev = fit$xlevels)
+    off <- if ("log_dt" %in% names(nd)) nd$log_dt else 0
+    set.seed(params$seed)
+    draws <- MASS::mvrnorm(B, mu = coef(fit), Sigma = V)
+    cum_draws <- apply(draws, 1, function(b) to_cum(fit$family$linkinv(as.numeric(X %*% b) + off))$cumrisk)
+    
+    #1.19.5.1 Percentile intervals for each cluster x wave cumulative risk
+    out <- to_cum(haz_hat) %>%
+      dplyr::mutate(cumrisk_lo = apply(cum_draws, 1, stats::quantile, 0.025),
+                    cumrisk_hi = apply(cum_draws, 1, stats::quantile, 0.975))
+    
+    #1.19.5.2 RD and RR (C2 vs C1) at each wave, from the same draws
+    key <- to_cum(haz_hat)
+    hi_rows <- which(key$cluster == levels(data$cluster)[2]); lo_rows <- which(key$cluster == levels(data$cluster)[1])
+    hi_rows <- hi_rows[order(key$end_wave[hi_rows])]; lo_rows <- lo_rows[order(key$end_wave[lo_rows])]
+    rd_d <- cum_draws[hi_rows, , drop = FALSE] - cum_draws[lo_rows, , drop = FALSE]
+    rr_d <- cum_draws[hi_rows, , drop = FALSE] / cum_draws[lo_rows, , drop = FALSE]
+    contr <- tibble::tibble(
+      outcome = if ("outcome" %in% names(data)) as.character(unique(data$outcome))[1] else NA_character_,
+      end_wave = as.character(key$end_wave[hi_rows]),
+      cumrisk_C1 = key$cumrisk[lo_rows], cumrisk_C2 = key$cumrisk[hi_rows],
+      RD = key$cumrisk[hi_rows] - key$cumrisk[lo_rows],
+      RD_lo = apply(rd_d, 1, stats::quantile, 0.025), RD_hi = apply(rd_d, 1, stats::quantile, 0.975),
+      RR = key$cumrisk[hi_rows] / key$cumrisk[lo_rows],
+      RR_lo = apply(rr_d, 1, stats::quantile, 0.025), RR_hi = apply(rr_d, 1, stats::quantile, 0.975),
+      B = B)
+    attr(out, "contrasts") <- contr
+    if (B >= 100 && !is.na(contr$outcome[1])) {
+      readr::write_csv(contr, file.path(OUT_DIR, sprintf("bd_dth_cumrisk_RD_RR_%s.csv", contr$outcome[1])))
+    }
+    out
+  }, silent = TRUE)
+  if (!inherits(sim_res, "try-error")) return(sim_res)
+  warning("CR2 simulation failed; returning point estimates only: ", conditionMessage(attr(sim_res, "condition")))
   to_cum(haz_hat) %>% dplyr::mutate(cumrisk_lo = NA_real_, cumrisk_hi = NA_real_)
 }
 
@@ -1016,7 +1120,7 @@ pred_fixedwave_with_ci <- function(fit,
   grand_mean <- mean(data$age_mid, na.rm = TRUE)
   at_list <- list(
     cluster = levels(data$cluster),
-    age_mid_between = ages - grand_mean,
+    age_base_c = age_to_base_c(ages, wave_ref),
     age_mid_cwc = 0,
     baseline_status = 0,
     end_wave = factor(wave_ref, levels = levels(data$end_wave)),
@@ -1045,7 +1149,7 @@ pred_fixedwave_with_ci <- function(fit,
     #1.20.2 Try emmeans only; if that fails, fallback to predict()
     em <- try(emmeans::emmeans(fit,
                                ~ cluster |
-                                 age_mid_between,
+                                 age_base_c,
                                at = at_list,
                                type = "response"),
               silent = TRUE)
@@ -1065,7 +1169,7 @@ pred_fixedwave_with_ci <- function(fit,
         dplyr::transmute(
           sm,
           cluster,
-          age_years = round(age_mid_between + grand_mean, 2),
+          age_years = round(base_c_to_age(age_base_c, wave_ref), 2),
           pred = if (is.null(resp))
             NA_real_
           else
@@ -1084,7 +1188,7 @@ pred_fixedwave_with_ci <- function(fit,
     #1.20.3 Fallback: point predictions (no CI)
     nd <- expand.grid(
       cluster = levels(data$cluster),
-      age_mid_between = ages - grand_mean,
+      age_base_c = age_to_base_c(ages, wave_ref),
       age_mid_cwc = 0,
       end_wave = factor(wave_ref, levels = levels(data$end_wave)),
       sex = levels(data$sex)[1])
@@ -1095,7 +1199,7 @@ pred_fixedwave_with_ci <- function(fit,
     if ("log_dt" %in% names(model.frame(fit))) {
       nd$log_dt <- get_log_dt_for_wave(data, factor(wave_ref, levels = levels(data$end_wave)))
     }
-    nd$age_years <- round(nd$age_mid_between + grand_mean, 2)
+    nd$age_years <- round(base_c_to_age(nd$age_base_c, wave_ref), 2)
     nd$pred <- as.numeric(predict(
       fit,
       newdata = nd,
@@ -1118,7 +1222,7 @@ pred_aligned_with_ci <- function(fit, data, ages = ages_pred_vec) {
   for (i in seq_len(k)) {
     at_list <- list(
       cluster = levels(data$cluster),
-      age_mid_between = ages[i] - grand_mean,
+      age_base_c = 0,
       age_mid_cwc = 0,
       baseline_status = 0,
       end_wave = factor(waves[i], levels = levels(data$end_wave)),
@@ -1149,7 +1253,7 @@ pred_aligned_with_ci <- function(fit, data, ages = ages_pred_vec) {
       #1.21.1 Fallback: point predictions (no CI)
       nd <- expand.grid(
         cluster = levels(data$cluster),
-        age_mid_between = ages[i] - grand_mean,
+        age_base_c = 0,
         age_mid_cwc = 0,
         end_wave = factor(waves[i], levels = levels(data$end_wave)),
         sex = levels(data$sex)[1])
@@ -1169,7 +1273,7 @@ pred_aligned_with_ci <- function(fit, data, ages = ages_pred_vec) {
 hazard_by_wave_ci <- function(fit, data) {
   at_list <- list(
     cluster = levels(data$cluster),
-    age_mid_between = 0, age_mid_cwc = 0,
+    age_base_c = 0, age_mid_cwc = 0,
     baseline_status = 0,
     end_wave = levels(data$end_wave),
     wave_num = seq_along(levels(data$end_wave)) - 1L,  # handy if needed
@@ -1206,7 +1310,7 @@ hazard_by_wave_ci <- function(fit, data) {
   nd <- expand.grid(
     end_wave = levels(data$end_wave),
     cluster = levels(data$cluster),
-    age_mid_between = 0, age_mid_cwc = 0,
+    age_base_c = 0, age_mid_cwc = 0,
     sex = levels(data$sex)[1]) %>% 
   dplyr::arrange(end_wave, cluster)
   if (!inherits(mf_names, "try-error") && "wave_num" %in% mf_names)
@@ -1228,7 +1332,7 @@ cumrisk_by_wave_ci_glmer <- function(fit, data, B = 500) {
   nd <- expand.grid(
     end_wave = levels(data$end_wave),
     cluster = levels(data$cluster),
-    age_mid_between = 0, age_mid_cwc = 0) %>% dplyr::arrange(cluster, end_wave)
+    age_base_c = 0, age_mid_cwc = 0) %>% dplyr::arrange(cluster, end_wave)
 
   #1.23.2 If the fitted model used an offset(log_dt) (cloglog sensitivity), supply it
   mf_names <- try(names(model.frame(fit)), silent = TRUE)
@@ -1477,7 +1581,7 @@ prep_dth_terms <- function(dat) {
   #1.30.3.2 Ensure within-person orthogonalized age exists
   dat <- dat %>%
     dplyr::mutate(
-      age_mid_cwc_orth = resid_on_factor(age_mid_cwc, end_wave)
+      age_mid_cwc_orth = resid_on_factor(age_within_base, end_wave)
     )
 
   #1.30.3.3 Ensure dt_years + log_dt exist and are finite, needed for cloglog + offset
@@ -1589,7 +1693,7 @@ OUTCOMES <- c("bipolar_I","bipolar_II","bd_nos","any_bsd")
 preflight_dth <- function(dat, outcomes = OUTCOMES) {
 
   #2.1.1 Minimal required columns
-  req <- c("event","cluster","sex","end_wave","age_mid_between","participant_id","family_id")
+  req <- c("event","cluster","sex","end_wave","age_base_c","participant_id","family_id")
   miss <- setdiff(req, names(dat))
   if (length(miss) > 0) stop("Preflight failed: missing required columns: ", paste(miss, collapse = ", "))
 
@@ -1649,7 +1753,7 @@ model_log <- add_decision(
   model_log,
   model_family = "DTH pooled logistic (primary)",
   engine = "glm + clubSandwich",
-  specification = "event ~ cluster + sex + end_wave + age_mid_between; CR2 clustered by participant (HC1 secondary)",
+  specification = "event ~ cluster + sex + end_wave + age_base_c; CR2 clustered by participant (HC1 secondary)",
   status = "used_primary",
   key_diagnostics = "Stable fits across outcomes; design-consistent inference with clustered SEs",
   decision_rationale = "Primary model: avoids weakly-identified random intercept with 1–3 rows/person and sparse events")
@@ -1658,7 +1762,7 @@ model_log <- add_decision(
   model_log,
   model_family = "DTH cloglog + offset(log_dt)",
   engine = "glm + clubSandwich",
-  specification = "event ~ cluster + sex + end_wave + age_mid_between + offset(log_dt); CR2 clustered by participant",
+  specification = "event ~ cluster + sex + end_wave + age_base_c + offset(log_dt); CR2 clustered by participant",
   status = "sensitivity",
   key_diagnostics = "Robustness to unequal interval lengths (missed waves -> longer dt)",
   decision_rationale = "Sensitivity: approximates continuous-time proportional hazards under discrete intervals")
@@ -1668,7 +1772,7 @@ model_log <- add_decision(
   model_log,
   model_family = "GLMM (random intercept)",
   engine = "lme4::glmer",
-  specification = "event ~ cluster + sex + end_wave + age_mid_between + (1|participant_id) [+ optional (1|family_id)/(1|site_factor)]",
+  specification = "event ~ cluster + sex + end_wave + age_base_c + (1|participant_id) [+ optional (1|family_id)/(1|site_factor)]",
   status = "diagnostic_only",
   key_diagnostics = "Often optimizer-dependent / degenerate Hessians when wave FE + within-age included; RE weakly identified",
   decision_rationale = "Documented as diagnostics; not used for primary inference")
@@ -1730,7 +1834,7 @@ for (out in OUTCOMES) {
     model_log,
     model_family = "DTH pooled logistic (primary)",
     engine = "glm + clubSandwich",
-    specification = "event ~ cluster + sex + end_wave + age_mid_between; CR2 clustered by participant",
+    specification = "event ~ cluster + sex + end_wave + age_base_c; CR2 clustered by participant",
     outcome = out,
     status = "used_primary",
     key_diagnostics = glue::glue("n_rows={nrows}; n_events={nevents}; separation={sep_flag}"),
@@ -1802,7 +1906,7 @@ for (out in OUTCOMES) {
 
   #2.4.7 Evidence supporting dropping raw age_mid_cwc from primary when using wave indicators, AKA VIF / collinearity
   vif_tbl <- safe_or_null({
-    cc <- performance::check_collinearity(glm(event ~ cluster + sex + end_wave + age_mid_between + age_mid_cwc,
+    cc <- performance::check_collinearity(glm(event ~ cluster + sex + end_wave + age_base_c + age_within_base,
                                               data = dat_o, family = binomial()))
     tibble::as_tibble(cc) %>% dplyr::mutate(outcome = out, .before = 1)
   })
@@ -1811,7 +1915,7 @@ for (out in OUTCOMES) {
   #2.4.8 Evidence: GLMM ICC + allFit optimizer dependence at nAGQ>=1 (diagnostic only)
   #2.4.8.1 ICC from nAGQ=0 participant-only RE
   glmm0 <- safe_or_null(
-    lme4::glmer(event ~ cluster + sex + end_wave + age_mid_between + (1|participant_id),
+    lme4::glmer(event ~ cluster + sex + end_wave + age_base_c + (1|participant_id),
                 data = dat_o, family = binomial(), nAGQ = 0,
                 control = glmerControl(optimizer="bobyqa", optCtrl=list(maxfun=2e5)))
   )
@@ -1994,6 +2098,67 @@ Generates visualizations of predicted first-onset hazard vs age for each outcome
 
     -   This is the "when do onsets happen" view most would expect - rising curves that separate by cluster indicate earlier and/or more frequent onsets in the higher-risk cluster
 
+## Supplementary: Cluster x Interval (Proportionality) Check
+
+The primary model assumes the cluster effect on the odds of first onset is the same in every interval. This supplementary model relaxes that assumption by adding a cluster x interval interaction, tests it jointly (Wald chi-square on the participant-clustered CR2 covariance), and reports interval-specific cluster odds ratios. It is supplementary only; the primary model is unchanged.
+
+```{r supplementary cluster by interval, warning = FALSE}
+
+## 2.S Supplementary: does the cluster effect differ across intervals? ##
+
+#2.S.1 Containers
+int_or_rows <- list()
+int_test_rows <- list()
+
+#2.S.2 Fit the primary specification plus a cluster x interval interaction, per outcome
+for (oc in OUTCOMES) {
+  res <- try({
+    
+    #2.S.2.1 Outcome-specific model-ready data, prepared exactly as for the primary model
+    dat_i <- bd_pp_model %>% dplyr::filter(outcome == oc) %>% droplevels() %>% prep_dth_terms()
+    fit_i <- fit_glm_safe(stats::as.formula("event ~ cluster * end_wave + sex + age_base_c"), dat_i, link = "logit")
+    
+    #2.S.2.2 Participant-clustered CR2 covariance, aligned to the model frame as in tidy_glm_cr2()
+    idx <- as.integer(rownames(model.frame(fit_i)))
+    V <- clubSandwich::vcovCR(fit_i, cluster = dat_i$participant_id[idx], type = "CR2")
+    
+    #2.S.2.3 Joint Wald chi-square test that every cluster x interval term is zero, on the CR2 covariance
+    #      (with ~8,400 participant clusters the small-sample HTZ correction is immaterial, and it scales quadratically in clusters)
+    int_idx <- grep("^clusterC2:end_wave", names(coef(fit_i)))
+    b_int <- coef(fit_i)[int_idx]
+    V_int <- as.matrix(V)[int_idx, int_idx, drop = FALSE]
+    chi2 <- as.numeric(t(b_int) %*% solve(V_int) %*% b_int)
+    int_test_rows[[oc]] <- tibble::tibble(
+      outcome = oc, n_interaction_terms = length(int_idx),
+      chi_sq = chi2, df = length(int_idx), p.value = stats::pchisq(chi2, df = length(int_idx), lower.tail = FALSE))
+    
+    #2.S.2.4 Interval-specific cluster ORs (C2 vs C1) on the CR2 covariance
+    em <- emmeans::emmeans(fit_i, ~ cluster | end_wave, vcov. = as.matrix(V))
+    sm <- summary(emmeans::contrast(em, method = "revpairwise"), infer = c(TRUE, TRUE)) %>% tibble::as_tibble()
+    ci <- emm_ci_cols(sm)
+    int_or_rows[[oc]] <- sm %>%
+      dplyr::transmute(outcome = oc, end_wave = as.character(end_wave), contrast,
+                       OR = exp(estimate), CI_lo = exp(.data[[ci$lo]]), CI_hi = exp(.data[[ci$hi]]), p.value)
+  }, silent = TRUE)
+  
+  #2.S.2.5 Report a failure for this outcome without stopping the report
+  if (inherits(res, "try-error")) message("Cluster x interval model failed for ", oc, ": ", conditionMessage(attr(res, "condition")))
+}
+
+#2.S.3 Save and display
+int_tests_tbl <- dplyr::bind_rows(int_test_rows)
+int_or_tbl <- dplyr::bind_rows(int_or_rows)
+readr::write_csv(int_tests_tbl, file.path(OUT_DIR, "bd_dth_cluster_by_interval_tests.csv"))
+readr::write_csv(int_or_tbl, file.path(OUT_DIR, "bd_dth_cluster_by_interval_ORs.csv"))
+knitr::kable(int_tests_tbl, digits = 3,
+             caption = "Supplementary: joint Wald chi-square test of the cluster x interval interaction (CR2 covariance)") %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped","hover","condensed","responsive"))
+knitr::kable(int_or_tbl, digits = 3,
+             caption = "Supplementary: interval-specific cluster odds ratios of first onset (C2 vs C1; CR2)") %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped","hover","condensed","responsive"))
+
+```
+
 ```{r marginal effects, echo = FALSE, warning = FALSE, fig.height=11, fig.width=8.5}
 
 ## 3. Marginal hazard by cluster across age ##
@@ -2136,7 +2301,7 @@ Uses the fitted model to compute marginal baseline hazards by wave (sessions 02A
 
 #4.1 Create a helper function to plot marginal hazard effects by assessment timepoint (wave)
 plot_wave_hazard <- function(fit, data, title) {
-  nd <- expand.grid(end_wave = levels(data$end_wave), cluster = levels(data$cluster)[1], age_mid_between = 0, age_mid_cwc = 0, sex = levels(data$sex)[1])
+  nd <- expand.grid(end_wave = levels(data$end_wave), cluster = levels(data$cluster)[1], age_base_c = 0, age_mid_cwc = 0, sex = levels(data$sex)[1])
   nd$pred <- predict(fit, newdata = nd, type = "response", re.form = NA)
   ggplot(nd, aes(x = end_wave, y = pred)) +
     geom_col() +
@@ -2219,7 +2384,7 @@ pretty_term <- function(x) {
   x %>%
     stringr::str_replace_all(":", " x ") %>%
     stringr::str_replace("^cluster", "Cluster: ") %>%
-    stringr::str_replace("^age_mid_between$", "Age (between-person)") %>%
+    stringr::str_replace("^age_base_c$", "Baseline age (between-person)") %>%
     stringr::str_replace("^age_mid_cwc$", "Age (within-person)") %>%
     stringr::str_replace("^baseline_status$", "Baseline positive") %>%
     stringr::str_replace("^sex", "Sex: ") %>%
@@ -2287,13 +2452,9 @@ if (exists("emm_wave_primary_all") && is.data.frame(emm_wave_primary_all) && nro
 **Why decompose age?**
 
 -   In longitudinal hazards, naive "age" conflates two distinct things:
-    -   Aging within the same youth (time passing)
-    -   Older vs younger youths on average (between families/ids)
--   Including age_mid_cwc + age_mid_between separates these. Interpretation:
-    -   age_mid_cwc: per-person change in hazard as they age (holding their own mean age fixed)
-    -   age_mid_between: difference in hazard for a child whose typical age is higher vs lower than the cohort mean
-
-An optional parsimonious alternative would be to use a single centered age. If we end up needing a simpler reporting model, we could fit: `event ~ cluster * age_mid_gmc + baseline_status + sex + site_factor + end_wave + (1|id) + (1|family)`; and keep the decomposed model as a sensitivity analysis (this is currently not run here though, to keep runtime minimal)
+    -   Aging within the same youth (time passing), carried here by the interval indicators
+    -   Older vs younger youths (between-person), carried here by baseline age (`age_base_c`)
+-   Between-person age is measured at baseline rather than as each person's mean interval age, since the latter depends on how long each youth remained in the risk set and therefore on the outcome
 
 ## Final Story Template
 
@@ -2377,5 +2538,20 @@ if (nrow(story) > 0) {
 } else {
   message("No 'final story' rows to display.")
 }
+
+```
+
+## Cumulative Risk Contrasts (RD and RR)
+
+Cluster risk differences and risk ratios of cumulative first-onset risk at each wave, with 95% simulation intervals from joint draws of the primary model's coefficients under the participant-clustered CR2 covariance (B = 500).
+
+```{r cumulative risk contrasts, echo = FALSE, warning = FALSE}
+
+## Collect the RD/RR tables written by cumrisk_by_wave_ci() for each outcome ##
+rdrr_files <- list.files(OUT_DIR, pattern = "^bd_dth_cumrisk_RD_RR_.*[.]csv$", full.names = TRUE)
+rdrr_tbl <- dplyr::bind_rows(lapply(rdrr_files, readr::read_csv, show_col_types = FALSE))
+readr::write_csv(rdrr_tbl, file.path(OUT_DIR, "bd_dth_cumrisk_RD_RR_all.csv"))
+knitr::kable(rdrr_tbl, digits = 3, caption = "Cumulative first-onset risk by cluster, with RD and RR (C2 vs C1) and 95% CR2 simulation intervals") %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped","hover","condensed","responsive"))
 
 ```
