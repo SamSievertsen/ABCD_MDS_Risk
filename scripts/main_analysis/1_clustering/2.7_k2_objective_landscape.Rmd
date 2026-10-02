@@ -1,0 +1,231 @@
+---
+title: "k = 2 Objective Landscape: `r params$config`"
+author: "Sam A. Sievertsen"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    self_contained: true
+params:
+  config: "fallback_emo_ace"
+  scaling_method: "z_score"
+  n_runs: 200
+  seed: 123
+---
+
+```{r global, include = FALSE}
+
+# Set global env variables
+knitr::opts_chunk$set(echo = TRUE, cache = FALSE, message = TRUE, warning = TRUE, results = "markup", comment = "")
+
+```
+
+```{r environment, echo = FALSE, include = FALSE, warning = FALSE}
+
+# Load necessary packages + environment
+library(knitr)
+library(kableExtra)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(purrr)
+library(furrr)
+library(parallelly)
+library(clustMixType)
+library(mclust)
+library(effectsize)
+library(ggplot2)
+library(glue)
+library(here)
+
+# Set numerical options
+options(scipen = 999, digits = 8)
+
+# List project repository location and load the shared configuration definitions and silhouette helpers
+REPO <- here()
+source(file.path(REPO, "scripts/main_analysis/1_clustering/cluster_configs.R"))
+source(file.path(REPO, "scripts/main_analysis/1_clustering/silhouette_helpers.R"))
+
+# Paths
+kproto_dir <- file.path(REPO, "data/data_processed", "kproto_results")
+out_dir <- file.path(REPO, "data/data_processed", "validation_results", "k2_landscape")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Load the primary k = 2 fit, confirming its fingerprint belongs to this configuration
+kp_list <- readRDS(file.path(kproto_dir, sprintf("kproto_%s_%s.rds", params$config, params$scaling_method)))
+fp <- attr(kp_list, "fingerprint")
+if (is.null(fp) || !identical(fp$features, cluster_configs[[params$config]])) stop("Fingerprint mismatch for ", params$config)
+kp_ref <- kp_list$k2
+
+# Unscaled data for profiling, aligned to the fit's participants
+risk_variable_data <- read.csv(file.path(REPO, "data/data_processed", "risk_variable_data.csv"))
+raw <- risk_variable_data[match(rownames(kp_ref$data), risk_variable_data$participant_id), ]
+stopifnot(identical(as.character(raw$participant_id), rownames(kp_ref$data)))
+
+```
+
+## Purpose
+
+Bootstrap stability for this solution is bimodal: most resamples reproduce it almost exactly, while roughly 40% converge on a distinctly different partition. This report asks whether that alternative is a worse local optimum that refits sometimes fall into, or a competing solution of similar or better quality.
+
+Every run below refits *k* = 2 on the **full** analytic sample, with the same data and the same λ as the primary fit, from a single random start (`nstart = 1`), so each run lands in whichever optimum its start leads to. Comparing the objective (total within-cluster distance, lower is better) and the agreement with the primary across `r params$n_runs` runs maps the landscape directly.
+
+```{r landscape, warning = FALSE, message = FALSE}
+
+## Many independent single-start refits on the full sample ##
+
+#1. Configure workers, respecting the SLURM/cgroup allocation
+n_workers <- max(1L, as.integer(parallelly::availableCores()))
+if (n_workers > 1) plan(multicore, workers = n_workers) else plan(sequential)
+
+#2. Refit from single random starts with the reference lambda held fixed
+runs <- future_map(seq_len(params$n_runs), function(r) {
+  set.seed(params$seed + r)
+  fit <- kproto(x = kp_ref$data, k = 2, nstart = 1, lambda = kp_ref$lambda, keep.data = FALSE, verbose = FALSE)
+  list(wss = fit$tot.withinss, cluster = fit$cluster, size = sort(fit$size))
+}, .options = furrr_options(seed = TRUE))
+plan(sequential)
+
+#3. Summarize each run against the primary
+run_tbl <- tibble(
+  run = seq_along(runs),
+  wss = map_dbl(runs, "wss"),
+  ari_vs_primary = map_dbl(runs, ~ adjustedRandIndex(.x$cluster, kp_ref$cluster)),
+  smaller_cluster_n = map_int(runs, ~ as.integer(.x$size[1]))
+) %>%
+  mutate(solution = case_when(
+    ari_vs_primary > 0.99 ~ "Primary",
+    TRUE ~ "Other"
+  ))
+
+#4. Group non-primary runs into distinct partitions (runs agreeing at ARI > 0.99 are the same partition)
+other_idx <- which(run_tbl$solution == "Other")
+partition_id <- rep(NA_integer_, nrow(run_tbl)); partition_id[run_tbl$solution == "Primary"] <- 0L
+next_id <- 1L
+for (i in other_idx) {
+  if (!is.na(partition_id[i])) next
+  same <- other_idx[vapply(other_idx, function(j) is.na(partition_id[j]) &&
+                           adjustedRandIndex(runs[[i]]$cluster, runs[[j]]$cluster) > 0.99, logical(1))]
+  partition_id[same] <- next_id; next_id <- next_id + 1L
+}
+run_tbl$partition <- ifelse(partition_id == 0L, "Primary", paste0("Alternative ", partition_id))
+
+#5. Tabulate the distinct partitions found, ordered by objective
+partitions <- run_tbl %>%
+  group_by(partition) %>%
+  summarise(runs_found = n(), pct_runs = 100 * n() / params$n_runs,
+            best_wss = min(wss), median_ari_vs_primary = median(ari_vs_primary),
+            smaller_cluster_n = as.integer(median(smaller_cluster_n)), .groups = "drop") %>%
+  arrange(best_wss) %>%
+  mutate(wss_minus_primary = best_wss - kp_ref$tot.withinss)
+
+partitions %>%
+  kable(caption = glue("Distinct k = 2 partitions reached from {params$n_runs} single random starts (primary WSS = {round(kp_ref$tot.withinss, 1)})"), digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+write.csv(run_tbl, file.path(out_dir, sprintf("landscape_runs_%s.csv", params$config)), row.names = FALSE)
+
+#6. Plot objective against agreement with the primary
+ggplot(run_tbl, aes(x = ari_vs_primary, y = wss, color = partition)) +
+  geom_jitter(width = 0.005, height = 0, alpha = 0.6, size = 2) +
+  geom_hline(yintercept = kp_ref$tot.withinss, linetype = "dashed") +
+  labs(x = "ARI with the primary solution", y = "Total within-cluster distance (lower = better)", color = "Partition",
+       title = "Objective landscape of k = 2 from single random starts") +
+  theme_minimal(base_size = 12)
+
+```
+
+## The Alternative Partitions
+
+Every distinct partition reached, compared with the primary. The pair-counting Rand and Jaccard columns are the values `stability_kproto()` would record if a bootstrap refit landed on that partition, so they identify which alternative produces the low mode in the bootstrap distribution.
+
+```{r alternatives, warning = FALSE, message = FALSE, results = "asis"}
+
+## Characterize every partition reached, ordered by objective ##
+
+#1. Representative (best-objective) run of each partition, in objective order
+reps <- run_tbl %>% group_by(partition) %>% arrange(wss, .by_group = TRUE) %>% slice(1) %>% ungroup() %>% arrange(wss)
+part_cl <- setNames(lapply(reps$run, function(r) runs[[r]]$cluster), reps$partition)
+part_cl[["Primary"]] <- kp_ref$cluster
+
+#2. Create a helper returning pair-counting Rand and Jaccard, as computed by stability_kproto()
+pair_agree <- function(a, b) {
+  tab <- table(a, b); n11 <- sum(choose(tab, 2))
+  sa <- sum(choose(rowSums(tab), 2)); sb <- sum(choose(colSums(tab), 2)); tot <- choose(sum(tab), 2)
+  c(Rand = (tot - sa - sb + 2 * n11) / tot, Jaccard = n11 / (sa + sb - n11))
+}
+
+#3. Objective, silhouette, and agreement with the primary for every partition
+overview <- purrr::imap_dfr(part_cl, function(cl, nm) {
+  kp_tmp <- kp_ref; kp_tmp$cluster <- cl
+  ag <- pair_agree(kp_ref$cluster, cl)
+  tibble(Partition = nm,
+         `Runs reaching it` = sum(run_tbl$partition == nm),
+         WSS = reps$wss[reps$partition == nm],
+         `WSS vs primary (%)` = 100 * (reps$wss[reps$partition == nm] - kp_ref$tot.withinss) / kp_ref$tot.withinss,
+         `Mean silhouette` = mean(silhouette_exact_huang(kp_tmp)[, "sil_width"]),
+         `Smaller cluster n` = min(table(cl)),
+         `ARI vs primary` = adjustedRandIndex(kp_ref$cluster, cl),
+         `Rand vs primary` = ag[["Rand"]],
+         `Jaccard vs primary` = ag[["Jaccard"]])
+}) %>% arrange(WSS)
+print(kable(overview, caption = "Every k = 2 partition reached: objective, silhouette, and agreement with the primary", digits = 3) %>%
+        kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")))
+write.csv(overview, file.path(out_dir, sprintf("landscape_partitions_%s.csv", params$config)), row.names = FALSE)
+
+#4. Feature profiles of every partition (d-equivalent, smaller minus larger cluster)
+separation <- function(var, cl) {
+  small <- as.integer(names(which.min(table(cl))))
+  g <- factor(ifelse(cl == small, "Smaller", "Larger"), levels = c("Smaller", "Larger"))
+  v <- raw[[var]]
+  if (var %in% feats_categorical) {
+    tab <- table(g, factor(v, levels = c(1, 0)))
+    if (any(tab == 0)) return(NA_real_)
+    as.numeric(effectsize::oddsratio_to_d(effectsize::oddsratio(tab)$Odds_ratio))
+  } else {
+    as.numeric(effectsize::cohens_d(v ~ g)$Cohens_d)
+  }
+}
+prof <- tibble(feature = cluster_configs[[params$config]])
+for (nm in overview$Partition) prof[[nm]] <- map_dbl(prof$feature, separation, cl = part_cl[[nm]])
+prof <- prof %>% arrange(desc(abs(Primary)))
+print(kable(prof, caption = "Feature separation (d-equivalent, smaller minus larger cluster) under every partition; sorted by the primary", digits = 2) %>%
+        kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 11))
+write.csv(prof, file.path(out_dir, sprintf("landscape_profiles_%s.csv", params$config)), row.names = FALSE)
+
+#5. Membership of the closest competitor (lowest objective other than the primary) against the primary
+closest <- overview$Partition[overview$Partition != "Primary"][1]
+if (!is.na(closest)) {
+  print(kable(table(Primary = kp_ref$cluster, Closest = part_cl[[closest]]),
+              caption = glue("Primary vs {closest} (the closest competitor by objective)")) %>%
+          kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")))
+}
+
+```
+
+## Summary
+
+```{r summary, echo = FALSE, results = "asis"}
+
+## Auto-generated summary ##
+p1 <- mean(run_tbl$partition == "Primary")
+best <- partitions %>% slice(1)
+p8 <- 1 - (1 - p1)^8
+
+#1. Three readings, in order of consequence
+reading <- if (best$partition != "Primary") {
+  "a partition with a LOWER objective than the primary exists, so the primary is not the best available solution and should be refit (with more starts) before any downstream analysis"
+} else if (p8 < 0.90) {
+  "the primary is the best partition found, but 8 starts reach it only part of the time, so the bootstrap alternative plausibly reflects refits that stopped in a worse local optimum; rerunning stability with more starts would test this"
+} else {
+  "the primary is the best partition found and 8 starts reach it almost always on the full sample, so the search does not explain the bootstrap alternative; resampling itself shifts which partition is optimal, which is a property of the data to report rather than an artifact to fix"
+}
+cat(glue(
+  "- **Primary reached from** {round(100 * p1, 1)}% of single random starts; implied probability that `nstart = 8` reaches it: ",
+  "{round(100 * (1 - (1 - p1)^8), 1)}% (compare with the ~59% of bootstrap refits that reproduced it)\n\n",
+  "- **Best objective found:** {best$partition} (WSS {round(best$best_wss, 1)}; primary WSS {round(kp_ref$tot.withinss, 1)})\n\n",
+  "- **Closest competitor:** {overview$Partition[2]}, {round(overview$`WSS vs primary (%)`[2], 2)}% worse objective, ",
+  "Jaccard vs primary {round(overview$`Jaccard vs primary`[2], 3)}, mean silhouette {round(overview$`Mean silhouette`[2], 3)}\n\n",
+  "- **Reading:** {reading}\n"
+))
+
+```

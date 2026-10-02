@@ -1,14 +1,19 @@
 ---
-title: "Bipolar Disorder & Suicidality Risk Group Cluster Stability Analysis"
+title: "Bipolar Disorder & Suicidality Risk Group Cluster Stability Analysis: `r params$config` (`r params$mode`)"
 author: "Sam A. Sievertsen"
 date: "`r Sys.Date()`"
 output:
   html_document:
     self_contained: true
 params:
+  config: "fallback_emo_ace"
+  mode: "chunk"
+  chunk_id: 1
+  n_chunks: 10
   scaling_method: "z_score"
   k_value: 2
   n_boot: 1000
+  stab_nstart: 25
   seed: 123
   overwrite: false
 ---
@@ -38,16 +43,25 @@ library(scales)
 library(clustMixType)
 library(here)
 
+# Validate params before doing any work
+stopifnot(params$mode %in% c("chunk", "report"), params$n_boot %% params$n_chunks == 0,
+          params$chunk_id >= 1, params$chunk_id <= params$n_chunks)
+
 # Set paths to be used in reading in data & objects
 REPO <- here()
 datapath <- file.path(REPO, "data", "data_processed")
 
-# Establish the path to the kproto object
-kproto_file <- file.path(datapath, "kproto_results", sprintf("kproto_%s.rds", params$scaling_method))
+# Load the shared configuration definitions and verify the requested configuration exists
+source(file.path(REPO, "scripts/main_analysis/1_clustering/cluster_configs.R"))
+if (!params$config %in% names(cluster_configs)) stop("Unknown config: ", params$config)
+
+# Establish the path to the kproto object, namespaced by configuration so no other feature set's fit is reused
+kproto_file <- file.path(datapath, "kproto_results", sprintf("kproto_%s_%s.rds", params$config, params$scaling_method))
 
 # Establish the path to the stability results and write a new directory if it doesn't exist
 stability_dir <- file.path(datapath, "stability_results")
-dir.create(stability_dir, recursive = TRUE, showWarnings = FALSE)
+chunk_dir <- file.path(stability_dir, "chunks_in_progress")
+dir.create(chunk_dir, recursive = TRUE, showWarnings = FALSE)
 
 # Set up logging (from SLURM)
 log_file <- Sys.getenv("DETAILED_LOG", unset = NA)
@@ -55,26 +69,30 @@ log_file <- Sys.getenv("DETAILED_LOG", unset = NA)
 # Set seed for reproducibility
 set.seed(params$seed)
 
-# Load k-prototype list & create a vector containing the relevant k range
+# Load k-prototype list, confirming its fingerprint belongs to this configuration
 kp_list <- readRDS(kproto_file)
-k_vals  <- 2:8
+fp <- attr(kp_list, "fingerprint")
+if (is.null(fp) || !identical(fp$config, params$config) || !identical(fp$features, cluster_configs[[params$config]])) {
+  stop("kproto cache fingerprint does not match config ", params$config)
+}
 
-# Determine the list position for the current requested k (list is 1:7 for k=2:8, as index lags 1 behind k)
-pos <- match(params$k_value, k_vals)
-stopifnot(is.finite(pos), pos >= 1, pos <= length(k_vals))
-
-# Establish the current kproto object as the one with the requested position
-kp <- kp_list[[pos]]
+# Establish the current kproto object for the requested k by name (list elements are named k2 to k8)
+kp_name <- paste0("k", params$k_value)
+stopifnot(kp_name %in% names(kp_list))
+kp <- kp_list[[kp_name]]
 
 # Strip row names from the data embedded in the kproto object since stability_kproto() trips over them
+#   (it matches bootstrap assignments by character row position, so participant-ID row names return NA)
 if (!is.null(rownames(kp$data))) {
   rownames(kp$data) <- NULL
 }
 
-# Compose output file stems
-stem <- glue("stability_{params$scaling_method}_k{params$k_value}_nb{params$n_boot}")
+# Compose output file stems, namespaced by configuration
+#   (the number of random starts per bootstrap refit is part of the stem, so results from different settings never mix)
+stem <- glue("stability_{params$config}_{params$scaling_method}_k{params$k_value}_nb{params$n_boot}_ns{params$stab_nstart}")
 rds_out <- file.path(stability_dir, glue("{stem}.rds"))
 csv_out <- file.path(stability_dir, glue("{stem}.csv"))
+chunk_file <- function(i) file.path(chunk_dir, glue("{stem}_chunk{i}of{params$n_chunks}.rds"))
 
 # Establish guards to skip compute if cached & overwrite=FALSE
 if (file.exists(rds_out) && isFALSE(params$overwrite)) {
@@ -92,69 +110,114 @@ if (file.exists(rds_out) && isFALSE(params$overwrite)) {
 
 This code evaluates the stability of the chosen clustering solution by: 
 
-  1. Performing (B = 1000) bootstrap resampling with replacement analysis using Rand and Jaccard indices to measure cluster consistency across resampled datasets
+  1. Performing (B = `r params$n_boot`) bootstrap resampling with replacement analysis using Rand and Jaccard indices to measure cluster consistency across resampled datasets, split into `r params$n_chunks` chunks run as independent SLURM array tasks
   
-  2. Extracting and organizing the bootstrap results into structured data frames containing individual bootstrap iterations and overall stability metrics
+  2. Pooling the chunks, which reproduces a single B-bootstrap run exactly: `stability_kproto()` reports the mean of the per-bootstrap Rand and Jaccard values, so stacking the per-bootstrap rows from every chunk and averaging yields the same estimator
   
-  3. Computing summary statistics including means, standard deviations, and 95% confidence intervals for both stability indices
+  3. Extracting and organizing the bootstrap results into structured data frames containing individual bootstrap iterations and overall stability metrics
   
-  4. Outputting results displaying the stability assessment for the specified k-value and scaling method
+  4. Computing summary statistics including means, standard deviations, and 95% confidence intervals for both stability indices
+  
+  5. Outputting results displaying the stability assessment for the specified configuration, k-value, and scaling method
   
 To note, higher Rand and Jaccard values (i.e., closer to 1.0) indicate more stable, reproducible clustering solutions
 
-```{r cluster stability, echo = FALSE, warning = FALSE}
+```{r bootstrap chunk, echo = FALSE, warning = FALSE, eval = (params$mode == "chunk")}
 
-## Bootstrap stability for chosen k (Rand & Jaccard) ##
+## Bootstrap stability for one chunk (Rand & Jaccard) ##
 
-#1. Check if the bootstrapped stability object already exists, and only write over it if it does not
-if (is.null(boot_res)) {
-
-  #1.1 Announce start to log
+#1. Skip if this chunk already exists and overwrite is not requested
+if (file.exists(chunk_file(params$chunk_id)) && isFALSE(params$overwrite)) {
   if (!is.na(log_file)) cat(
-    sprintf("%s|STAB_START|k=%d|B=%d\n",
+    sprintf("%s|STAB_CHUNK_SKIP|config=%s|chunk=%d\n", format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"),
+            params$config, params$chunk_id), file = log_file, append = TRUE)
+} else {
+
+  #1.1 Place this chunk on its own L'Ecuyer-CMRG stream so chunks never overlap and each is reproducible
+  RNGkind("L'Ecuyer-CMRG")
+  set.seed(params$seed)
+  stream <- .Random.seed
+  for (i in seq_len(params$chunk_id - 1)) stream <- parallel::nextRNGStream(stream)
+  assign(".Random.seed", stream, envir = globalenv())
+
+  #1.2 Announce start to log
+  b_chunk <- params$n_boot / params$n_chunks
+  if (!is.na(log_file)) cat(
+    sprintf("%s|STAB_CHUNK_START|config=%s|k=%d|chunk=%d|B=%d\n",
             format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"),
-            params$k_value, params$n_boot),
+            params$config, params$k_value, params$chunk_id, b_chunk),
     file = log_file, append = TRUE
   )
 
-  #1.2 Build call safely (function arg name for boots is 'B' in current clustMixType)
+  #1.3 Build call safely (function arg name for boots is 'B' in current clustMixType)
   stab_formals <- names(formals(clustMixType::stability_kproto))
   stab_args <- list(
     object = kp,
     method = c("rand","jaccard"),
-    nstart = 8,
+    nstart = params$stab_nstart,
     verbose = TRUE
   )
   
-  #1.3 If the number of bootstraps is already listed in the function call, pull it in from there; if not, default to the number of bootstraps specified by the parameters call
+  #1.4 Pass this chunk's share of the bootstraps under whichever argument name the installed version uses
   if ("B" %in% stab_formals) {
-    stab_args$B <- params$n_boot
+    stab_args$B <- b_chunk
   } else if ("nboot" %in% stab_formals) {
-    stab_args$nboot <- params$n_boot
+    stab_args$nboot <- b_chunk
   } else {
-    
-    #1.3.1 Fallback: let default run if function & params are both empty, but note in log
-    if (!is.na(log_file)) cat(
-      sprintf("%s|STAB_WARN|unknown_boot_arg|default_used\n", format(Sys.time(), "%Y-%m-%d %H:%M:%OS3")),
-      file = log_file, append = TRUE
-    )
+    stop("stability_kproto() has no recognized bootstrap-count argument; cannot control B per chunk")
   }
 
-  #1.4 Run bootstrap stability - to note, at this stage, kproto object has no rownames
-  boot_res <- tryCatch(
+  #1.5 Run bootstrap stability - to note, at this stage, kproto object has no rownames
+  chunk_res <- tryCatch(
     do.call(clustMixType::stability_kproto, stab_args),
     error = function(e) {
       stop(glue("stability_kproto() failed: {conditionMessage(e)}"))
     }
   )
 
-  #1.5 Persist raw result
+  #1.6 Fail loudly if any bootstrap returned an undefined index (e.g., if row names were not stripped)
+  if (anyNA(chunk_res[[2]][, c("R", "J")])) stop("NA stability values in chunk ", params$chunk_id)
+
+  #1.7 Persist the raw chunk result
+  saveRDS(chunk_res, chunk_file(params$chunk_id))
+
+  #1.8 Announce end of the chunk and store in log
+  if (!is.na(log_file)) cat(
+    sprintf("%s|STAB_CHUNK_DONE|config=%s|chunk=%d|mean_J=%.4f|saved=%s\n", format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"),
+            params$config, params$chunk_id, mean(chunk_res[[2]][, "J"]), basename(chunk_file(params$chunk_id))),
+    file = log_file, append = TRUE
+  )
+}
+
+```
+
+```{r cluster stability, echo = FALSE, warning = FALSE, eval = (params$mode == "report")}
+
+## Bootstrap stability for chosen k (Rand & Jaccard), pooled across chunks ##
+
+#1. Pool the chunks into one stability object, unless a pooled result is already cached
+if (is.null(boot_res)) {
+
+  #1.1 Require every chunk to be present
+  missing_chunks <- which(!file.exists(vapply(seq_len(params$n_chunks), chunk_file, character(1))))
+  if (length(missing_chunks) > 0) stop("Missing stability chunks: ", paste(missing_chunks, collapse = ", "))
+
+  #1.2 Stack the per-bootstrap rows from every chunk and renumber them 1 to B
+  chunks <- lapply(seq_len(params$n_chunks), function(i) readRDS(chunk_file(i)))
+  boot_mat <- do.call(rbind, lapply(chunks, `[[`, 2))
+  boot_mat[, "B"] <- seq_len(nrow(boot_mat))
+  stopifnot(nrow(boot_mat) == params$n_boot)
+
+  #1.3 Rebuild the structure stability_kproto() returns: overall means, then the per-bootstrap matrix
+  boot_res <- list(colMeans(boot_mat[, -1, drop = FALSE]), boot_mat)
+
+  #1.4 Persist the pooled result
   saveRDS(boot_res, rds_out)
 
-  #1.6 Announce end of stability analysis and store in log
+  #1.5 Announce end of pooling and store in log
   if (!is.na(log_file)) cat(
-    sprintf("%s|STAB_DONE|k=%d|B=%d|saved=%s\n", format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"),
-            params$k_value, params$n_boot, rds_out),
+    sprintf("%s|STAB_POOLED|config=%s|k=%d|B=%d|saved=%s\n", format(Sys.time(), "%Y-%m-%d %H:%M:%OS3"),
+            params$config, params$k_value, params$n_boot, rds_out),
     file = log_file, append = TRUE
   )
 }
@@ -166,12 +229,15 @@ colnames(boot_tbl) <- c("B","Rand","Jaccard")
 
 #3. Create a summary stats table outlining the results of the stability analysis
 sum_tbl <- tibble(
+  config = params$config,
   k = params$k_value,
+  nstart = params$stab_nstart,
   boots = nrow(boot_tbl),
   overall_Rand = unname(overall_vec["R"]),
   overall_Jacc = unname(overall_vec["J"]),
   mean_Rand = mean(boot_tbl$Rand, na.rm = TRUE),
   mean_Jacc = mean(boot_tbl$Jaccard, na.rm = TRUE),
+  pct_Jacc_ge_0.90 = 100 * mean(boot_tbl$Jaccard >= 0.90, na.rm = TRUE),
   sd_Rand = sd(boot_tbl$Rand, na.rm = TRUE),
   sd_Jacc = sd(boot_tbl$Jaccard, na.rm = TRUE),
   q05_Rand = quantile(boot_tbl$Rand, 0.05, na.rm = TRUE),
@@ -186,7 +252,7 @@ write_csv(sum_tbl, csv_out)
 #5. Print the summary table
 knitr::kable(
   sum_tbl,
-  caption = glue("Bootstrap stability summary (scaling={params$scaling_method}, k={params$k_value}, B={params$n_boot})"),
+  caption = glue("Bootstrap stability summary ({params$config}, scaling={params$scaling_method}, k={params$k_value}, B={params$n_boot}, nstart={params$stab_nstart})"),
   digits = 3) %>%
   kableExtra::kable_styling(bootstrap_options = c("striped","hover","condensed","responsive"))
 
@@ -204,7 +270,7 @@ Finally ,the scatter plot with density contours examines the correlation between
 
 Together, these visualizations provide some decent empirical visualizations for evaluating whether the chosen clustering solution produces consistent, reproducible partitions across resampled data 
 
-```{r cluster stability plots, echo = FALSE, warning = FALSE}
+```{r cluster stability plots, echo = FALSE, warning = FALSE, eval = (params$mode == "report")}
 
 ## Create plots for Cluster Stability Metric Results ##
 

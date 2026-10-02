@@ -11,7 +11,7 @@ params:
   scaling_method: "z_score"
   k_min: 2
   k_max: 8
-  nstart: 8
+  nstart: 25
   overwrite: false
 ---
 
