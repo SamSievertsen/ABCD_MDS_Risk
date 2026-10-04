@@ -1,0 +1,217 @@
+---
+title: "8. Persistence of BSD Endorsement by Risk Cluster (Reviewer 1, Comment 1): `r params$config`"
+author: "Sam A. Sievertsen"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    self_contained: true
+params:
+  config: "fallback_emo_ace"
+  scaling_method: "z_score"
+  k_value: 2
+  outcomes: ["any_bsd", "bipolar_I", "bipolar_II", "bd_nos"]
+  waves: ["ses-00A", "ses-02A", "ses-04A", "ses-06A"]
+  baseline_wave: "ses-00A"
+  min_cases_per_cluster: 5   # models are skipped when either cluster has fewer outcome cases than this
+---
+
+```{r global, include = FALSE}
+
+# Set global env variables
+knitr::opts_chunk$set(echo = FALSE, cache = FALSE, message = TRUE, warning = TRUE, results = "markup", comment = "")
+
+```
+
+```{r environment, include = FALSE}
+
+# Load necessary packages + environment
+library(knitr)
+library(kableExtra)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(purrr)
+library(readr)
+library(glue)
+library(here)
+library(clubSandwich)
+
+# Paths, namespaced by configuration
+tag <- sprintf("%s_k%d_%s", params$config, as.integer(params$k_value), params$scaling_method)
+data_dir <- here("data", "data_processed")
+labels_csv <- file.path(data_dir, "analysis_datasets", sprintf("cluster_labels_%s.csv", tag))
+orient_csv <- file.path(data_dir, "analysis_datasets", sprintf("cluster_orientation_%s.csv", tag))
+out_dir <- here("results", "main_analysis", "2_statistical_analysis", "8_bsd_persistence", params$config)
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Confirm the label coding assumed below: C1 = lower-risk, C2 = higher-risk
+orient <- readr::read_csv(orient_csv, show_col_types = FALSE)
+if (!isTRUE(orient$mean_cbcl_dp_raw_sum[orient$oriented_cluster == "C2"] >
+            orient$mean_cbcl_dp_raw_sum[orient$oriented_cluster == "C1"])) {
+  stop("Cluster coding check failed: C2 must be the higher-risk group (higher mean CBCL dysregulation profile sum)")
+}
+
+```
+
+## Purpose
+
+Reviewer 1 noted that single endorsements of BSD in the KSADS-COMP may be unstable across assessments. These analyses ask whether the cluster association holds for **persistent** BSD, defined as endorsement at two or more assessments.
+
+- **A. Persistent BSD (primary):** BSD at two or more of the `r length(params$waves)` assessments, baseline included, among youth with at least two assessments. Because clusters are derived from baseline features, a baseline diagnosis is partly concurrent with cluster membership; the follow-up-only sensitivity analysis removes that overlap.
+- **A sensitivity, follow-up only:** among youth BSD-negative at baseline, BSD at two or more follow-up assessments, among youth with at least two follow-ups.
+- **B. Re-endorsement (exploratory):** among assessments at which a youth endorsed BSD, whether BSD was endorsed again at their next observed assessment.
+
+All models adjust for sex and baseline age (centered). Models A also adjust for the number of assessments completed (as a factor), since youth assessed more often have more opportunities to meet the persistence definition. Inference uses CR2 cluster-robust standard errors with Satterthwaite degrees of freedom, clustered by family for the participant-level models (A) and by participant for the transition model (B). Because persistent cases are rare, Firth (mean bias-reduced) odds ratios with model-based Wald intervals are also reported as a small-sample check (`OR_firth`).
+
+```{r data}
+
+## 1. Data ##
+
+#1.1 Cluster labels (oriented: C1 = lower-risk, C2 = higher-risk) and baseline covariates
+labels <- readr::read_csv(labels_csv, show_col_types = FALSE) %>%
+  dplyr::mutate(cluster = factor(cluster, levels = c("C1", "C2"), labels = c("Lower-Risk", "Higher-Risk")))
+covs <- readr::read_csv(file.path(data_dir, "risk_variable_data.csv"), show_col_types = FALSE) %>%
+  dplyr::select(participant_id, sex, age, family_id)
+base <- labels %>%
+  dplyr::inner_join(covs, by = "participant_id") %>%
+  dplyr::mutate(sex = factor(sex), age_base_c = age - mean(age, na.rm = TRUE))
+stopifnot(nrow(base) == nrow(labels))
+
+#1.2 Outcomes at the analytic assessments, long format (one row per participant x assessment x outcome, observed only)
+outc <- readr::read_csv(file.path(data_dir, "outcome_variable_data.csv"), show_col_types = FALSE) %>%
+  dplyr::filter(session_id %in% params$waves, participant_id %in% base$participant_id) %>%
+  dplyr::select(participant_id, session_id, dplyr::any_of(params$outcomes)) %>%
+  tidyr::pivot_longer(-c(participant_id, session_id), names_to = "outcome", values_to = "status") %>%
+  dplyr::filter(!is.na(status)) %>%
+  dplyr::mutate(wave_idx = match(session_id, params$waves)) %>%
+  dplyr::arrange(outcome, participant_id, wave_idx)
+
+cat(glue("{nrow(base)} clustered participants; outcomes analyzed: {paste(unique(outc$outcome), collapse = ', ')}\n"))
+
+```
+
+```{r helpers}
+
+## 2. Helpers ##
+
+#2.1 Fit a logistic model and return the Higher-Risk vs Lower-Risk OR with CR2 (Satterthwaite) inference
+fit_cluster_or <- function(df, rhs, cluster_var, label) {
+  df <- df %>% tidyr::drop_na(dplyr::all_of(c("y", all.vars(rhs), cluster_var))) %>% droplevels()
+  cases <- tapply(df$y, df$cluster, sum)
+  if (length(cases) < 2 || any(cases < params$min_cases_per_cluster)) {
+    return(tibble::tibble(analysis = label, n = nrow(df), cases_lower = cases[1], cases_higher = cases[2],
+                          OR = NA_real_, CI_lo = NA_real_, CI_hi = NA_real_, p = NA_real_,
+                          note = glue("skipped: fewer than {params$min_cases_per_cluster} cases in a cluster")))
+  }
+  f <- stats::glm(stats::reformulate(attr(stats::terms(rhs), "term.labels"), response = "y"), family = binomial(), data = df)
+  ct <- clubSandwich::coef_test(f, vcov = "CR2", cluster = df[[cluster_var]], test = "Satterthwaite")
+  i <- which(rownames(ct) == "clusterHigher-Risk")
+  b <- ct$beta[i]; se <- ct$SE[i]; dfree <- ct$df_Satt[i]
+  tq <- stats::qt(0.975, df = ifelse(is.finite(dfree), dfree, Inf))
+  
+  #2.1.1 Firth (mean bias-reduced) estimate as a small-sample check: ML logistic ORs are biased away from 1 when events are rare
+  ff <- tryCatch(stats::glm(stats::formula(f), family = binomial(), data = df, method = brglm2::brglmFit, type = "AS_mean"),
+                 error = function(e) NULL)
+  fb <- if (is.null(ff)) c(NA_real_, NA_real_) else stats::coef(summary(ff))["clusterHigher-Risk", c("Estimate", "Std. Error")]
+  tibble::tibble(analysis = label, n = nrow(df), cases_lower = unname(cases["Lower-Risk"]), cases_higher = unname(cases["Higher-Risk"]),
+                 OR = exp(b), CI_lo = exp(b - tq * se), CI_hi = exp(b + tq * se), p = ct$p_Satt[i],
+                 OR_firth = exp(fb[1]), CI_lo_firth = exp(fb[1] - 1.959964 * fb[2]), CI_hi_firth = exp(fb[1] + 1.959964 * fb[2]),
+                 note = "")
+}
+
+#2.2 Descriptive proportions by cluster
+prop_by_cluster <- function(df, label) {
+  df %>% dplyr::group_by(cluster) %>%
+    dplyr::summarise(n = dplyr::n(), cases = sum(y), pct = 100 * mean(y), .groups = "drop") %>%
+    dplyr::mutate(analysis = label, .before = 1)
+}
+
+```
+
+## A. Persistent BSD
+
+```{r persistence}
+
+## 3. Persistent BSD (primary) and follow-up-only sensitivity ##
+
+#3.1 Participant-level counts per outcome
+per_person <- outc %>%
+  dplyr::group_by(outcome, participant_id) %>%
+  dplyr::summarise(
+    n_assessed = dplyr::n(), n_pos = sum(status == 1),
+    baseline_status = dplyr::first(status[session_id == params$baseline_wave], default = NA),
+    n_assessed_fu = sum(session_id != params$baseline_wave), n_pos_fu = sum(status == 1 & session_id != params$baseline_wave),
+    .groups = "drop") %>%
+  dplyr::left_join(base, by = "participant_id")
+
+#3.2 Fit both definitions for every outcome
+persist_rows <- list(); persist_desc <- list()
+for (oc in unique(per_person$outcome)) {
+  d <- per_person %>% dplyr::filter(outcome == oc)
+  
+  #3.2.1 Primary: BSD at >= 2 of all assessments (baseline included), among youth with >= 2 assessments
+  dA <- d %>% dplyr::filter(n_assessed >= 2) %>% dplyr::mutate(y = as.integer(n_pos >= 2), n_assessed_f = factor(n_assessed))
+  persist_rows[[paste(oc, "A")]] <- fit_cluster_or(dA, ~ cluster + sex + age_base_c + n_assessed_f, "family_id", "A: >= 2 assessments (baseline included)") %>%
+    dplyr::mutate(outcome = oc, .before = 1)
+  persist_desc[[paste(oc, "A")]] <- prop_by_cluster(dA, "A: >= 2 assessments (baseline included)") %>% dplyr::mutate(outcome = oc, .before = 1)
+  
+  #3.2.2 Sensitivity: baseline-negative youth, BSD at >= 2 follow-up assessments, among youth with >= 2 follow-ups
+  dS <- d %>% dplyr::filter(baseline_status == 0, n_assessed_fu >= 2) %>%
+    dplyr::mutate(y = as.integer(n_pos_fu >= 2), n_assessed_f = factor(n_assessed_fu))
+  persist_rows[[paste(oc, "S")]] <- fit_cluster_or(dS, ~ cluster + sex + age_base_c + n_assessed_f, "family_id", "Sensitivity: >= 2 follow-ups (baseline-negative)") %>%
+    dplyr::mutate(outcome = oc, .before = 1)
+  persist_desc[[paste(oc, "S")]] <- prop_by_cluster(dS, "Sensitivity: >= 2 follow-ups (baseline-negative)") %>% dplyr::mutate(outcome = oc, .before = 1)
+}
+persist_tbl <- dplyr::bind_rows(persist_rows); persist_desc_tbl <- dplyr::bind_rows(persist_desc)
+readr::write_csv(persist_tbl, file.path(out_dir, "persistence_cluster_ORs.csv"))
+readr::write_csv(persist_desc_tbl, file.path(out_dir, "persistence_by_cluster.csv"))
+
+persist_desc_tbl %>%
+  kable(digits = 1, caption = "Persistent BSD by cluster: n eligible, persistent cases, and % persistent") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = FALSE)
+persist_tbl %>%
+  kable(digits = 3, caption = "Persistent BSD: Higher- vs Lower-Risk OR (adjusted for sex, baseline age, and number of assessments; CR2 by family)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+```
+
+## B. Re-endorsement (Exploratory)
+
+```{r reendorsement}
+
+## 4. Re-endorsement at the next observed assessment, among positive endorsements ##
+
+#4.1 Transitions: each observed assessment paired with the same youth's next observed assessment, kept when positive at the first
+trans <- outc %>%
+  dplyr::group_by(outcome, participant_id) %>%
+  dplyr::mutate(next_status = dplyr::lead(status), next_wave = dplyr::lead(session_id)) %>%
+  dplyr::ungroup() %>%
+  dplyr::filter(status == 1, !is.na(next_status)) %>%
+  dplyr::left_join(base, by = "participant_id") %>%
+  dplyr::mutate(y = as.integer(next_status == 1), from_wave = factor(session_id))
+
+#4.2 Fit per outcome (clustered by participant, since a youth can contribute several transitions)
+reend_rows <- list(); reend_desc <- list()
+for (oc in unique(trans$outcome)) {
+  d <- trans %>% dplyr::filter(outcome == oc)
+  rhs <- if (dplyr::n_distinct(d$from_wave) > 1) ~ cluster + sex + age_base_c + from_wave else ~ cluster + sex + age_base_c
+  reend_rows[[oc]] <- fit_cluster_or(d, rhs, "participant_id", "B: re-endorsed at next assessment") %>% dplyr::mutate(outcome = oc, .before = 1)
+  reend_desc[[oc]] <- prop_by_cluster(d, "B: re-endorsed at next assessment") %>% dplyr::mutate(outcome = oc, .before = 1)
+}
+reend_tbl <- dplyr::bind_rows(reend_rows); reend_desc_tbl <- dplyr::bind_rows(reend_desc)
+readr::write_csv(reend_tbl, file.path(out_dir, "reendorsement_cluster_ORs.csv"))
+readr::write_csv(reend_desc_tbl, file.path(out_dir, "reendorsement_by_cluster.csv"))
+
+reend_desc_tbl %>%
+  kable(digits = 1, caption = "Re-endorsement by cluster: positive endorsements with a next assessment, re-endorsements, and % re-endorsed") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = FALSE)
+reend_tbl %>%
+  kable(digits = 3, caption = "Re-endorsement: Higher- vs Lower-Risk OR (adjusted for sex, baseline age, and starting assessment; CR2 by participant)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+```
+
+## Interpretation Notes
+
+- The KSADS-COMP is computerized and completed without a clinician, so non-endorsement after an earlier endorsement cannot distinguish remission (including treatment response), inter-episode periods, or a false-positive initial endorsement. Persistence here therefore indexes stability of endorsement rather than course of illness, and is reported as such.
+- Diagnoses combine informants as in the primary outcome definitions; informant-specific persistence is not examined.

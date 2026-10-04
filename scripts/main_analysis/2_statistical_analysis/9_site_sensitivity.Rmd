@@ -1,0 +1,170 @@
+---
+title: "9. Site Sensitivity (Reviewer 2, Comment 3): `r params$config`"
+author: "Sam A. Sievertsen"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    self_contained: true
+params:
+  config: "fallback_emo_ace"
+  scaling_method: "z_score"
+  k_value: 2
+  outcomes: ["any_bsd", "bipolar_I", "bipolar_II", "bd_nos"]
+---
+
+```{r global, include = FALSE}
+
+# Set global env variables
+knitr::opts_chunk$set(echo = FALSE, cache = FALSE, message = TRUE, warning = TRUE, results = "markup", comment = "")
+
+```
+
+```{r environment, include = FALSE}
+
+# Load necessary packages + environment
+library(knitr)
+library(kableExtra)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(purrr)
+library(readr)
+library(glue)
+library(here)
+library(clubSandwich)
+library(geepack)
+library(emmeans)
+
+# Paths, namespaced by configuration
+tag <- sprintf("%s_k%d_%s", params$config, as.integer(params$k_value), params$scaling_method)
+ad_dir <- here("data", "data_processed", "analysis_datasets")
+out_dir <- here("results", "main_analysis", "2_statistical_analysis", "9_site_sensitivity", params$config)
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+# Confirm the label coding assumed below: C1 = lower-risk, C2 = higher-risk
+orient <- readr::read_csv(file.path(ad_dir, sprintf("cluster_orientation_%s.csv", tag)), show_col_types = FALSE)
+if (!isTRUE(orient$mean_cbcl_dp_raw_sum[orient$oriented_cluster == "C2"] >
+            orient$mean_cbcl_dp_raw_sum[orient$oriented_cluster == "C1"])) {
+  stop("Cluster coding check failed: C2 must be the higher-risk group (higher mean CBCL dysregulation profile sum)")
+}
+
+```
+
+## Purpose
+
+Reviewer 2 asked whether results depend on data collection site. A site random intercept was previously evaluated and was not supported (near-zero variance and unstable convergence), so site is entered here as **fixed effects**, which absorb every between-site difference in outcome rates without any distributional assumption. Each primary model is refit exactly as specified, then again with site added, and the cluster odds ratios are compared:
+
+- **First onset (DTH):** `event ~ cluster + sex + interval + baseline age`, pooled logistic regression on the baseline-negative risk set, with participant-clustered CR2 inference.
+- **Occurrence (GEE):** `status ~ cluster x wave + sex + baseline status + age`, exchangeable working correlation with robust standard errors; cluster ORs by wave.
+
+If the ORs are essentially unchanged, cluster associations are not explained by site differences.
+
+```{r dth}
+
+## 1. First onset (DTH): primary vs + site fixed effects ##
+
+#1.1 Model-ready person-period data, prepared as in 1_bd_discrete_time_survival.Rmd
+pp <- readRDS(file.path(ad_dir, sprintf("bd_person_period_%s.rds", tag))) %>%
+  dplyr::mutate(cluster = factor(cluster, levels = c("C1", "C2")), end_wave = factor(end_wave),
+                sex = factor(sex), site_factor = factor(site_factor)) %>%
+  dplyr::filter(event %in% c(0L, 1L), !is.na(cluster), !is.na(age_mid), !is.na(sex), !is.na(site_factor), !is.na(family_id))
+
+#1.1.1 Centered baseline age (participant-level mean), as in the primary model
+risk_age <- readr::read_csv(here("data", "data_processed", "risk_variable_data.csv"), show_col_types = FALSE) %>%
+  dplyr::select(participant_id, age_baseline = age)
+pp <- pp %>% dplyr::left_join(risk_age, by = "participant_id") %>% dplyr::filter(!is.na(age_baseline))
+pp$age_base_c <- pp$age_baseline - mean(dplyr::distinct(pp, participant_id, age_baseline)$age_baseline)
+
+#1.1.2 Risk set: baseline-negative for any BSD (baseline-positive and baseline-unknown excluded), as in the primary model
+base_ids <- pp %>% dplyr::filter(outcome == "any_bsd") %>% dplyr::group_by(participant_id) %>%
+  dplyr::summarise(b = if (all(is.na(baseline_status))) NA_integer_ else as.integer(any(baseline_status == 1L, na.rm = TRUE)), .groups = "drop")
+pp <- pp %>% dplyr::left_join(base_ids, by = "participant_id") %>% dplyr::filter(b == 0L)
+
+#1.2 Fit with and without site; cluster OR with CR2 (Satterthwaite) inference clustered by participant
+dth_or <- function(fit, d) {
+  ct <- clubSandwich::coef_test(fit, vcov = "CR2", cluster = d$participant_id, test = "Satterthwaite")
+  i <- which(rownames(ct) == "clusterC2"); tq <- stats::qt(0.975, df = ct$df_Satt[i])
+  c(OR = exp(ct$beta[i]), lo = exp(ct$beta[i] - tq * ct$SE[i]), hi = exp(ct$beta[i] + tq * ct$SE[i]), p = ct$p_Satt[i])
+}
+dth_rows <- purrr::map_dfr(intersect(params$outcomes, unique(pp$outcome)), function(oc) {
+  d <- pp %>% dplyr::filter(outcome == oc) %>% droplevels()
+  f0 <- stats::glm(event ~ cluster + sex + end_wave + age_base_c, family = binomial(), data = d)
+  f1 <- tryCatch(stats::glm(event ~ cluster + sex + end_wave + age_base_c + site_factor, family = binomial(), data = d), error = function(e) NULL)
+  r0 <- dth_or(f0, d)
+  r1 <- if (is.null(f1)) rep(NA_real_, 4) else tryCatch(dth_or(f1, d), error = function(e) rep(NA_real_, 4))
+  tibble::tibble(model = "DTH first onset", outcome = oc, wave = "all intervals", events = sum(d$event), n_sites = nlevels(d$site_factor),
+                 OR_primary = r0[1], lo_primary = r0[2], hi_primary = r0[3], p_primary = r0[4],
+                 OR_site = r1[1], lo_site = r1[2], hi_site = r1[3], p_site = r1[4])
+})
+
+```
+
+```{r gee}
+
+## 2. Occurrence (GEE): primary vs + site fixed effects ##
+
+#2.1 Panel data, prepared as in 2_bd_mixed_effects_logit.Rmd
+bd <- readRDS(file.path(ad_dir, sprintf("bd_panel_%s.rds", tag))) %>%
+  dplyr::mutate(wave = factor(wave, levels = c("ses-02A", "ses-04A", "ses-06A"), ordered = TRUE),
+                cluster = factor(cluster, levels = c("C1", "C2")), sex = factor(sex, levels = c("Female", "Male")),
+                participant_id = as.factor(participant_id), site_factor = as.factor(site_factor),
+                baseline_status_bd = as.factor(baseline_status_bd))
+
+#2.2 Fit with and without site; cluster OR by wave from emmeans on the robust covariance
+gee_or_by_wave <- function(fit) {
+  sm <- summary(emmeans::contrast(emmeans::emmeans(fit, ~ cluster | wave, type = "link"), method = "revpairwise"), infer = TRUE)
+  lo <- intersect(c("asymp.LCL", "lower.CL"), names(sm))[1]; hi <- intersect(c("asymp.UCL", "upper.CL"), names(sm))[1]
+  tibble::tibble(wave = as.character(sm$wave), OR = exp(sm$estimate), lo = exp(sm[[lo]]), hi = exp(sm[[hi]]), p = sm$p.value)
+}
+gee_rows <- purrr::map_dfr(intersect(params$outcomes, unique(bd$outcome)), function(oc) {
+  d <- bd %>% dplyr::filter(outcome == oc) %>%
+    tidyr::drop_na(status, cluster, wave, sex, participant_id, age_wave, age_wave_gmc, baseline_status_bd, site_factor) %>%
+    droplevels() %>% dplyr::arrange(participant_id, wave) %>% as.data.frame()
+  
+  #2.2.1 Primary formula; the baseline term is dropped only if it has a single level in this outcome's data
+  rhs <- paste("cluster * wave + sex +", if (nlevels(d$baseline_status_bd) > 1) "baseline_status_bd +" else "", "age_wave_gmc")
+  g0 <- geepack::geeglm(stats::as.formula(paste("status ~", rhs)), id = participant_id, data = d,
+                        family = binomial(), corstr = "exchangeable", std.err = "san.se")
+  g1 <- tryCatch(geepack::geeglm(stats::as.formula(paste("status ~", rhs, "+ site_factor")), id = participant_id, data = d,
+                                 family = binomial(), corstr = "exchangeable", std.err = "san.se"), error = function(e) NULL)
+  o0 <- gee_or_by_wave(g0)
+  o1 <- if (is.null(g1)) dplyr::mutate(o0, dplyr::across(c(OR, lo, hi, p), ~ NA_real_)) else tryCatch(gee_or_by_wave(g1), error = function(e) dplyr::mutate(o0, dplyr::across(c(OR, lo, hi, p), ~ NA_real_)))
+  ev <- d %>% dplyr::group_by(wave) %>% dplyr::summarise(events = sum(status == 1), .groups = "drop") %>% dplyr::mutate(wave = as.character(wave))
+  o0 %>% dplyr::rename(OR_primary = OR, lo_primary = lo, hi_primary = hi, p_primary = p) %>%
+    dplyr::left_join(o1 %>% dplyr::rename(OR_site = OR, lo_site = lo, hi_site = hi, p_site = p), by = "wave") %>%
+    dplyr::left_join(ev, by = "wave") %>%
+    dplyr::mutate(model = "GEE occurrence", outcome = oc, n_sites = nlevels(d$site_factor), .before = 1)
+})
+
+```
+
+## Results
+
+```{r results}
+
+## 3. Side-by-side comparison ##
+site_tbl <- dplyr::bind_rows(dth_rows, gee_rows) %>%
+  dplyr::mutate(OR_ratio_site_vs_primary = OR_site / OR_primary,
+                note = ifelse(is.na(OR_site), "site model did not converge or was not estimable", "")) %>%
+  dplyr::select(model, outcome, wave, events, n_sites, OR_primary, lo_primary, hi_primary, p_primary,
+                OR_site, lo_site, hi_site, p_site, OR_ratio_site_vs_primary, note)
+readr::write_csv(site_tbl, file.path(out_dir, "site_sensitivity_cluster_ORs.csv"))
+
+site_tbl %>%
+  dplyr::transmute(Model = model, Outcome = outcome, Wave = wave, Events = events,
+                   `Primary OR [95% CI]` = sprintf("%.2f [%.2f, %.2f]", OR_primary, lo_primary, hi_primary),
+                   `+ Site OR [95% CI]` = ifelse(is.na(OR_site), "", sprintf("%.2f [%.2f, %.2f]", OR_site, lo_site, hi_site)),
+                   `Ratio (site / primary)` = round(OR_ratio_site_vs_primary, 3), Note = note) %>%
+  kable(caption = glue("Cluster ORs (Higher- vs Lower-Risk) without and with site fixed effects ({max(site_tbl$n_sites, na.rm = TRUE)} sites)")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+```
+
+```{r summary, results = "asis"}
+
+## 4. Summary ##
+r <- site_tbl$OR_ratio_site_vs_primary
+cat(glue("- Across {sum(!is.na(r))} cluster ORs, adding site fixed effects changed the OR by a factor of {sprintf('%.3f', min(r, na.rm = TRUE))} to {sprintf('%.3f', max(r, na.rm = TRUE))} (median {sprintf('%.3f', median(r, na.rm = TRUE))})\n\n"))
+cat(glue("- Significance (p < .05) changed for {sum((site_tbl$p_primary < .05) != (site_tbl$p_site < .05), na.rm = TRUE)} of {sum(!is.na(r))} estimates\n"))
+
+```

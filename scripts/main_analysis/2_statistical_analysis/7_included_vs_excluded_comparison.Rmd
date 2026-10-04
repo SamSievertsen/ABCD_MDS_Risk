@@ -1,0 +1,252 @@
+---
+title: "7. Included vs Excluded Participants (Reviewer 2, Comment 2)"
+author: "Sam A. Sievertsen"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    self_contained: true
+params:
+  smd_flag: 0.10    # |SMD| above this is flagged as a meaningful imbalance (Austin, 2009)
+---
+
+```{r global, include = FALSE}
+
+# Set global env variables
+knitr::opts_chunk$set(echo = FALSE, cache = FALSE, message = TRUE, warning = TRUE, results = "markup", comment = "")
+
+```
+
+```{r environment, include = FALSE}
+
+# Load necessary packages + environment
+library(knitr)
+library(kableExtra)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(purrr)
+library(readr)
+library(glue)
+library(here)
+
+# Load the shared configuration definitions (primary features, categorical features)
+source(here("scripts", "main_analysis", "1_clustering", "cluster_configs.R"))
+
+# Paths
+out_dir <- here("results", "main_analysis", "2_statistical_analysis", "7_included_vs_excluded_comparison")
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+```
+
+## Purpose
+
+Compares baseline participants retained in the clustering sample (complete data on every clustering feature) with those excluded for missing data, on demographics, follow-up retention and bipolar spectrum outcomes, and each of the primary configuration's `r length(cluster_configs[[primary_config]])` clustering features. For each variable, excluded participants contribute wherever that variable was observed, so each comparison uses all available data.
+
+Standardized mean differences (SMDs) are reported with 95% confidence intervals, using the pooled-variance definition for continuous variables and its proportion analogue for binary variables and individual categories (Austin, 2009); |SMD| > `r params$smd_flag` is flagged as a meaningful imbalance. Hypothesis tests (Welch *t* for continuous variables; chi-square, or Fisher's exact test for sparse tables, for categorical variables) are adjusted across all variables using the Benjamini-Hochberg procedure. Because the samples are large, SMDs rather than *p*-values are the primary indicator of meaningful differences.
+
+```{r data}
+
+## 1. Data ##
+
+#1.1 Read the unfiltered baseline data and the analytic (complete-case) sample written by the wrangling script
+unf <- readr::read_csv(here("data", "data_processed", "risk_variable_data_unfiltered.csv"), show_col_types = FALSE)
+cln <- readr::read_csv(here("data", "data_processed", "risk_variable_data.csv"), show_col_types = FALSE)
+stopifnot(!anyDuplicated(unf$participant_id), all(cln$participant_id %in% unf$participant_id))
+
+#1.2 Flag inclusion
+dat <- unf %>%
+  dplyr::mutate(group = factor(ifelse(participant_id %in% cln$participant_id, "Included", "Excluded"),
+                               levels = c("Included", "Excluded")))
+
+#1.3 Variables to compare: demographics, then the primary configuration's clustering features
+feats <- cluster_configs[[primary_config]]
+demo_cont <- c("age")
+demo_cat <- c("sex", "race_ethnicity")
+missing_cols <- setdiff(c(demo_cont, demo_cat, "site", feats), names(dat))
+if (length(missing_cols) > 0) stop("Missing columns in risk_variable_data_unfiltered.csv: ", paste(missing_cols, collapse = ", "))
+
+#1.4 Follow-up retention and BSD outcomes from the outcome file (all baseline participants, included or not)
+outc <- readr::read_csv(here("data", "data_processed", "outcome_variable_data.csv"), show_col_types = FALSE) %>%
+  dplyr::select(participant_id, session_id, any_bsd)
+fu_waves <- c("ses-02A", "ses-04A", "ses-06A")
+outc_wide <- outc %>%
+  dplyr::filter(session_id %in% c("ses-00A", fu_waves)) %>%
+  dplyr::distinct(participant_id, session_id, .keep_all = TRUE) %>%
+  tidyr::pivot_wider(names_from = session_id, values_from = any_bsd)
+for (w in c("ses-00A", fu_waves)) if (!w %in% names(outc_wide)) outc_wide[[w]] <- NA_real_
+outc_wide <- outc_wide %>%
+  dplyr::transmute(
+    participant_id,
+    bsd_baseline = .data[["ses-00A"]],
+    retained_y2 = as.integer(!is.na(.data[["ses-02A"]])), bsd_y2 = .data[["ses-02A"]],
+    retained_y4 = as.integer(!is.na(.data[["ses-04A"]])), bsd_y4 = .data[["ses-04A"]],
+    retained_y6 = as.integer(!is.na(.data[["ses-06A"]])), bsd_y6 = .data[["ses-06A"]])
+dat <- dat %>% dplyr::left_join(outc_wide, by = "participant_id") %>%
+  dplyr::mutate(dplyr::across(dplyr::starts_with("retained_"), ~ dplyr::coalesce(.x, 0L)))
+
+dplyr::count(dat, group) %>%
+  kable(caption = "Baseline participants by inclusion in the clustering sample") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = FALSE)
+
+```
+
+```{r helpers}
+
+## 2. Helpers ##
+
+#2.0 Readable labels for the supplementary table
+var_labels <- c(
+  cbcl_dp_raw_sum = "CBCL dysregulation profile (raw sum)", mh_p_gbi_sum = "Parent GBI (mania)",
+  mh_y_upps__nurg_sum = "UPPS-P negative urgency", mh_y_upps__purg_sum = "UPPS-P positive urgency",
+  sds_total = "Sleep Disturbance Scale for Children (total)",
+  mh_y_bisbas__bas__rr_sum__v01 = "BAS reward responsiveness", mh_y_bisbas__bas__dr_sum = "BAS drive",
+  mh_y_bisbas__bis_sum__v01 = "BIS", mh_y_bisbas__bas__fs_sum = "BAS fun seeking",
+  family_history_depression = "Family history: depression", family_history_mania = "Family history: mania",
+  family_history_psychosis = "Family history: psychosis", family_history_hospitalization = "Family history: psychiatric hospitalization",
+  le_l_coi__addr1__coi__total__national_zscore = "Child Opportunity Index (national z)",
+  fc_p_nsc__ns_mean = "Neighborhood safety (parent report)", bullying = "Bullying victimization",
+  nc_y_nihtb__lswmt__uncor_score = "NIH Toolbox list sorting (working memory)",
+  nc_y_nihtb__flnkr__uncor_score = "NIH Toolbox flanker (inhibitory control)",
+  nc_y_nihtb__pttcp__uncor_score = "NIH Toolbox pattern comparison (processing speed)",
+  ACE_index_nonabuse_emo_sum_score = "ACE composite (non-abuse factors + emotional abuse proxy)",
+  ACE_index_nonabuse_sum_score = "ACE composite (non-abuse factors)",
+  abuse_physical = "Physical abuse", abuse_sexual = "Sexual abuse", abuse_emotional = "Emotional abuse proxy",
+  bsd_baseline = "Any BSD at baseline",
+  retained_y2 = "Assessed at Year-2", bsd_y2 = "Any BSD at Year-2 (among assessed)",
+  retained_y4 = "Assessed at Year-4", bsd_y4 = "Any BSD at Year-4 (among assessed)",
+  retained_y6 = "Assessed at Year-6", bsd_y6 = "Any BSD at Year-6 (among assessed)")
+lab <- function(v) if (v %in% names(var_labels)) unname(var_labels[v]) else v
+
+#2.1 SMD standard error (large-sample approximation) and 95% CI
+smd_ci <- function(d, n1, n2) {
+  se <- sqrt((n1 + n2) / (n1 * n2) + d^2 / (2 * (n1 + n2)))
+  c(lo = d - 1.959964 * se, hi = d + 1.959964 * se)
+}
+
+#2.2 Continuous variable: pooled-variance SMD (included minus excluded) and Welch t-test
+compare_continuous <- function(v, label = v) {
+  x1 <- dat[[v]][dat$group == "Included"]; x2 <- dat[[v]][dat$group == "Excluded"]
+  x1 <- x1[!is.na(x1)]; x2 <- x2[!is.na(x2)]
+  d <- (mean(x1) - mean(x2)) / sqrt((var(x1) + var(x2)) / 2)
+  ci <- smd_ci(d, length(x1), length(x2))
+  tibble::tibble(variable = label, level = NA_character_, type = "continuous",
+                 n_included = length(x1), n_excluded = length(x2),
+                 included = sprintf("%.2f (%.2f)", mean(x1), sd(x1)), excluded = sprintf("%.2f (%.2f)", mean(x2), sd(x2)),
+                 smd = d, smd_lo = ci[["lo"]], smd_hi = ci[["hi"]],
+                 test = "Welch t", p = stats::t.test(x1, x2)$p.value)
+}
+
+#2.3 Categorical variable: proportion SMD per level, with one omnibus test per variable (chi-square, or Fisher if sparse)
+compare_categorical <- function(v, label = v, per_level = TRUE) {
+  d0 <- dat %>% dplyr::filter(!is.na(.data[[v]])) %>% dplyr::mutate(val = as.character(.data[[v]]))
+  tab <- table(d0$val, d0$group)
+  chi <- suppressWarnings(stats::chisq.test(tab))
+  sparse <- any(chi$expected < 5)
+  p <- if (sparse) stats::fisher.test(tab, simulate.p.value = TRUE, B = 1e5)$p.value else chi$p.value
+  test <- if (sparse) "Fisher (simulated)" else "Chi-square"
+  n1 <- sum(tab[, "Included"]); n2 <- sum(tab[, "Excluded"])
+  
+  #2.3.0 A group with no observations (or a single observed category) cannot be compared; return NA rather than NaN/Inf
+  if (n1 == 0 || n2 == 0 || nrow(tab) < 2) {
+    return(tibble::tibble(variable = label, level = "not comparable (a group has no data or one category)", type = "categorical",
+                          n_included = n1, n_excluded = n2, included = NA_character_, excluded = NA_character_,
+                          smd = NA_real_, smd_lo = NA_real_, smd_hi = NA_real_, test = NA_character_, p = NA_real_))
+  }
+  if (!per_level) {
+    
+    #2.3.1 Many-level variable: omnibus test and Cramer's V only
+    v_cramer <- sqrt(unname(chi$statistic) / (sum(tab) * (min(dim(tab)) - 1)))
+    return(tibble::tibble(variable = label, level = glue("{nrow(tab)} levels (Cramer's V = {sprintf('%.3f', v_cramer)})"),
+                          type = "categorical", n_included = n1, n_excluded = n2, included = NA_character_, excluded = NA_character_,
+                          smd = NA_real_, smd_lo = NA_real_, smd_hi = NA_real_, test = test, p = p))
+  }
+  lv <- rownames(tab)
+  if (length(lv) == 2 && all(lv %in% c("0", "1"))) lv <- "1"  # binary 0/1 feature: report the endorsed level only
+  purrr::map_dfr(seq_along(lv), function(i) {
+    p1 <- tab[lv[i], "Included"] / n1; p2 <- tab[lv[i], "Excluded"] / n2
+    pooled_sd <- sqrt((p1 * (1 - p1) + p2 * (1 - p2)) / 2)
+    d <- if (pooled_sd > 0) (p1 - p2) / pooled_sd else NA_real_   # undefined when both groups are all 0% or all 100%
+    ci <- if (is.na(d)) c(lo = NA_real_, hi = NA_real_) else smd_ci(d, n1, n2)
+    tibble::tibble(variable = label, level = lv[i], type = "categorical", n_included = n1, n_excluded = n2,
+                   included = sprintf("%.1f%%", 100 * p1), excluded = sprintf("%.1f%%", 100 * p2),
+                   smd = d, smd_lo = ci[["lo"]], smd_hi = ci[["hi"]],
+                   test = if (i == 1) test else NA_character_, p = if (i == 1) p else NA_real_)
+  })
+}
+
+```
+
+## Comparison Table
+
+```{r comparison}
+
+## 3. Compare included vs excluded ##
+
+#3.1 Demographics
+demo_tbl <- dplyr::bind_rows(
+  compare_continuous("age", "Age (years)"),
+  compare_categorical("sex", "Sex"),
+  compare_categorical("race_ethnicity", "Race/ethnicity"),
+  compare_categorical("site", "Site", per_level = FALSE)) %>%
+  dplyr::mutate(block = "Demographics")
+
+#3.2 Clustering features (binary features as endorsement proportions, others as means)
+feat_tbl <- purrr::map_dfr(feats, function(f) {
+  if (f %in% feats_categorical) compare_categorical(f, lab(f)) else compare_continuous(f, lab(f))
+}) %>% dplyr::mutate(block = "Clustering features")
+
+#3.2.1 Follow-up retention and BSD outcomes, to show whether exclusion is related to later outcomes or attrition
+out_vars <- c("bsd_baseline", "retained_y2", "bsd_y2", "retained_y4", "bsd_y4", "retained_y6", "bsd_y6")
+out_tbl <- purrr::map_dfr(out_vars, function(v) compare_categorical(v, lab(v))) %>%
+  dplyr::mutate(block = "Follow-up and outcomes")
+
+#3.3 Benjamini-Hochberg across every variable-level test, then flag meaningful imbalances
+cmp <- dplyr::bind_rows(demo_tbl, feat_tbl, out_tbl) %>%
+  dplyr::mutate(p_bh = NA_real_)
+has_p <- !is.na(cmp$p)
+cmp$p_bh[has_p] <- stats::p.adjust(cmp$p[has_p], method = "BH")
+cmp <- cmp %>% dplyr::mutate(flag = ifelse(!is.na(smd) & abs(smd) > params$smd_flag, "|SMD| > 0.10", ""))
+
+readr::write_csv(cmp, file.path(out_dir, "included_vs_excluded_comparison.csv"))
+
+cmp %>%
+  dplyr::transmute(Block = block, Variable = variable, Level = dplyr::coalesce(level, ""),
+                   `n (incl / excl)` = paste(n_included, "/", n_excluded),
+                   Included = included, Excluded = excluded,
+                   `SMD [95% CI]` = ifelse(is.na(smd), "", sprintf("%.2f [%.2f, %.2f]", smd, smd_lo, smd_hi)),
+                   Test = test, `p (BH)` = ifelse(is.na(p_bh), "", ifelse(p_bh < .001, "< .001", sprintf("%.3f", p_bh))),
+                   Flag = flag) %>%
+  kable(caption = "Included vs excluded baseline participants: mean (SD) or %, SMD (included minus excluded), and BH-adjusted p") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 11)
+
+```
+
+## Which Features Drive Exclusion
+
+```{r exclusion drivers}
+
+## 4. Missingness among excluded participants, by clustering feature ##
+excl <- dat %>% dplyr::filter(group == "Excluded")
+drivers <- tibble::tibble(feature = feats,
+                          n_missing = vapply(feats, function(f) sum(is.na(excl[[f]])), integer(1))) %>%
+  dplyr::mutate(pct_of_excluded = 100 * n_missing / nrow(excl),
+                only_missing_feature = vapply(feats, function(f) sum(is.na(excl[[f]]) & rowSums(is.na(excl[, setdiff(feats, f)])) == 0), integer(1))) %>%
+  dplyr::arrange(dplyr::desc(n_missing))
+readr::write_csv(drivers, file.path(out_dir, "exclusion_drivers.csv"))
+
+drivers %>%
+  kable(digits = 1, caption = glue("Missingness by clustering feature among excluded participants (n = {nrow(excl)}); 'only_missing_feature' counts participants excluded solely because of that feature")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = FALSE)
+
+```
+
+```{r summary, results = "asis"}
+
+## 5. Summary ##
+flagged <- cmp %>% dplyr::filter(flag != "")
+cat(glue("- **{sum(dat$group == 'Included')}** included and **{sum(dat$group == 'Excluded')}** excluded baseline participants\n\n"))
+cat(glue("- **{nrow(flagged)}** of {sum(!is.na(cmp$smd))} comparisons exceed |SMD| = {params$smd_flag}",
+         "{if (nrow(flagged) > 0) paste0(': ', paste(unique(paste(flagged$variable, ifelse(is.na(flagged$level), '', paste0('(', flagged$level, ')')))), collapse = '; ')) else ''}\n\n"))
+cat(glue("- The most common source of exclusion is **{drivers$feature[1]}** (missing for {sprintf('%.1f', drivers$pct_of_excluded[1])}% of excluded participants)\n"))
+
+```
