@@ -11,14 +11,18 @@ params:
   # I/O
   REPO: "/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk"
   risk_data_path: "/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk/data/data_processed/risk_variable_data.csv"
-  kproto_anchor_rds: "/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk/data/data_processed/kproto_results/kproto_z_score.rds"
-  out_dir: "/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk/results/main_analysis/1_clustering/8_algorithm_benchmark"
+  # Clustering configuration whose solution is the anchor (anchor fit and outputs are namespaced by it)
+  config: "fallback_emo_ace"
+  # Leave empty to use the configuration's cached fit: data/data_processed/kproto_results/kproto_<config>_z_score.rds
+  kproto_anchor_rds: ""
+  # Leave empty to write to results/main_analysis/1_clustering/8_algorithm_benchmark/<config>
+  out_dir: ""
 
   # Search grid
   k_grid: [2,3,4,5,6,7,8]
 
   # Light-weight optimization settings
-  nstart: 8
+  nstart: 25   # k-prototypes starts; reaches the best solution ~99% of the time per the k = 2 landscape analysis
   seed: 123
 
   # k-prototypes lambda handling
@@ -64,7 +68,12 @@ cat("8.1 Setup beginning\n")
 
 REPO <- Sys.getenv("REPO", unset = params$REPO)
 OUT_DIR <- if (nzchar(params$out_dir)) params$out_dir else {
-  file.path(REPO, "results", "main_analysis", "1_clustering", "8_algorithm_benchmark")
+  file.path(REPO, "results", "main_analysis", "1_clustering", "8_algorithm_benchmark", params$config)
+}
+kp_anchor_path <- if (nzchar(params$kproto_anchor_rds)) {
+  params$kproto_anchor_rds
+} else {
+  file.path(REPO, "data", "data_processed", "kproto_results", sprintf("kproto_%s_z_score.rds", params$config))
 }
 
 suppressPackageStartupMessages({
@@ -86,6 +95,9 @@ suppressPackageStartupMessages({
   library(kamila)
   library(clustMD)
 })
+
+#8.1.1 Shared feature definitions (categorical features)
+source(file.path(REPO, "scripts", "main_analysis", "1_clustering", "cluster_configs.R"))
 
 paths <- list(
   out_dir = OUT_DIR,
@@ -131,7 +143,11 @@ if (!("participant_id" %in% names(risk_dt_raw))) {
 }
 
 #8.2.1 Load anchor k-prototypes object and recover canonical feature names
-kp_any <- readRDS(params$kproto_anchor_rds)
+kp_any <- readRDS(kp_anchor_path)
+
+#8.2.1.1 Confirm the cached fits belong to this configuration (fingerprint written by 2_risk_group_k_calculation.Rmd)
+fp <- attr(kp_any, "fingerprint")
+if (is.null(fp) || !identical(fp$config, params$config)) stop("kproto cache fingerprint does not match config ", params$config)
 
 pick_kproto <- function(obj, k_target) {
   if (inherits(obj, "kproto")) return(obj)
@@ -191,7 +207,7 @@ force_known_categoricals <- function(df) {
   df <- as.data.frame(df)
 
   known_cat <- intersect(
-    c("family_history_depression", "family_history_mania", "bullying"),
+    feats_categorical,  # shared definition from cluster_configs.R (all binary features)
     names(df))
 
   for (nm in known_cat) {
