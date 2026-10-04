@@ -15,10 +15,15 @@ params:
   risk_unfiltered_path: "/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk/data/data_processed/risk_variable_data_unfiltered.csv"
 
   # Baseline anchor k-prototypes object (z-scored pipeline)
-  kproto_anchor_rds: "/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk/data/data_processed/kproto_results/kproto_z_score.rds"
+  # Clustering configuration whose solution is the anchor (anchor fit and outputs are namespaced by it)
+  config: "fallback_emo_ace"
+
+  # Leave empty to use the configuration's cached fit: data/data_processed/kproto_results/kproto_<config>_z_score.rds
+  kproto_anchor_rds: ""
 
   # Outputs
-  out_dir: "/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk/results/main_analysis/1_clustering/7_imputation_kproto/"
+  # Leave empty to write to results/main_analysis/1_clustering/7_imputation_kproto/<config>
+  out_dir: ""
 
   # Missingness inclusion rule for imputation
   # Require at least this proportion of the 17 risk variables observed for a row to be imputable.
@@ -38,14 +43,16 @@ params:
 
   # Clustering settings post-imputation
   k_grid: [2,3,4,5,6,7,8]
-  nstart: 8
+  nstart: 25   # reaches the best solution ~99% of the time per the k = 2 landscape analysis
 
   # Lambda handling
   lambda_mode: "estimate"   # "estimate" | "fixed"
   lambda_fixed: 2.5
 
   # Bootstrap stability for each k
-  boot_B: 250
+  boot_B: 50          # bootstrap refits for k values other than k_opt (stability only breaks silhouette ties there)
+  boot_B_kopt: 250    # bootstrap refits for k_opt, the solution compared with the anchor
+  k_opt: 2
   boot_seed: 123
 
   # Misc
@@ -70,7 +77,13 @@ REPO <- Sys.getenv("REPO", unset = params$REPO)
 out_dir <- if (nzchar(params$out_dir)) {
   params$out_dir
 } else {
-  file.path(REPO, "results", "main_analysis", "1_clustering", "7_imputation_kproto")
+  file.path(REPO, "results", "main_analysis", "1_clustering", "7_imputation_kproto", params$config)
+}
+
+kp_anchor_path <- if (nzchar(params$kproto_anchor_rds)) {
+  params$kproto_anchor_rds
+} else {
+  file.path(REPO, "data", "data_processed", "kproto_results", sprintf("kproto_%s_z_score.rds", params$config))
 }
 
 suppressPackageStartupMessages({
@@ -91,14 +104,20 @@ suppressPackageStartupMessages({
   library(mclust)
   library(missForest)  # primary imputation
   library(mice)        # sensitivity imputation
+  library(furrr)       # k values fit in parallel
+  library(parallelly)
 })
+
+#7.1.1.1 Shared feature definitions (categorical features) and the exact closed-form silhouette
+source(file.path(REPO, "scripts", "main_analysis", "1_clustering", "cluster_configs.R"))
+source(file.path(REPO, "scripts", "main_analysis", "1_clustering", "silhouette_helpers.R"))
 
 #7.1.2 Output dirs
 paths <- list(
-  out_dir = params$out_dir,
-  fig_dir = file.path(params$out_dir, "figures"),
-  tab_dir = file.path(params$out_dir, "tables"),
-  rds_dir = file.path(params$out_dir, "rds"))
+  out_dir = out_dir,
+  fig_dir = file.path(out_dir, "figures"),
+  tab_dir = file.path(out_dir, "tables"),
+  rds_dir = file.path(out_dir, "rds"))
 
 dir.create(paths$out_dir, showWarnings = FALSE, recursive = TRUE)
 dir.create(paths$fig_dir, showWarnings = FALSE, recursive = TRUE)
@@ -126,10 +145,14 @@ cat("7.1 Setup complete\n")
 ## 7.2 Load anchor clustering object and recover canonical feature set ##
 
 #7.2.1 Load kp obj into env
-kp_path <- params$kproto_anchor_rds
+kp_path <- kp_anchor_path
 if (!file.exists(kp_path)) stop(glue("Anchor kproto RDS not found: {kp_path}"))
 
 kp_any <- readRDS(kp_path)
+
+#7.2.1.1 Confirm the cached fits belong to this configuration (fingerprint written by 2_risk_group_k_calculation.Rmd)
+fp <- attr(kp_any, "fingerprint")
+if (is.null(fp) || !identical(fp$config, params$config)) stop("kproto cache fingerprint does not match config ", params$config)
 
 
 #7.2.2 Select & parse target kproto solution
@@ -352,7 +375,7 @@ force_known_categoricals <- function(df) {
   df <- as.data.frame(df)
 
   known_cat <- intersect(
-    c("family_history_depression", "family_history_mania", "bullying"),
+    feats_categorical,  # shared definition from cluster_configs.R (all binary features)
     names(df))
 
   for (nm in known_cat) {
@@ -437,10 +460,11 @@ extract_validation_index <- function(x) {
 }
 
 silhouette_validation_kproto <- function(kp, type = "huang") {
-  out <- tryCatch(
-    clustMixType::validation_kproto(method = "silhouette", object = kp, type = type),
-    error = function(e) NA)
-  extract_validation_index(out)
+  
+  #7.5.6.1 Exact closed form of kproto2silhouette()/validation_kproto(method = "silhouette") from silhouette_helpers.R:
+  #        identical values, without the n x n distance matrix (function name kept so call sites are unchanged)
+  if (!identical(type, "huang")) stop("closed-form silhouette implemented for type = 'huang' only")
+  tryCatch(mean(silhouette_exact_huang(kp)[, "sil_width"], na.rm = TRUE), error = function(e) NA_real_)
 }
 
 #7.5.7 Clean kproto object for stability_kproto()
@@ -623,8 +647,9 @@ run_k_grid <- function(X_completed, label, participant_id_vec) {
   subj_overlap <- pid[in_anchor]
   anchor_lbl_overlap <- anchor_lbl[match(subj_overlap, anchor_id)]
 
-  for (k in params$k_grid) {
-
+  #7.8.3.0 Each k is independent (its own seed, fit, and bootstrap), so k values run in parallel across the allocated cores;
+  #        set.seed() inside each task keeps every k reproducible regardless of how tasks are scheduled
+  fit_one_k <- function(k) {
     set.seed(7000 + k)
 
     kp <- clustMixType::kproto(
@@ -655,10 +680,11 @@ run_k_grid <- function(X_completed, label, participant_id_vec) {
         nstart = as.integer(params$nstart),
         verbose = FALSE)
     
+      B_k <- if (k == params$k_opt) params$boot_B_kopt else params$boot_B
       if ("B" %in% stab_formals) {
-        stab_args$B <- as.integer(params$boot_B)
+        stab_args$B <- as.integer(B_k)
       } else if ("nboot" %in% stab_formals) {
-        stab_args$nboot <- as.integer(params$boot_B)
+        stab_args$nboot <- as.integer(B_k)
       }
     
       stab_raw <- tryCatch(
@@ -685,7 +711,7 @@ run_k_grid <- function(X_completed, label, participant_id_vec) {
       ari_vs_anchor <- mclust::adjustedRandIndex(lbl_overlap, anchor_lbl_overlap)
     }
 
-    res_list[[as.character(k)]] <- tibble::tibble(
+    res_k <- tibble::tibble(
       imputation = label,
       k = as.integer(k),
       k_observed = as.integer(k_obs),
@@ -705,7 +731,7 @@ run_k_grid <- function(X_completed, label, participant_id_vec) {
       n_overlap_anchor = as.integer(sum(in_anchor)))
 
     #7.8.3.3 Assignments
-    assign_list[[as.character(k)]] <- tibble::tibble(
+    assign_k <- tibble::tibble(
       participant_id = participant_id_vec,
       imputation = label,
       k = as.integer(k),
@@ -713,8 +739,18 @@ run_k_grid <- function(X_completed, label, participant_id_vec) {
       in_anchor = in_anchor)
 
     if (!isTRUE(params$keep_model_data)) kp$data <- NULL
-    model_list[[as.character(k)]] <- kp
+    list(res = res_k, assign = assign_k, model = kp)
   }
+  
+  #7.8.3.4 Run all k in parallel, then reassemble the same per-k lists as before
+  n_workers <- max(1L, min(length(params$k_grid), as.integer(parallelly::availableCores())))
+  if (n_workers > 1) future::plan(future::multicore, workers = n_workers) else future::plan(future::sequential)
+  k_out <- furrr::future_map(params$k_grid, fit_one_k, .options = furrr::furrr_options(seed = TRUE))
+  future::plan(future::sequential)
+  names(k_out) <- as.character(params$k_grid)
+  res_list <- lapply(k_out, `[[`, "res")
+  assign_list <- lapply(k_out, `[[`, "assign")
+  model_list <- lapply(k_out, `[[`, "model")
 
   res_df <- bind_rows(res_list) %>% arrange(k)
   assign_df <- bind_rows(assign_list)
@@ -742,7 +778,7 @@ run_k_grid <- function(X_completed, label, participant_id_vec) {
     theme_classic(base_size = 12) +
     labs(
       title = glue("Bootstrap stability across k ({label})"),
-      subtitle = glue("Metric = min clusterwise Jaccard; B={params$boot_B}"),
+      subtitle = glue("Metric = min clusterwise Jaccard; B={params$boot_B_kopt} at k={params$k_opt}, {params$boot_B} otherwise"),
       x = "k", y = "min Jaccard")
   ggsave(file.path(paths$fig_dir, glue("jacc_mean_by_k_{label}.png")),
          p2, width = 7, height = 4.2, dpi = 600, bg = "white")

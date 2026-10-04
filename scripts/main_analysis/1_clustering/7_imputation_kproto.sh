@@ -9,7 +9,7 @@
 #SBATCH --qos=long_jobs
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
 #SBATCH --time=72:00:00
 
@@ -21,8 +21,11 @@ set -euo pipefail
 IFS=$'\n\t'
 
 # Set paths
-IMG=/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.8.sif
+IMG=/home/exacloud/gscratch/NagelLab/staff/sam/packages/abcd-mds-risk-r_0.1.9.sif
 REPO=/home/exacloud/gscratch/NagelLab/staff/sam/projects/ABCD_MDS_Risk
+
+# Clustering configuration whose solution is the anchor (override at submit time: CONFIG=... sbatch ...)
+CONFIG="${CONFIG:-fallback_emo_ace}"
 
 # Rmd location inside repo
 RMD_REL="scripts/main_analysis/1_clustering/7_imputation_kproto.Rmd"
@@ -61,6 +64,7 @@ echo "Git commit: ${GIT_HASH}"
 echo "Container: ${IMG}"
 echo "Rmd: ${REPO}/${RMD_REL}"
 echo "REPO env: ${REPO}"
+echo "Config: ${CONFIG}"
 echo "CPUs: ${SLURM_CPUS_PER_TASK} | Mem: ${SLURM_MEM_PER_NODE:-NA} | Time: ${SLURM_TIMELIMIT:-NA}"
 
 # Move to script directory
@@ -73,7 +77,7 @@ tail -F "${DETAILED_LOG}" & TAILPID=$!
 apptainer exec \
   -B /home/exacloud/gscratch/NagelLab:/home/exacloud/gscratch/NagelLab \
   "${IMG}" \
-  Rscript -e "rmarkdown::render('${REPO}/${RMD_REL}', quiet = FALSE)"
+  Rscript -e "rmarkdown::render('${REPO}/${RMD_REL}', params = list(config = '${CONFIG}'), output_file = '7_imputation_kproto_${CONFIG}.html', quiet = FALSE)"
 
 # Stop background tail
 kill "$TAILPID" 2>/dev/null || true
